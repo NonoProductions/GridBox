@@ -24,7 +24,22 @@ export default function Home() {
           return;
         }
         
-        const { data } = await supabase.auth.getSession();
+        // Set a timeout to prevent infinite loading
+        const timeoutId = setTimeout(() => {
+          console.warn("⏱️ Session check timeout - continuing anyway");
+          setIsLoading(false);
+        }, 5000); // 5 seconds timeout
+        
+        const { data, error } = await supabase.auth.getSession();
+        
+        clearTimeout(timeoutId);
+        
+        if (error) {
+          console.error("Session check error:", error);
+          setIsLoading(false);
+          return;
+        }
+        
         if (data.session) {
           // Benutzer ist eingeloggt, leite zur App weiter
           router.replace("/app");
