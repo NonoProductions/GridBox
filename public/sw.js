@@ -1,54 +1,25 @@
-// Service Worker für GridBox PWA
-const CACHE_NAME = 'gridbox-pwa-v1';
-const urlsToCache = [
-  '/',
-  '/app',
-  '/login',
-  '/manifest.webmanifest',
-  '/icon-192x192.png',
-  '/icon-512x512.png',
-  '/apple-touch-icon.png',
-  '/favicon.ico'
-];
+// Emergency Service Worker - Deaktiviert sich selbst und löscht alle Caches
+console.log('EMERGENCY SW: Cleaning up and self-destructing...');
 
-// Install Event
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('Opened cache');
-        return cache.addAll(urlsToCache);
-      })
-  );
+self.addEventListener('install', () => {
+  self.skipWaiting();
 });
 
-// Fetch Event
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => {
-        // Cache hit - return response
-        if (response) {
-          return response;
-        }
-        return fetch(event.request);
-      }
-    )
-  );
-});
-
-// Activate Event
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            console.log('Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
-      );
+    Promise.all([
+      // Alle Caches löschen
+      caches.keys().then((names) => 
+        Promise.all(names.map(name => caches.delete(name)))
+      ),
+      // Clients übernehmen
+      self.clients.claim()
+    ]).then(() => {
+      console.log('EMERGENCY SW: Cleanup complete, unregistering...');
+      // Selbst deregistrieren
+      self.registration.unregister();
     })
   );
 });
+
+// KEIN fetch event - keine Interception

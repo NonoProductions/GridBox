@@ -49,25 +49,8 @@ const ThemeScript = () => (
   />
 );
 
-const ServiceWorkerScript = () => (
-  <script
-    dangerouslySetInnerHTML={{
-      __html: `
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('/sw.js')
-      .then(function(registration) {
-        console.log('SW registered: ', registration);
-      })
-      .catch(function(registrationError) {
-        console.log('SW registration failed: ', registrationError);
-      });
-  });
-}
-`,
-    }}
-  />
-);
+// Service Worker temporär deaktiviert - wird später wieder aktiviert
+const ServiceWorkerScript = () => null;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
