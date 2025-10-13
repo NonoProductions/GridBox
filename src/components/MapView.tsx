@@ -542,7 +542,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </div>
       )}
       
-      {/* Top bar with account and help buttons */}
+      {/* Top bar with account and help buttons - optimiert für bessere UX */}
       <div className="fixed left-0 right-0 top-4 z-[1000] flex items-start justify-between pl-4 pr-4 pointer-events-none">
         <button
           type="button"
