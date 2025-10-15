@@ -91,7 +91,7 @@ export default function SideMenu({
         }`}
         style={isDarkMode ? { backgroundColor: '#282828' } : {}}
       >
-        <div className="px-6 pt-16 pb-4">
+        <div className="px-6 pt-4 pb-4">
           <div className="mb-6">
             <h2 className="text-xl font-semibold">Hallo{displayName ? `, ${displayName}` : ""}</h2>
           </div>

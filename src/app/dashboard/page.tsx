@@ -40,7 +40,7 @@ function DashboardContent() {
     }
   }, [searchParams]);
 
-  // Hole Benutzerstandort
+  // Hole Benutzerstandort - verwende gecachte Position
   useEffect(() => {
     if (!navigator.geolocation) {
       console.warn('Geolocation wird von diesem Browser nicht unterstützt');
@@ -59,8 +59,8 @@ function DashboardContent() {
         setUserLocation({ lat: 52.52, lng: 13.405 });
       },
       { 
-        enableHighAccuracy: true, 
-        maximumAge: 300000,
+        enableHighAccuracy: false, // Reduziert wiederholte Anfragen
+        maximumAge: 600000, // 10 Minuten - nutze gecachte Position
         timeout: 10000
       }
     );

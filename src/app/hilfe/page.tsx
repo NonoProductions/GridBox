@@ -63,7 +63,7 @@ function HilfeContent() {
       isDarkMode ? 'text-white' : 'text-slate-900'
     }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
       {/* Back button */}
-      <div className="absolute top-20 left-4 z-10" style={{ top: "calc(env(safe-area-inset-top, 0px) + 80px)" }}>
+      <div className="absolute top-4 left-4 z-10">
         <button
           type="button"
           onClick={() => {
@@ -83,7 +83,7 @@ function HilfeContent() {
       </div>
 
       {/* Content */}
-      <div className="p-6 space-y-6" style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 80px)" }}>
+      <div className="p-6 space-y-6 pt-4">
         {/* Header */}
         <div className="text-center">
           <h1 className={`text-2xl font-bold mb-2 ${

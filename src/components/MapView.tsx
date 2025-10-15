@@ -58,7 +58,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     }
   }, [initialTheme]);
 
-  // Get user's current location
+  // Get user's current location - nur einmal beim Laden
   useEffect(() => {
     if (!navigator.geolocation) {
       console.warn('Geolocation is not supported by this browser');
@@ -82,8 +82,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setLocationLoading(false);
       },
       { 
-        enableHighAccuracy: true, 
-        maximumAge: 300000, // 5 minutes
+        enableHighAccuracy: false, // Reduziert die Anzahl der Anfragen
+        maximumAge: 600000, // 10 Minuten - nutze gecachte Position
         timeout: 10000 // 10 seconds
       }
     );
@@ -371,8 +371,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     changeTileLayer();
   }, [isDarkMode]);
 
+  // Stationen auf Karte anzeigen
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || stations.length === 0) {
+      console.log('Map not ready or no stations available');
+      return;
+    }
+    
     const map = mapRef.current;
     
     const addMarkers = async () => {
@@ -382,6 +387,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Remove existing stations layer if any
         if (stationsLayerRef.current) {
           map.removeLayer(stationsLayerRef.current);
+          stationsLayerRef.current = null;
         }
         
         const greenIcon = new L.Icon({
@@ -408,23 +414,30 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           marker.addTo(layerGroup);
         });
         
+        // Wichtig: Layer zur Karte hinzufügen
         layerGroup.addTo(map);
         stationsLayerRef.current = layerGroup;
         
-        console.log(`Added ${stations.length} station markers to map`);
+        console.log(`Successfully added ${stations.length} station markers to map`);
       } catch (error) {
         console.error('Error adding markers to map:', error);
       }
     };
     
     addMarkers();
-  }, [stations]);
+  }, [stations, mapRef.current]);
 
   async function locateMe() {
     if (!mapRef.current) return;
     const map = mapRef.current;
     if (!navigator.geolocation) {
       console.warn('Geolocation is not supported by this browser');
+      return;
+    }
+    
+    // Verwende die bereits gecachte Position wenn vorhanden
+    if (userLocation) {
+      map.setView([userLocation.lat, userLocation.lng], 17, { animate: true });
       return;
     }
     
@@ -461,7 +474,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         (error) => {
           console.error('Geolocation error:', error);
         },
-        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+        { enableHighAccuracy: false, maximumAge: 600000, timeout: 5000 } // Nutze gecachte Position
       );
     } catch (error) {
       console.error('Error loading Leaflet for geolocation:', error);
