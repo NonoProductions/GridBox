@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 
 const isValidEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
@@ -72,21 +73,15 @@ export default function LoginCard() {
     <div className="w-full max-w-md px-6">
       {/* Logo/Icon Section */}
       <div className="text-center mb-8">
-        <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-emerald-500 to-emerald-600 shadow-xl mb-6">
-          <svg 
-            xmlns="http://www.w3.org/2000/svg" 
-            viewBox="0 0 24 24" 
-            width="40" 
-            height="40" 
-            fill="none" 
-            stroke="white" 
-            strokeWidth="2" 
-            strokeLinecap="round" 
-            strokeLinejoin="round"
-          >
-            <path d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/>
-            <path d="M13 11h3l-4 6v-4H9l4-6v4z" fill="white" stroke="white"/>
-          </svg>
+        <div className="inline-flex items-center justify-center mb-6">
+          <Image 
+            src="/icon-512x512.png" 
+            alt="GridBox Logo" 
+            width={96}
+            height={96}
+            className="rounded-3xl shadow-xl"
+            priority
+          />
         </div>
         <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-2">GridBox</h1>
         <p className="text-slate-600 dark:text-slate-400">Powerbank ausleihen, jederzeit & überall</p>
