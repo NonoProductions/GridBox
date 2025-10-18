@@ -248,7 +248,7 @@ export default function CameraOverlay({ onClose }: { onClose: () => void }) {
       )}
       
       <div
-        className="absolute inset-x-0 px-4 flex items-center justify-center"
+        className="absolute inset-x-0 px-4 flex items-center justify-center z-[1001]"
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 40px)" }}
       >
         <button
@@ -340,12 +340,12 @@ export default function CameraOverlay({ onClose }: { onClose: () => void }) {
             onClick={toggleTorch}
             className={`relative grid place-items-center h-16 w-16 rounded-full backdrop-blur-2xl transition-all duration-300 hover:scale-110 active:scale-95 shadow-2xl ${
               torchEnabled 
-                ? 'bg-yellow-300 shadow-[0_0_30px_rgba(250,204,21,0.9)] ring-4 ring-yellow-200/80' 
+                ? 'bg-amber-400/60 shadow-[0_0_20px_rgba(251,191,36,0.4)] ring-2 ring-amber-300/40' 
                 : 'bg-white/25 text-white shadow-black/40 hover:bg-white/35'
             }`}
             style={{
-              backdropFilter: torchEnabled ? 'blur(40px) saturate(200%) brightness(130%)' : 'blur(40px) saturate(180%)',
-              WebkitBackdropFilter: torchEnabled ? 'blur(40px) saturate(200%) brightness(130%)' : 'blur(40px) saturate(180%)',
+              backdropFilter: torchEnabled ? 'blur(40px) saturate(180%) brightness(110%)' : 'blur(40px) saturate(180%)',
+              WebkitBackdropFilter: torchEnabled ? 'blur(40px) saturate(180%) brightness(110%)' : 'blur(40px) saturate(180%)',
             }}
             aria-label={torchEnabled ? "Taschenlampe ausschalten" : "Taschenlampe einschalten"}
           >
