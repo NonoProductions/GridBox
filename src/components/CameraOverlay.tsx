@@ -193,6 +193,26 @@ export default function CameraOverlay({ onClose }: { onClose: () => void }) {
     }
   };
 
+  // Verhindere Scrollen wenn Modal offen ist
+  useEffect(() => {
+    if (showManualInput) {
+      // Speichere aktuelle Scroll-Position
+      const scrollY = window.scrollY;
+      document.body.style.position = 'fixed';
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.width = '100%';
+      document.body.style.overflow = 'hidden';
+    } else {
+      // Stelle Scroll-Position wieder her
+      const scrollY = document.body.style.top;
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.width = '';
+      document.body.style.overflow = '';
+      window.scrollTo(0, parseInt(scrollY || '0') * -1);
+    }
+  }, [showManualInput]);
+
   useEffect(() => {
     function updateBox() {
       if (!boxRef.current) return;
