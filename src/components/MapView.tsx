@@ -712,7 +712,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       {selectedStation && !showStationList && userLocation && (
         <div className="fixed bottom-0 left-0 right-0 z-[999] animate-slide-up">
           <div 
-            className={`shadow-lg border-t flex flex-col ${
+            className={`shadow-lg border-t flex flex-col rounded-t-3xl ${
               isDarkMode === true
                 ? 'text-white border-gray-600' 
                 : 'bg-white text-slate-900 border-slate-200'
@@ -767,11 +767,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 {/* Linke Seite: Info */}
                 <div className="flex-1 space-y-3">
                   {/* Verfügbare Powerbanks */}
-                  <div className="flex items-center gap-3">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                  <div className="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
                       <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
                     </svg>
-                    <span className="text-base">
+                    <span className="text-base -ml-2">
                       <span className="font-semibold">{selectedStation.available_units || 0}</span> verfügbar
                     </span>
                   </div>
@@ -779,9 +779,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                   {/* Kosten */}
                   <div className="flex items-center gap-3">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
-                      <circle cx="12" cy="12" r="10"/>
-                      <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
-                      <path d="M12 18V6"/>
+                      <rect x="2" y="5" width="20" height="14" rx="2"/>
+                      <path d="M2 10h20"/>
                     </svg>
                     <span className="text-base">
                       <span className="font-semibold">0,10€</span> zum Start, anschließend <span className="font-semibold">0,05€</span>/Min
@@ -901,7 +900,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             </div>
 
             {/* Reservieren Button - Fixed at bottom */}
-            <div className={`flex-shrink-0 px-5 pb-4 pt-4 border-t ${
+            <div className={`flex-shrink-0 px-4 pb-5 pt-3 border-t ${
               isDarkMode === true ? 'border-gray-600/30' : 'border-gray-200'
             }`}
               style={isDarkMode === true ? { backgroundColor: '#282828' } : { backgroundColor: 'white' }}
