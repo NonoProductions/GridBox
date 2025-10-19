@@ -25,6 +25,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [nearbyStations, setNearbyStations] = useState<Station[]>([]);
   const [showStationList, setShowStationList] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
+  const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
@@ -155,6 +156,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
+      setIsPanelExpanded(false); // Reset expansion state when selecting new station
       
       console.log('Station highlighted:', station.name);
     } catch (error) {
@@ -180,8 +182,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         map.setView([userLocation.lat, userLocation.lng], 16, { animate: true });
       }
       
-      // Reset selected station
+      // Reset selected station and panel state
       setSelectedStation(null);
+      setIsPanelExpanded(false);
       
       console.log('Station highlight cleared');
     } catch (error) {
@@ -590,128 +593,193 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </a>
       </div>
 
-      {/* Selected Station Info Panel - Slides up from bottom */}
+      {/* QR-Code Scannen Button - über dem Info-Panel */}
+      {selectedStation && !showStationList && (
+        <div className="fixed bottom-72 left-0 right-0 z-[1000] flex justify-center px-4 animate-slide-up">
+          <button
+            type="button"
+            onClick={() => {
+              setScanning(true);
+            }}
+            className={`flex items-center gap-3 px-6 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+              isDarkMode === true
+                ? 'bg-black/30 text-white border border-white/30 hover:bg-black/40' 
+                : 'bg-white/40 text-slate-900 border border-slate-400/40 hover:bg-white/50'
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+              <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+              <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+              <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+              <rect x="7" y="7" width="10" height="10" rx="2" />
+            </svg>
+            <span className="text-sm font-semibold">QR-Code Scannen</span>
+          </button>
+        </div>
+      )}
+
+      {/* Selected Station Info Panel - Full Width from Bottom */}
       {selectedStation && !showStationList && userLocation && (
         <div className="fixed bottom-0 left-0 right-0 z-[999] animate-slide-up">
-          <div className={`mx-3 mb-4 rounded-3xl shadow-2xl backdrop-blur-md border ${
-            isDarkMode === true
-              ? 'bg-gray-800/98 text-white border-gray-700' 
-              : 'bg-white/98 text-slate-900 border-gray-200'
-          }`}>
-            <div className="p-6">
-              {/* Header with close button */}
-              <div className="flex items-start justify-between mb-5">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
-                    <h3 className="text-2xl font-bold">{selectedStation.name}</h3>
+          <div 
+            className={`shadow-lg border-t transition-all duration-300 ${
+              isDarkMode === true
+                ? 'text-white border-gray-600' 
+                : 'bg-white text-slate-900 border-slate-200'
+            } ${isPanelExpanded ? 'max-h-[80vh] overflow-y-auto' : 'max-h-auto'}`}
+            style={isDarkMode === true ? { backgroundColor: '#282828' } : {}}
+          >
+            {/* Drag Handle - zum Erweitern/Verkleinern */}
+            <div 
+              className="flex justify-center py-2 cursor-pointer"
+              onClick={() => setIsPanelExpanded(!isPanelExpanded)}
+            >
+              <div className={`w-10 h-1 rounded-full ${
+                isDarkMode === true ? 'bg-gray-600' : 'bg-gray-300'
+              }`}></div>
+            </div>
+
+            <div className="px-5 pb-6 relative">
+              {/* Close Button - rechts oben */}
+              <button
+                onClick={clearHighlight}
+                className={`absolute -top-3 right-4 p-2 rounded-full transition-colors ${
+                  isDarkMode === true ? 'hover:bg-gray-700/50' : 'hover:bg-gray-100'
+                }`}
+                aria-label="Schließen"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-70">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
+
+              {/* Station Name - größer */}
+              <h3 className="text-base font-semibold mb-4 pr-10">{selectedStation.name}</h3>
+
+              {/* Hauptbereich: Info links, Foto rechts */}
+              <div className="flex gap-4">
+                {/* Linke Seite: Info */}
+                <div className="flex-1 space-y-3">
+                  {/* Verfügbare Powerbanks */}
+                  <div className="flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                      <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+                    </svg>
+                    <span className="text-base">
+                      <span className="font-semibold">{selectedStation.available_units || 0}</span> verfügbar
+                    </span>
                   </div>
-                  <div className="text-base opacity-75">
-                    {(() => {
-                      const distance = calculateDistance(
-                        userLocation.lat,
-                        userLocation.lng,
-                        selectedStation.lat,
-                        selectedStation.lng
-                      );
-                      return distance < 1000 
-                        ? `${Math.round(distance)}m entfernt` 
-                        : `${(distance / 1000).toFixed(1)}km entfernt`;
-                    })()}
+
+                  {/* Kosten */}
+                  <div className="flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                      <circle cx="12" cy="12" r="10"/>
+                      <path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/>
+                      <path d="M12 18V6"/>
+                    </svg>
+                    <span className="text-base">
+                      <span className="font-semibold">0,10€</span> zum Start, anschließend <span className="font-semibold">0,05€</span>/Min
+                    </span>
                   </div>
                 </div>
-                <button
-                  onClick={clearHighlight}
-                  className={`p-2 rounded-full transition-colors ${
-                    isDarkMode === true ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
-                  }`}
-                  aria-label="Schließen"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
-                  </svg>
-                </button>
+
+                {/* Rechte Seite: Foto */}
+                <div className="w-24 h-24 flex-shrink-0">
+                  {selectedStation.photo_url ? (
+                    <img 
+                      src={selectedStation.photo_url} 
+                      alt={selectedStation.name}
+                      className="w-full h-full object-cover rounded-lg shadow-md"
+                    />
+                  ) : (
+                    <div className={`w-full h-full rounded-lg flex items-center justify-center ${
+                      isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-200'
+                    }`}>
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-40">
+                        <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+                      </svg>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Available Powerbanks - Big Display */}
-              <div className={`mb-5 p-6 rounded-2xl text-center ${
-                isDarkMode === true ? 'bg-emerald-900/30 border border-emerald-700/30' : 'bg-emerald-50 border border-emerald-200/50'
-              }`}>
-                <div className="text-base opacity-75 mb-3">Verfügbare Powerbanks</div>
-                <div className="text-6xl font-bold text-emerald-600 dark:text-emerald-400 mb-2">
-                  {selectedStation.available_units || 0}
-                </div>
-                <div className="text-sm opacity-60">
-                  {selectedStation.total_units && `von ${selectedStation.total_units} insgesamt`}
-                </div>
-              </div>
-
-              {/* Info Box - How to rent */}
-              <div className={`mb-5 p-3 rounded-xl border ${
-                isDarkMode === true 
-                  ? 'bg-blue-900/20 border-blue-600/30' 
-                  : 'bg-blue-50 border-blue-200'
-              }`}>
-                <div className="flex items-center gap-2">
-                  <div className="text-lg">ℹ️</div>
-                  <div className={`text-sm ${
-                    isDarkMode === true ? 'text-blue-200' : 'text-blue-800'
+              {/* Erweiterte Informationen - nur wenn Panel erweitert ist */}
+              {isPanelExpanded && (
+                <div className="mt-4 space-y-3">
+                  {/* Distanz */}
+                  <div className={`p-3 rounded-lg ${
+                    isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
                   }`}>
-                    QR-Code an der Station scannen zum Ausleihen
+                    <div className="text-xs opacity-70 mb-1">📍 Entfernung</div>
+                    <div className="text-sm">
+                      {(() => {
+                        const distance = calculateDistance(
+                          userLocation.lat,
+                          userLocation.lng,
+                          selectedStation.lat,
+                          selectedStation.lng
+                        );
+                        return distance < 1000 
+                          ? `${Math.round(distance)}m entfernt` 
+                          : `${(distance / 1000).toFixed(1)}km entfernt`;
+                      })()}
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Additional Info */}
-              {selectedStation.address && (
-                <div className={`mb-4 p-3 rounded-xl ${
-                  isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-50'
-                }`}>
-                  <div className="text-xs opacity-75 mb-1">📍 Adresse</div>
-                  <div className="text-sm">{selectedStation.address}</div>
+                  {/* Adresse */}
+                  {selectedStation.address && (
+                    <div className={`p-3 rounded-lg ${
+                      isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
+                    }`}>
+                      <div className="text-xs opacity-70 mb-1">📍 Adresse</div>
+                      <div className="text-sm">{selectedStation.address}</div>
+                    </div>
+                  )}
+
+                  {/* Beschreibung */}
+                  {selectedStation.description && (
+                    <div className={`p-3 rounded-lg ${
+                      isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
+                    }`}>
+                      <div className="text-xs opacity-70 mb-1">ℹ️ Information</div>
+                      <div className="text-sm">{selectedStation.description}</div>
+                    </div>
+                  )}
+
+                  {/* Navigations-Button */}
+                  <button
+                    onClick={() => openExternalNavigation(selectedStation)}
+                    className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
+                      isDarkMode === true
+                        ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                        : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                    } flex items-center justify-center gap-2`}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                      <circle cx="12" cy="12" r="4" />
+                    </svg>
+                    Navigation zur Station
+                  </button>
                 </div>
               )}
 
-              {selectedStation.description && (
-                <div className={`mb-4 p-3 rounded-xl ${
-                  isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-50'
-                }`}>
-                  <div className="text-xs opacity-75 mb-1">ℹ️ Information</div>
-                  <div className="text-sm">{selectedStation.description}</div>
-                </div>
-              )}
-
-              {/* Action Buttons */}
-              <div className="space-y-3">
+              {/* Reservieren Button - Teil des Info-Fensters */}
+              <div className={`mt-4 pt-4 border-t ${
+                isDarkMode === true ? 'border-gray-600/30' : 'border-gray-200'
+              }`}>
                 <button
+                  type="button"
                   onClick={() => {
-                    setScanning(true);
+                    // TODO: Reservierungs-Logik
+                    console.log('Reservierung für Station:', selectedStation.name);
                   }}
-                  className="w-full px-5 py-4 rounded-xl text-base font-bold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg flex items-center justify-center gap-3"
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white px-6 py-3.5 shadow-md active:scale-95 transition-transform"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-                    <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-                    <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-                    <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-                    <rect x="7" y="7" width="10" height="10" rx="2" />
-                  </svg>
-                  <span>QR-Code Scannen</span>
-                </button>
-                <button
-                  onClick={() => openExternalNavigation(selectedStation)}
-                  className={`w-full px-5 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] ${
-                    isDarkMode === true
-                      ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                      : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
-                  } flex items-center justify-center gap-2`}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-                    <circle cx="12" cy="12" r="4" />
-                  </svg>
-                  Navigation zur Station
+                  <span className="text-lg font-semibold">Reservieren</span>
+                  <span className="text-base opacity-80">· kostenlos für 10 Min</span>
                 </button>
               </div>
             </div>

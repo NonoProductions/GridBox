@@ -16,6 +16,8 @@ export interface Station {
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
+  photo_url?: string;
+  rental_cost?: number; // Kosten pro Stunde in Euro
 }
 
 interface StationManagerProps {
