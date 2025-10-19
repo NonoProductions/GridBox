@@ -26,3 +26,19 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Distance tooltip styling for station markers */
+.distance-tooltip {
+  background-color: rgba(16, 185, 129, 0.95) !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: white !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+}
+
+.distance-tooltip::before {
+  border-top-color: rgba(16, 185, 129, 0.95) !important;
+}

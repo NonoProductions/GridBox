@@ -3,6 +3,13 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
+export interface Powerbank {
+  id: string;
+  name: string;
+  battery_level: number; // 0-100
+  status: 'available' | 'rented' | 'charging' | 'maintenance';
+}
+
 export interface Station {
   id: string;
   name: string;
@@ -18,6 +25,7 @@ export interface Station {
   updated_at?: string;
   photo_url?: string;
   rental_cost?: number; // Kosten pro Stunde in Euro
+  powerbanks?: Powerbank[]; // Liste der Powerbanks an dieser Station
 }
 
 interface StationManagerProps {

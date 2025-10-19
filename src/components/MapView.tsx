@@ -26,12 +26,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [showStationList, setShowStationList] = useState(false);
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
+  const [dragOffset, setDragOffset] = useState(0);
   const mapRef = useRef<L.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
   const currentTileLayerRef = useRef<L.TileLayer | null>(null);
   const highlightMarkerRef = useRef<L.Marker | null>(null);
   const stationsLayerRef = useRef<L.LayerGroup | null>(null);
+  const touchStartY = useRef<number>(0);
+  const isDragging = useRef(false);
 
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
   const stationManager = StationManager({ 
@@ -162,6 +165,47 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     } catch (error) {
       console.error('Error highlighting station:', error);
     }
+  };
+
+  // Touch handlers for dragging the panel
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+    isDragging.current = true;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging.current) return;
+    
+    const currentY = e.touches[0].clientY;
+    const delta = touchStartY.current - currentY;
+    
+    // Always show drag feedback
+    if (delta > 0 && !isPanelExpanded) {
+      // Dragging up when collapsed - limit to reasonable height
+      setDragOffset(Math.min(delta, 300));
+    } else if (delta < 0 && isPanelExpanded) {
+      // Dragging down when expanded
+      setDragOffset(Math.max(delta, -300));
+    } else {
+      // Reset if dragging in wrong direction
+      setDragOffset(0);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (!isDragging.current) return;
+    
+    // Snap to expanded or collapsed based on drag offset
+    if (dragOffset > 80) {
+      setIsPanelExpanded(true);
+    } else if (dragOffset < -80) {
+      setIsPanelExpanded(false);
+    }
+    
+    // Reset
+    setDragOffset(0);
+    isDragging.current = false;
+    touchStartY.current = 0;
   };
 
   // Function to clear station highlight
@@ -408,6 +452,51 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         stations.forEach((s) => {
           const marker = L.marker([s.lat, s.lng], { icon: greenIcon });
           
+          // Add distance label only if user location is available AND a station is selected
+          if (userLocation && selectedStation) {
+            const distance = calculateDistance(
+              userLocation.lat,
+              userLocation.lng,
+              s.lat,
+              s.lng
+            );
+            const distanceText = distance < 1000 
+              ? `${Math.round(distance)}m` 
+              : `${(distance / 1000).toFixed(1)}km`;
+            
+            console.log('Adding distance tooltip:', distanceText, 'for station:', s.name);
+            
+            // Create custom HTML for distance label
+            const divIcon = L.divIcon({
+              className: '',
+              html: `<div style="
+                position: absolute;
+                bottom: 48px;
+                left: 50%;
+                transform: translateX(-50%);
+                background-color: rgba(255, 255, 255, 0.95);
+                color: #1f2937;
+                padding: 4px 8px;
+                border-radius: 6px;
+                font-size: 11px;
+                font-weight: 600;
+                white-space: nowrap;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+                pointer-events: none;
+                border: 1px solid rgba(0, 0, 0, 0.1);
+              ">${distanceText}</div>`,
+              iconSize: [0, 0],
+              iconAnchor: [0, 0]
+            });
+            
+            // Add distance label as separate marker
+            const distanceMarker = L.marker([s.lat, s.lng], { 
+              icon: divIcon,
+              interactive: false
+            });
+            distanceMarker.addTo(layerGroup);
+          }
+          
           // Add click handler to open info panel
           marker.on('click', () => {
             console.log('Marker clicked:', s.name);
@@ -428,7 +517,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
     
     addMarkers();
-  }, [stations, mapRef.current]);
+  }, [stations, mapRef.current, userLocation, selectedStation]);
 
   async function locateMe() {
     if (!mapRef.current) return;
@@ -593,8 +682,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </a>
       </div>
 
-      {/* QR-Code Scannen Button - über dem Info-Panel */}
-      {selectedStation && !showStationList && (
+      {/* QR-Code Scannen Button - über dem Info-Panel, nur wenn Panel nicht bewegt wird */}
+      {selectedStation && !showStationList && !isPanelExpanded && dragOffset === 0 && (
         <div className="fixed bottom-72 left-0 right-0 z-[1000] flex justify-center px-4 animate-slide-up">
           <button
             type="button"
@@ -623,24 +712,39 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       {selectedStation && !showStationList && userLocation && (
         <div className="fixed bottom-0 left-0 right-0 z-[999] animate-slide-up">
           <div 
-            className={`shadow-lg border-t transition-all duration-300 ${
+            className={`shadow-lg border-t flex flex-col ${
               isDarkMode === true
                 ? 'text-white border-gray-600' 
                 : 'bg-white text-slate-900 border-slate-200'
-            } ${isPanelExpanded ? 'max-h-[80vh] overflow-y-auto' : 'max-h-auto'}`}
-            style={isDarkMode === true ? { backgroundColor: '#282828' } : {}}
+            }`}
+            style={{
+              backgroundColor: isDarkMode === true ? '#282828' : 'white',
+              height: isPanelExpanded 
+                ? dragOffset < 0 
+                  ? `calc(55vh + ${dragOffset}px)` 
+                  : '55vh'
+                : dragOffset > 0
+                  ? `calc(15rem + ${dragOffset}px)`
+                  : 'auto',
+              minHeight: 'auto',
+              transition: dragOffset === 0 ? 'height 0.3s ease-out' : 'none'
+            }}
           >
             {/* Drag Handle - zum Erweitern/Verkleinern */}
             <div 
-              className="flex justify-center py-2 cursor-pointer"
+              className="flex justify-center py-3 cursor-grab active:cursor-grabbing touch-none"
               onClick={() => setIsPanelExpanded(!isPanelExpanded)}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
             >
-              <div className={`w-10 h-1 rounded-full ${
+              <div className={`w-12 h-1 rounded-full transition-all ${
                 isDarkMode === true ? 'bg-gray-600' : 'bg-gray-300'
               }`}></div>
             </div>
 
-            <div className="px-5 pb-6 relative">
+            {/* Scrollable Content Area */}
+            <div className={`flex-1 overflow-y-auto px-5 ${isPanelExpanded ? '' : 'pb-6'} relative`}>
               {/* Close Button - rechts oben */}
               <button
                 onClick={clearHighlight}
@@ -708,23 +812,51 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               {/* Erweiterte Informationen - nur wenn Panel erweitert ist */}
               {isPanelExpanded && (
                 <div className="mt-4 space-y-3">
-                  {/* Distanz */}
-                  <div className={`p-3 rounded-lg ${
+                  {/* Powerbanks Liste */}
+                  <div className={`rounded-lg ${
                     isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
                   }`}>
-                    <div className="text-xs opacity-70 mb-1">📍 Entfernung</div>
-                    <div className="text-sm">
-                      {(() => {
-                        const distance = calculateDistance(
-                          userLocation.lat,
-                          userLocation.lng,
-                          selectedStation.lat,
-                          selectedStation.lng
-                        );
-                        return distance < 1000 
-                          ? `${Math.round(distance)}m entfernt` 
-                          : `${(distance / 1000).toFixed(1)}km entfernt`;
-                      })()}
+                    <div className="p-3 border-b border-gray-600/30">
+                      <div className="text-sm font-semibold">🔋 Verfügbare Powerbanks</div>
+                    </div>
+                    <div className="divide-y divide-gray-600/20">
+                      {selectedStation.powerbanks && selectedStation.powerbanks.length > 0 ? (
+                        selectedStation.powerbanks
+                          .filter(pb => pb.status === 'available')
+                          .map((powerbank) => (
+                            <div key={powerbank.id} className="p-3 flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className={`w-2 h-2 rounded-full ${
+                                  powerbank.battery_level > 80 ? 'bg-emerald-500' :
+                                  powerbank.battery_level > 50 ? 'bg-yellow-500' :
+                                  'bg-orange-500'
+                                }`}></div>
+                                <span className="text-sm font-medium">{powerbank.name}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="text-sm font-semibold">{powerbank.battery_level}%</div>
+                                {/* Battery icon */}
+                                <div className={`w-8 h-4 rounded border-2 relative ${
+                                  isDarkMode === true ? 'border-gray-600' : 'border-gray-300'
+                                }`}>
+                                  <div 
+                                    className={`h-full rounded-sm ${
+                                      powerbank.battery_level > 80 ? 'bg-emerald-500' :
+                                      powerbank.battery_level > 50 ? 'bg-yellow-500' :
+                                      powerbank.battery_level > 20 ? 'bg-orange-500' :
+                                      'bg-red-500'
+                                    }`}
+                                    style={{ width: `${powerbank.battery_level}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                      ) : (
+                        <div className="p-3 text-sm opacity-60 text-center">
+                          Keine Powerbanks verfügbar
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -766,22 +898,25 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 </div>
               )}
 
-              {/* Reservieren Button - Teil des Info-Fensters */}
-              <div className={`mt-4 pt-4 border-t ${
-                isDarkMode === true ? 'border-gray-600/30' : 'border-gray-200'
-              }`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // TODO: Reservierungs-Logik
-                    console.log('Reservierung für Station:', selectedStation.name);
-                  }}
-                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white px-6 py-3.5 shadow-md active:scale-95 transition-transform"
-                >
-                  <span className="text-lg font-semibold">Reservieren</span>
-                  <span className="text-base opacity-80">· kostenlos für 10 Min</span>
-                </button>
-              </div>
+            </div>
+
+            {/* Reservieren Button - Fixed at bottom */}
+            <div className={`flex-shrink-0 px-5 pb-4 pt-4 border-t ${
+              isDarkMode === true ? 'border-gray-600/30' : 'border-gray-200'
+            }`}
+              style={isDarkMode === true ? { backgroundColor: '#282828' } : { backgroundColor: 'white' }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  // TODO: Reservierungs-Logik
+                  console.log('Reservierung für Station:', selectedStation.name);
+                }}
+                className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white px-6 py-3.5 shadow-md active:scale-95 transition-transform"
+              >
+                <span className="text-lg font-semibold">Reservieren</span>
+                <span className="text-base opacity-80">· kostenlos für 10 Min</span>
+              </button>
             </div>
           </div>
         </div>
