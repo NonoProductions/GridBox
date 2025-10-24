@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
+import mapboxgl from "mapbox-gl";
 
 // Legacy Station type for backward compatibility
 type LegacyStation = {
@@ -28,12 +29,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
   const [isClosing, setIsClosing] = useState(false);
-  const mapRef = useRef<L.Map | null>(null);
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [navigationRoute, setNavigationRoute] = useState<any>(null);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [navigationInstructions, setNavigationInstructions] = useState<string[]>([]);
+  const [distanceToDestination, setDistanceToDestination] = useState<number>(0);
+  const [timeToDestination, setTimeToDestination] = useState<number>(0);
+  const [voiceEnabled, setVoiceEnabled] = useState<boolean>(false);
+  const [currentInstruction, setCurrentInstruction] = useState<string>('');
+  const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
-  const userMarkerRef = useRef<L.Marker | null>(null);
-  const currentTileLayerRef = useRef<L.TileLayer | null>(null);
-  const highlightMarkerRef = useRef<L.Marker | null>(null);
-  const stationsLayerRef = useRef<L.LayerGroup | null>(null);
+  const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const highlightMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const stationsLayerRef = useRef<mapboxgl.Marker[]>([]);
+  const routeLayerRef = useRef<string | null>(null);
+  const walkingTimeLabelRef = useRef<mapboxgl.Marker | null>(null);
+  const navigationLayerRef = useRef<string | null>(null);
+  const navigationSourceRef = useRef<string | null>(null);
   const touchStartY = useRef<number>(0);
   const isDragging = useRef(false);
 
@@ -112,57 +124,432 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     return R * c; // Distance in meters
   };
 
+  // Function to start navigation to station
+  const startNavigation = async (station: Station) => {
+    if (!mapRef.current || !userLocation) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Get Mapbox access token
+      const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+      if (!accessToken) {
+        console.error('Mapbox access token not found');
+        return;
+      }
+      
+      // Request walking directions from user location to station
+      const directionsUrl = `https://api.mapbox.com/directions/v5/mapbox/walking/${userLocation.lng},${userLocation.lat};${station.lng},${station.lat}?geometries=geojson&steps=true&overview=full&access_token=${accessToken}`;
+      
+      const response = await fetch(directionsUrl);
+      const data = await response.json();
+      
+      if (data.routes && data.routes.length > 0) {
+        const route = data.routes[0];
+        const routeGeometry = route.geometry;
+        
+        // Clear existing navigation
+        clearNavigation();
+        
+        // Set navigation state
+        setIsNavigating(true);
+        setNavigationRoute(route);
+        setDistanceToDestination(Math.round(route.distance));
+        setTimeToDestination(Math.round(route.duration / 60));
+        
+        // Extract navigation instructions
+        const instructions: string[] = [];
+        if (route.legs && route.legs[0] && route.legs[0].steps) {
+          route.legs[0].steps.forEach((step: any, index: number) => {
+            if (step.maneuver && step.maneuver.instruction) {
+              instructions.push(step.maneuver.instruction);
+            }
+          });
+        }
+        setNavigationInstructions(instructions);
+        
+        // Set current instruction to first step
+        if (instructions.length > 0) {
+          setCurrentInstruction(instructions[0]);
+          // Speak the first instruction if voice is enabled
+          if (voiceEnabled) {
+            speakInstruction(instructions[0]);
+          }
+        }
+        
+        // Add navigation route source
+        const sourceId = 'navigation-route';
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: routeGeometry
+          }
+        });
+        
+        // Add navigation route layer
+        const layerId = 'navigation-route-layer';
+        map.addLayer({
+          id: layerId,
+          type: 'line',
+          source: sourceId,
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          paint: {
+            'line-color': '#10b981', // Emerald color for navigation
+            'line-width': 6,
+            'line-opacity': 0.9
+          }
+        });
+        
+        navigationLayerRef.current = layerId;
+        navigationSourceRef.current = sourceId;
+        
+        // Add destination marker (commented out to remove target window)
+        // addDestinationMarker(station);
+        
+        console.log('Navigation started to:', station.name);
+      }
+    } catch (error) {
+      console.error('Error starting navigation:', error);
+    }
+  };
+
+  // Function to add walking route to station (simplified version for display)
+  const addWalkingRoute = async (station: Station) => {
+    if (!mapRef.current || !userLocation) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Remove existing route if any
+      if (routeLayerRef.current) {
+        try {
+          if (map.getLayer(routeLayerRef.current)) {
+            map.removeLayer(routeLayerRef.current);
+          }
+          if (map.getSource('walking-route')) {
+            map.removeSource('walking-route');
+          }
+        } catch (error) {
+          console.log('Error removing existing route:', error instanceof Error ? error.message : String(error));
+        }
+        routeLayerRef.current = null;
+      }
+      
+      // Also try to remove any existing route sources/layers that might be left
+      try {
+        if (map.getLayer('walking-route-layer')) {
+          map.removeLayer('walking-route-layer');
+        }
+        if (map.getSource('walking-route')) {
+          map.removeSource('walking-route');
+        }
+      } catch (error) {
+        // Ignore errors if layer/source doesn't exist
+        console.log('Route cleanup - some layers/sources may not exist:', error instanceof Error ? error.message : String(error));
+      }
+      
+      // Get Mapbox access token
+      const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+      if (!accessToken) {
+        console.error('Mapbox access token not found');
+        return;
+      }
+      
+      // Request walking directions from user location to station
+      const directionsUrl = `https://api.mapbox.com/directions/v5/mapbox/walking/${userLocation.lng},${userLocation.lat};${station.lng},${station.lat}?geometries=geojson&access_token=${accessToken}`;
+      
+      const response = await fetch(directionsUrl);
+      const data = await response.json();
+      
+      if (data.routes && data.routes.length > 0) {
+        const route = data.routes[0];
+        const routeGeometry = route.geometry;
+        
+        // Calculate walking time in minutes
+        const walkingTimeMinutes = Math.round(route.duration / 60);
+        
+        // Add route source
+        const sourceId = 'walking-route';
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: routeGeometry
+          }
+        });
+        
+        // Add route layer with dashed line
+        const layerId = 'walking-route-layer';
+        map.addLayer({
+          id: layerId,
+          type: 'line',
+          source: sourceId,
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          paint: {
+            'line-color': '#3b82f6', // Helles, leuchtendes Blau für beide Modi
+            'line-width': 4, // Dickere Linie für bessere Sichtbarkeit
+            'line-dasharray': [2, 2], // Kürzere Striche für feinere Optik
+            'line-opacity': 0.9 // Leichte Transparenz für besseren Kontrast
+          }
+        });
+        
+        routeLayerRef.current = layerId;
+        
+        // Add walking time label above the station marker
+        addWalkingTimeLabel(station, walkingTimeMinutes);
+        
+        console.log('Walking route added to map with time:', walkingTimeMinutes, 'minutes');
+      }
+    } catch (error) {
+      console.error('Error adding walking route:', error);
+    }
+  };
+
+  // Function to add destination marker
+  const addDestinationMarker = (station: Station) => {
+    if (!mapRef.current) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Create destination marker element
+      const destinationElement = document.createElement('div');
+      destinationElement.innerHTML = `
+        <div style="
+          background: #10b981;
+          color: white;
+          padding: 8px 12px;
+          border-radius: 20px;
+          font-size: 14px;
+          font-weight: 600;
+          text-align: center;
+          white-space: nowrap;
+          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+          border: 2px solid white;
+        ">
+          🎯 Ziel: ${station.name}
+        </div>
+      `;
+      
+      // Add destination marker
+      const destinationMarker = new mapboxgl.Marker({
+        element: destinationElement,
+        anchor: 'bottom'
+      })
+        .setLngLat([station.lng, station.lat])
+        .addTo(map);
+      
+      console.log('Destination marker added for:', station.name);
+    } catch (error) {
+      console.error('Error adding destination marker:', error);
+    }
+  };
+
+  // Function to clear navigation
+  const clearNavigation = () => {
+    if (!mapRef.current) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Remove navigation route
+      if (navigationLayerRef.current) {
+        if (map.getLayer(navigationLayerRef.current)) {
+          map.removeLayer(navigationLayerRef.current);
+        }
+        if (navigationSourceRef.current && map.getSource(navigationSourceRef.current)) {
+          map.removeSource(navigationSourceRef.current);
+        }
+        navigationLayerRef.current = null;
+        navigationSourceRef.current = null;
+      }
+      
+      // Stop any ongoing speech
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      
+      // Reset navigation state
+      setIsNavigating(false);
+      setNavigationRoute(null);
+      setCurrentStep(0);
+      setNavigationInstructions([]);
+      setDistanceToDestination(0);
+      setTimeToDestination(0);
+      setCurrentInstruction('');
+      
+      console.log('Navigation cleared');
+    } catch (error) {
+      console.error('Error clearing navigation:', error);
+    }
+  };
+
+  // Function to stop navigation
+  const stopNavigation = () => {
+    clearNavigation();
+    console.log('Navigation stopped');
+  };
+
+  // Function to speak navigation instruction
+  const speakInstruction = (text: string) => {
+    if (!voiceEnabled) return;
+    
+    try {
+      // Cancel any ongoing speech
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'de-DE';
+        utterance.rate = 0.9;
+        utterance.pitch = 1;
+        utterance.volume = 0.8;
+        
+        window.speechSynthesis.speak(utterance);
+        console.log('Speaking instruction:', text);
+      }
+    } catch (error) {
+      console.error('Error speaking instruction:', error);
+    }
+  };
+
+  // Function to toggle voice navigation
+  const toggleVoiceNavigation = () => {
+    setVoiceEnabled(!voiceEnabled);
+    if (!voiceEnabled && currentInstruction) {
+      speakInstruction(currentInstruction);
+    }
+  };
+
+  // Function to add walking time label above station marker
+  const addWalkingTimeLabel = (station: Station, walkingTimeMinutes: number) => {
+    if (!mapRef.current) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Remove existing walking time label if any
+      if (walkingTimeLabelRef.current) {
+        try {
+          walkingTimeLabelRef.current.remove();
+        } catch (error) {
+          console.log('Error removing existing walking time label:', error instanceof Error ? error.message : String(error));
+        }
+        walkingTimeLabelRef.current = null;
+      }
+      
+      // Create walking time label element
+      const timeLabelElement = document.createElement('div');
+      timeLabelElement.innerHTML = `
+        <div class="walking-time-label" style="
+          background: rgba(0, 0, 0, 0.8);
+          color: white;
+          padding: 4px 8px;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: 600;
+          text-align: center;
+          white-space: nowrap;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+        ">
+          ${walkingTimeMinutes} Min
+        </div>
+      `;
+      
+      // Add walking time label marker
+      const timeLabelMarker = new mapboxgl.Marker({
+        element: timeLabelElement,
+        anchor: 'bottom',
+        offset: [0, -50] // Position above the station marker
+      })
+        .setLngLat([station.lng, station.lat])
+        .addTo(map);
+      
+      walkingTimeLabelRef.current = timeLabelMarker;
+      console.log('Walking time label added:', walkingTimeMinutes, 'minutes');
+    } catch (error) {
+      console.error('Error adding walking time label:', error);
+    }
+  };
+
   // Function to highlight and zoom to a station on the map
   const highlightStation = async (station: Station) => {
     if (!mapRef.current) return;
     
     try {
-      const L = (await import("leaflet")).default;
       const map = mapRef.current;
+      
+      // Debug: Log station coordinates and validate them
+      console.log('Highlighting station:', station.name, 'Coordinates:', { lat: station.lat, lng: station.lng });
+      
+      // Validate coordinates
+      if (!station.lat || !station.lng || isNaN(station.lat) || isNaN(station.lng)) {
+        console.error('Invalid station coordinates:', station);
+        return;
+      }
       
       // Remove existing highlight marker if any
       if (highlightMarkerRef.current) {
-        map.removeLayer(highlightMarkerRef.current);
+        highlightMarkerRef.current.remove();
       }
       
       // Create a larger, more prominent highlight marker with pulsing ring
-      const highlightIcon = new L.Icon({
-        iconUrl:
-          "data:image/svg+xml;charset=UTF-8," +
-          encodeURIComponent(
-            `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="64" viewBox="0 0 32 40">
-              <!-- Main marker pin body -->
-              <path fill="#10b981" stroke="#10b981" stroke-width="1.5" d="M16 38s-10-6.2-10-14.3a10 10 0 1 1 20 0C26 31.8 16 38 16 38z"/>
-              <!-- Lightning bolt - centered at x=16, y=24 -->
-              <path d="M16.5 24h3l-4 6v-4h-3l4-6v4z" fill="white" stroke="white" stroke-width="1"/>
-            </svg>`
-          ),
-        iconSize: [56, 64],
-        iconAnchor: [28, 64],
-        popupAnchor: [0, -60],
-      });
+      const highlightElement = document.createElement('div');
+      highlightElement.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="64" viewBox="0 0 32 40">
+          <!-- Main marker pin body -->
+          <path fill="#10b981" stroke="#10b981" stroke-width="1.5" d="M16 38s-10-6.2-10-14.3a10 10 0 1 1 20 0C26 31.8 16 38 16 38z"/>
+          <!-- Lightning bolt - centered at x=16, y=24 -->
+          <path d="M16.5 24h3l-4 6v-4h-3l4-6v4z" fill="white" stroke="white" stroke-width="1"/>
+        </svg>
+      `;
+      highlightElement.style.width = '56px';
+      highlightElement.style.height = '64px';
+      highlightElement.style.cursor = 'pointer';
       
       // Add highlight marker (in addition to the normal marker)
-      const highlightMarker = L.marker([station.lat, station.lng], { 
-        icon: highlightIcon,
-        zIndexOffset: 1000 // Make sure it appears above other markers
-      }).addTo(map);
+      const highlightMarker = new mapboxgl.Marker({
+        element: highlightElement,
+        anchor: 'bottom'
+      })
+        .setLngLat([station.lng, station.lat])
+        .addTo(map);
       
       highlightMarkerRef.current = highlightMarker;
       
-      // Calculate offset to show station in visible area above the bottom panel
-      // We shift the map view downward so the station appears in the upper visible portion
-      const latOffset = -0.003; // Negative to shift view down, keeping station visible above panel
+      // Add walking route to station
+      await addWalkingRoute(station);
       
-      // Set view with offset so station appears in visible top portion
-      map.setView([station.lat + latOffset, station.lng], 16, { animate: true });
+      // Center the map on the station with offset for panel interaction
+      const latOffset = -0.0013; // Fine-tuned offset - perfect balance for panel interaction
+      
+      // Set view with offset so station appears in upper portion when panel is expanded
+      const targetCenter = [station.lng, station.lat + latOffset];
+      console.log('Flying to coordinates:', targetCenter);
+      
+      map.flyTo({
+        center: targetCenter as [number, number],
+        zoom: 16,
+        essential: true,
+        duration: 1000 // Smooth animation
+      });
       
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
       setIsPanelExpanded(false); // Reset expansion state when selecting new station
       
-      console.log('Station highlighted:', station.name);
+      console.log('Station highlighted and map centered on:', { lng: station.lng, lat: station.lat + latOffset });
     } catch (error) {
       console.error('Error highlighting station:', error);
     }
@@ -227,20 +614,67 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Remove highlight marker
       if (highlightMarkerRef.current) {
-        map.removeLayer(highlightMarkerRef.current);
+        try {
+          highlightMarkerRef.current.remove();
+        } catch (error) {
+          console.log('Error removing highlight marker:', error instanceof Error ? error.message : String(error));
+        }
         highlightMarkerRef.current = null;
+      }
+      
+      // Remove walking time label
+      if (walkingTimeLabelRef.current) {
+        try {
+          walkingTimeLabelRef.current.remove();
+        } catch (error) {
+          console.log('Error removing walking time label:', error instanceof Error ? error.message : String(error));
+        }
+        walkingTimeLabelRef.current = null;
+      }
+      
+      // Remove walking route
+      if (routeLayerRef.current) {
+        if (map.getLayer(routeLayerRef.current)) {
+          map.removeLayer(routeLayerRef.current);
+        }
+        if (map.getSource('walking-route')) {
+          map.removeSource('walking-route');
+        }
+        routeLayerRef.current = null;
+      }
+      
+      // Also try to remove any existing route sources/layers that might be left
+      try {
+        if (map.getLayer('walking-route-layer')) {
+          map.removeLayer('walking-route-layer');
+        }
+        if (map.getSource('walking-route')) {
+          map.removeSource('walking-route');
+        }
+      } catch (error) {
+        // Ignore errors if layer/source doesn't exist
+        console.log('Route cleanup - some layers/sources may not exist:', error instanceof Error ? error.message : String(error));
+      }
+      
+      // Clear navigation if active
+      if (isNavigating) {
+        clearNavigation();
       }
       
       // Re-center map to user location when closing panel
       if (userLocation) {
-        map.setView([userLocation.lat, userLocation.lng], 16, { animate: true });
+        map.flyTo({
+          center: [userLocation.lng, userLocation.lat],
+          zoom: 16,
+          essential: true
+        });
       }
       
       // Reset selected station and panel state
       setSelectedStation(null);
       setIsPanelExpanded(false);
       
-      console.log('Station highlight cleared');
+      console.log('Station highlight and route cleared');
     } catch (error) {
       console.error('Error clearing highlight:', error);
     }
@@ -282,7 +716,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     }
   };
 
-
   // Filter nearby stations within 200m
   useEffect(() => {
     if (!userLocation || stations.length === 0) {
@@ -306,16 +739,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   useEffect(() => {
     if (mapRef.current || !mapElRef.current || isDarkMode === null || locationLoading) return;
     
-    // Dynamically import Leaflet only on client side
+    // Dynamically import Mapbox GL only on client side
     const initMap = async () => {
       try {
-        const L = (await import("leaflet")).default;
+        // Set Mapbox access token
+        const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+        if (!accessToken) {
+          console.error('Mapbox access token not found. Please set NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN in your environment variables.');
+          return;
+        }
         
-        // Import Leaflet CSS dynamically
-        if (!document.querySelector('link[href*="leaflet"]')) {
+        mapboxgl.accessToken = accessToken;
+        
+        // Import Mapbox GL CSS dynamically
+        if (!document.querySelector('link[href*="mapbox-gl"]')) {
           const link = document.createElement('link');
           link.rel = 'stylesheet';
-          link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+          link.href = 'https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css';
           document.head.appendChild(link);
         }
         
@@ -324,53 +764,50 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         mapContainer.style.width = '100%';
         mapContainer.style.height = '100%';
         
-        const map = L.map(mapContainer, {
-          center: L.latLng(center.lat, center.lng), // Use current user location
+        // Get style URLs from environment variables
+        const lightStyle = process.env.NEXT_PUBLIC_MAPBOX_LIGHT_STYLE || 'mapbox://styles/mapbox/light-v11';
+        const darkStyle = process.env.NEXT_PUBLIC_MAPBOX_DARK_STYLE || 'mapbox://styles/mapbox/dark-v11';
+        
+        const map = new mapboxgl.Map({
+          container: mapContainer,
+          style: isDarkMode ? darkStyle : lightStyle,
+          center: [center.lng, center.lat], // Use current user location
           zoom: 17, // Same zoom level as the "locate me" button
-          zoomControl: false, // Disable zoom controls
-          preferCanvas: true,
-          renderer: L.canvas()
+          pitch: 0,
+          bearing: 0
         });
 
         mapRef.current = map;
-        console.log('Map initialized successfully:', map);
+        console.log('Mapbox map initialized successfully:', map);
         console.log('Map center set to:', center);
 
-        // Add initial tile layer - always use light mode
-        const initialTileLayer = L.tileLayer(
-          'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-          {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
-            subdomains: 'abcd',
-            maxZoom: 20
-          }
-        );
-        initialTileLayer.addTo(map);
-        currentTileLayerRef.current = initialTileLayer;
-        
-        console.log('Initial tile layer added: Light mode');
-        
         // Add user location marker if we have the location
         if (userLocation) {
-          const userIcon = new L.Icon({
-            iconUrl:
-              "data:image/svg+xml;charset=UTF-8," +
-              encodeURIComponent(
-                '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" /><circle cx="12" cy="12" r="5" fill="#10b981" /></svg>'
-              ),
-            iconSize: [28, 28],
-            iconAnchor: [14, 14],
-          });
+          const userElement = document.createElement('div');
+          userElement.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
+              <circle cx="12" cy="12" r="5" fill="#10b981" />
+            </svg>
+          `;
+          userElement.style.width = '28px';
+          userElement.style.height = '28px';
+          userElement.style.cursor = 'pointer';
           
-          const userMarker = L.marker([userLocation.lat, userLocation.lng], { icon: userIcon }).addTo(map);
+          const userMarker = new mapboxgl.Marker({
+            element: userElement,
+            anchor: 'center'
+          })
+            .setLngLat([userLocation.lng, userLocation.lat])
+            .addTo(map);
           userMarkerRef.current = userMarker;
           console.log('User marker added at:', userLocation);
         }
 
         // Force map to invalidate size and render
         setTimeout(() => {
-          map.invalidateSize();
-          console.log('Map invalidated and should be visible now');
+          map.resize();
+          console.log('Map resized and should be visible now');
         }, 100);
 
         return () => {
@@ -380,52 +817,38 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
         };
       } catch (error) {
-        console.error('Error initializing map:', error);
+        console.error('Error initializing Mapbox map:', error);
       }
     };
 
     initMap();
   }, [center, isDarkMode, locationLoading, userLocation]);
 
-  // Effect to change tile layer when theme changes
+  // Effect to change map style when theme changes
   useEffect(() => {
     if (!mapRef.current || isDarkMode === null) {
       // Map not initialized yet or theme not detected yet, wait for it
       return;
     }
     
-    // Skip if this is the initial load (map was just initialized with correct theme)
-    if (!currentTileLayerRef.current) {
-      return;
-    }
-    
-    const changeTileLayer = async () => {
+    const changeMapStyle = async () => {
       try {
-        const L = (await import("leaflet")).default;
+        const map = mapRef.current!;
         
-        // Remove current tile layer
-        if (currentTileLayerRef.current && mapRef.current) {
-          mapRef.current.removeLayer(currentTileLayerRef.current);
-        }
+        // Get style URLs from environment variables
+        const lightStyle = process.env.NEXT_PUBLIC_MAPBOX_LIGHT_STYLE || 'mapbox://styles/mapbox/light-v11';
+        const darkStyle = process.env.NEXT_PUBLIC_MAPBOX_DARK_STYLE || 'mapbox://styles/mapbox/dark-v11';
         
-        // Add new tile layer - always use light mode
-        console.log("Switching to CartoDB Voyager map");
-        const newTileLayer = L.tileLayer('https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-          attribution: '&copy; <a href="https://www.openstreetmap.org/">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
-          subdomains: 'abcd',
-          maxZoom: 20
-        });
+        const newStyle = isDarkMode ? darkStyle : lightStyle;
+        console.log("Switching to Mapbox style:", newStyle);
         
-        if (mapRef.current) {
-          newTileLayer.addTo(mapRef.current);
-          currentTileLayerRef.current = newTileLayer;
-        }
+        map.setStyle(newStyle);
       } catch (error) {
-        console.error('Error changing tile layer:', error);
+        console.error('Error changing map style:', error);
       }
     };
     
-    changeTileLayer();
+    changeMapStyle();
   }, [isDarkMode]);
 
   // Stationen auf Karte anzeigen
@@ -439,86 +862,42 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     
     const addMarkers = async () => {
       try {
-        const L = (await import("leaflet")).default;
+        // Remove existing station markers
+        stationsLayerRef.current.forEach(marker => marker.remove());
+        stationsLayerRef.current = [];
         
-        // Remove existing stations layer if any
-        if (stationsLayerRef.current) {
-          map.removeLayer(stationsLayerRef.current);
-          stationsLayerRef.current = null;
-        }
-        
-        const greenIcon = new L.Icon({
-          iconUrl:
-            "data:image/svg+xml;charset=UTF-8," +
-            encodeURIComponent(
-              '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path fill="#10b981" stroke="#10b981" d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/><path d="M13 11h3l-4 6v-4H9l4-6v4z" fill="white" stroke="white"/></svg>'
-            ),
-          iconSize: [32, 32],
-          iconAnchor: [16, 32],
-          popupAnchor: [0, -28],
-        });
-        
-        const layerGroup = L.layerGroup();
         stations.forEach((s) => {
-          const marker = L.marker([s.lat, s.lng], { icon: greenIcon });
-          
-          // Add distance label only if user location is available AND a station is selected
-          if (userLocation && selectedStation) {
-            const distance = calculateDistance(
-              userLocation.lat,
-              userLocation.lng,
-              s.lat,
-              s.lng
-            );
-            const distanceText = distance < 1000 
-              ? `${Math.round(distance)}m` 
-              : `${(distance / 1000).toFixed(1)}km`;
-            
-            console.log('Adding distance tooltip:', distanceText, 'for station:', s.name);
-            
-            // Create custom HTML for distance label
-            const divIcon = L.divIcon({
-              className: '',
-              html: `<div style="
-                position: absolute;
-                bottom: 48px;
-                left: 50%;
-                transform: translateX(-50%);
-                background-color: rgba(255, 255, 255, 0.95);
-                color: #1f2937;
-                padding: 4px 8px;
-                border-radius: 6px;
-                font-size: 11px;
-                font-weight: 600;
-                white-space: nowrap;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-                pointer-events: none;
-                border: 1px solid rgba(0, 0, 0, 0.1);
-              ">${distanceText}</div>`,
-              iconSize: [0, 0],
-              iconAnchor: [0, 0]
-            });
-            
-            // Add distance label as separate marker
-            const distanceMarker = L.marker([s.lat, s.lng], { 
-              icon: divIcon,
-              interactive: false
-            });
-            distanceMarker.addTo(layerGroup);
+          // Skip the selected station - it will be shown as highlight marker
+          if (selectedStation && selectedStation.id === s.id) {
+            return;
           }
           
+          const stationElement = document.createElement('div');
+          stationElement.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path fill="#10b981" stroke="#10b981" d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/>
+              <path d="M13 11h3l-4 6v-4H9l4-6v4z" fill="white" stroke="white"/>
+            </svg>
+          `;
+          stationElement.style.width = '32px';
+          stationElement.style.height = '32px';
+          stationElement.style.cursor = 'pointer';
+          
+          const marker = new mapboxgl.Marker({
+            element: stationElement,
+            anchor: 'bottom'
+          })
+            .setLngLat([s.lng, s.lat])
+            .addTo(map);
+          
           // Add click handler to open info panel
-          marker.on('click', () => {
+          marker.getElement().addEventListener('click', () => {
             console.log('Marker clicked:', s.name);
             highlightStation(s);
           });
           
-          marker.addTo(layerGroup);
+          stationsLayerRef.current.push(marker);
         });
-        
-        // Wichtig: Layer zur Karte hinzufügen
-        layerGroup.addTo(map);
-        stationsLayerRef.current = layerGroup;
         
         console.log(`Successfully added ${stations.length} station markers to map`);
       } catch (error) {
@@ -539,34 +918,46 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     
     // Verwende die bereits gecachte Position wenn vorhanden
     if (userLocation) {
-      map.setView([userLocation.lat, userLocation.lng], 17, { animate: true });
+      map.flyTo({
+        center: [userLocation.lng, userLocation.lat],
+        zoom: 17,
+        essential: true
+      });
       return;
     }
     
     try {
-      const L = (await import("leaflet")).default;
-      
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           try {
             const { latitude, longitude } = pos.coords;
             // Update user location state
             setUserLocation({ lat: latitude, lng: longitude });
-            map.setView([latitude, longitude], 17, { animate: true });
+            map.flyTo({
+              center: [longitude, latitude],
+              zoom: 17,
+              essential: true
+            });
             if (userMarkerRef.current) {
-              userMarkerRef.current.setLatLng([latitude, longitude]);
+              userMarkerRef.current.setLngLat([longitude, latitude]);
             } else {
-              const m = L.marker([latitude, longitude], {
-                icon: new L.Icon({
-                  iconUrl:
-                    "data:image/svg+xml;charset=UTF-8," +
-                    encodeURIComponent(
-                      '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" /><circle cx="12" cy="12" r="5" fill="#10b981" /></svg>'
-                    ),
-                  iconSize: [28, 28],
-                  iconAnchor: [14, 14],
-                }),
-              }).addTo(map);
+              const userElement = document.createElement('div');
+              userElement.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
+                  <circle cx="12" cy="12" r="5" fill="#10b981" />
+                </svg>
+              `;
+              userElement.style.width = '28px';
+              userElement.style.height = '28px';
+              userElement.style.cursor = 'pointer';
+              
+              const m = new mapboxgl.Marker({
+                element: userElement,
+                anchor: 'center'
+              })
+                .setLngLat([longitude, latitude])
+                .addTo(map);
               userMarkerRef.current = m;
             }
           } catch (error) {
@@ -579,7 +970,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         { enableHighAccuracy: false, maximumAge: 600000, timeout: 5000 } // Nutze gecachte Position
       );
     } catch (error) {
-      console.error('Error loading Leaflet for geolocation:', error);
+      console.error('Error with geolocation:', error);
     }
   }
 
@@ -889,21 +1280,37 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                     </div>
                   )}
 
-                  {/* Navigations-Button */}
-                  <button
-                    onClick={() => openExternalNavigation(selectedStation)}
-                    className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
-                      isDarkMode === true
-                        ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                        : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
-                    } flex items-center justify-center gap-2`}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-                      <circle cx="12" cy="12" r="4" />
-                    </svg>
-                    Navigation zur Station
-                  </button>
+                  {/* Navigation Buttons */}
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => startNavigation(selectedStation)}
+                      className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
+                        isDarkMode === true
+                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      } flex items-center justify-center gap-2`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 11l19-9-9 19-2-8-8-2z" />
+                      </svg>
+                      Navigation starten
+                    </button>
+                    
+                    <button
+                      onClick={() => openExternalNavigation(selectedStation)}
+                      className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
+                        isDarkMode === true
+                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                          : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                      } flex items-center justify-center gap-2`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                        <circle cx="12" cy="12" r="4" />
+                      </svg>
+                      In externer App öffnen
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -1033,8 +1440,121 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </button>
       )}
       
-      {/* Standort zentrieren Button - nur anzeigen wenn keine Station ausgewählt */}
-      {!selectedStation && (
+      {/* Navigation Panel - nur anzeigen wenn Navigation aktiv ist */}
+      {isNavigating && (
+        <div className="fixed top-4 left-4 right-4 z-[1000]">
+          <div className={`rounded-2xl shadow-xl backdrop-blur-md border ${
+            isDarkMode === true
+              ? 'bg-gray-800/95 text-white border-gray-600' 
+              : 'bg-white/95 text-slate-900 border-gray-200'
+          }`}>
+            <div className="p-4">
+              {/* Navigation Header */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
+                  <span className="text-lg font-semibold">Navigation aktiv</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/* Voice Navigation Toggle */}
+                  <button
+                    onClick={toggleVoiceNavigation}
+                    className={`p-2 rounded-full transition-colors ${
+                      voiceEnabled 
+                        ? 'bg-emerald-600 text-white' 
+                        : isDarkMode === true 
+                          ? 'hover:bg-gray-700/50' 
+                          : 'hover:bg-gray-100'
+                    }`}
+                    aria-label={voiceEnabled ? "Sprachansagen deaktivieren" : "Sprachansagen aktivieren"}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                      <line x1="12" y1="19" x2="12" y2="23"/>
+                      <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                  </button>
+                  
+                  {/* Stop Navigation Button */}
+                  <button
+                    onClick={stopNavigation}
+                    className={`p-2 rounded-full transition-colors ${
+                      isDarkMode === true ? 'hover:bg-gray-700/50' : 'hover:bg-gray-100'
+                    }`}
+                    aria-label="Navigation beenden"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18"></line>
+                      <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+              {/* Distance and Time */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                    {distanceToDestination < 1000 
+                      ? `${distanceToDestination}m` 
+                      : `${(distanceToDestination / 1000).toFixed(1)}km`
+                    }
+                  </div>
+                  <div className="text-sm opacity-70">Entfernung</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                    {timeToDestination} Min
+                  </div>
+                  <div className="text-sm opacity-70">Geschätzte Zeit</div>
+                </div>
+              </div>
+
+              {/* Current Instruction */}
+              {currentInstruction && (
+                <div className={`mb-4 p-3 rounded-xl ${
+                  isDarkMode === true ? 'bg-emerald-900/30 border border-emerald-700' : 'bg-emerald-50 border border-emerald-200'
+                }`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
+                      <path d="M3 11l19-9-9 19-2-8-8-2z"/>
+                    </svg>
+                    <span className="text-sm font-semibold text-emerald-600">Aktuelle Anweisung:</span>
+                  </div>
+                  <div className="text-sm">{currentInstruction}</div>
+                </div>
+              )}
+
+              {/* Navigation Instructions */}
+              {navigationInstructions.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold opacity-70 mb-2">Abfolge der Schritte:</div>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {navigationInstructions.slice(0, 3).map((instruction, index) => (
+                      <div key={index} className={`text-sm p-2 rounded-lg ${
+                        isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
+                      }`}>
+                        <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                          {index + 1}.
+                        </span> {instruction}
+                      </div>
+                    ))}
+                    {navigationInstructions.length > 3 && (
+                      <div className="text-xs opacity-60 text-center">
+                        ... und {navigationInstructions.length - 3} weitere Schritte
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Standort zentrieren Button - nur anzeigen wenn keine Station ausgewählt und keine Navigation */}
+      {!selectedStation && !isNavigating && (
         <button
           type="button"
           onClick={locateMe}
@@ -1069,7 +1589,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 }
 
 // Wrapper component that uses useSearchParams
-export default function MapView() {
+export default function MapViewMapbox() {
   const searchParams = useSearchParams();
   const themeParam = searchParams.get("theme");
   

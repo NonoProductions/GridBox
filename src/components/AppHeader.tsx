@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import ThemeToggle from "@/components/ThemeToggle";
 
-const HIDE_ON = new Set(["/", "/auth/callback", "/onboarding", "/profile", "/wallet", "/verlauf", "/hilfe", "/reservierung","/dashboard"]);
+const HIDE_ON = new Set(["/", "/auth/callback", "/onboarding", "/profile", "/wallet", "/verlauf", "/hilfe", "/reservierung","/dashboard", "/app"]);
 
 export default function AppHeader() {
   const pathname = usePathname();

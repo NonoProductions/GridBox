@@ -11,7 +11,9 @@
   "dependencies": {
     "@maptiler/leaflet-maptilersdk": "^4.1.1",
     "@supabase/supabase-js": "^2.57.4",
+    "@types/mapbox-gl": "^3.4.1",
     "leaflet": "^1.9.4",
+    "mapbox-gl": "^3.16.0",
     "next": "15.5.3",
     "react": "19.1.0",
     "react-dom": "19.1.0"
