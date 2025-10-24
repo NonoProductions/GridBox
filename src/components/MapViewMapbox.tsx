@@ -37,6 +37,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [timeToDestination, setTimeToDestination] = useState<number>(0);
   const [voiceEnabled, setVoiceEnabled] = useState<boolean>(false);
   const [currentInstruction, setCurrentInstruction] = useState<string>('');
+  const [watchId, setWatchId] = useState<number | null>(null);
+  const [isFullScreenNavigation, setIsFullScreenNavigation] = useState<boolean>(false);
+  const [userHeading, setUserHeading] = useState<number>(0);
+  const [isLocationFixed, setIsLocationFixed] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -138,8 +142,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         return;
       }
       
-      // Request walking directions from user location to station
-      const directionsUrl = `https://api.mapbox.com/directions/v5/mapbox/walking/${userLocation.lng},${userLocation.lat};${station.lng},${station.lat}?geometries=geojson&steps=true&overview=full&access_token=${accessToken}`;
+      // Request walking directions from user location to station with German language
+      const directionsUrl = `https://api.mapbox.com/directions/v5/mapbox/walking/${userLocation.lng},${userLocation.lat};${station.lng},${station.lat}?geometries=geojson&steps=true&overview=full&language=de&access_token=${accessToken}`;
       
       const response = await fetch(directionsUrl);
       const data = await response.json();
@@ -148,14 +152,34 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const route = data.routes[0];
         const routeGeometry = route.geometry;
         
-        // Clear existing navigation
-        clearNavigation();
+        // Clear existing navigation layers and markers
+        if (navigationLayerRef.current) {
+          if (map.getLayer(navigationLayerRef.current)) {
+            map.removeLayer(navigationLayerRef.current);
+          }
+          if (navigationSourceRef.current && map.getSource(navigationSourceRef.current)) {
+            map.removeSource(navigationSourceRef.current);
+          }
+          navigationLayerRef.current = null;
+          navigationSourceRef.current = null;
+        }
+        
+        // Remove existing highlight marker (old station)
+        if (highlightMarkerRef.current) {
+          highlightMarkerRef.current.remove();
+          highlightMarkerRef.current = null;
+        }
         
         // Set navigation state
         setIsNavigating(true);
+        setIsFullScreenNavigation(true);
         setNavigationRoute(route);
         setDistanceToDestination(Math.round(route.distance));
         setTimeToDestination(Math.round(route.duration / 60));
+        
+        // Update selected station and close station list
+        setSelectedStation(station);
+        setShowStationList(false);
         
         // Extract navigation instructions
         const instructions: string[] = [];
@@ -176,6 +200,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             speakInstruction(instructions[0]);
           }
         }
+        
+        // Start location tracking for navigation (only if not already tracking)
+        if (watchId === null) {
+          startLocationTracking();
+        }
+        
+        // Update user marker with current heading (force update for navigation mode)
+        updateUserMarker(userLocation, userHeading);
+        
+        // Center map on user location and start following
+        centerMapOnUserAndFollow();
         
         // Add navigation route source
         const sourceId = 'navigation-route';
@@ -373,6 +408,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         navigationSourceRef.current = null;
       }
       
+      // Stop location tracking
+      stopLocationTracking();
+      
       // Stop any ongoing speech
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -380,6 +418,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Reset navigation state
       setIsNavigating(false);
+      setIsFullScreenNavigation(false);
+      setIsLocationFixed(false);
       setNavigationRoute(null);
       setCurrentStep(0);
       setNavigationInstructions([]);
@@ -427,6 +467,215 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     setVoiceEnabled(!voiceEnabled);
     if (!voiceEnabled && currentInstruction) {
       speakInstruction(currentInstruction);
+    }
+  };
+
+  // Function to start location tracking during navigation
+  const startLocationTracking = () => {
+    if (!navigator.geolocation) {
+      console.warn('Geolocation is not supported by this browser');
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude, heading } = position.coords;
+        const newLocation = { lat: latitude, lng: longitude };
+        
+        // Update user location and heading
+        setUserLocation(newLocation);
+        if (heading !== null && !isNaN(heading)) {
+          setUserHeading(heading);
+        }
+        
+        // Update user marker on map with direction
+        updateUserMarker(newLocation, heading);
+        
+        // Update navigation if active
+        if (isNavigating && selectedStation) {
+          updateNavigationProgress(newLocation, selectedStation);
+        }
+        
+        console.log('Location updated during navigation:', newLocation, 'Heading:', heading);
+      },
+      (error) => {
+        console.error('Geolocation error during navigation:', error);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 1000, // 1 second
+        timeout: 5000
+      }
+    );
+    
+    setWatchId(watchId);
+    console.log('Location tracking started for navigation');
+  };
+
+  // Function to stop location tracking
+  const stopLocationTracking = () => {
+    if (watchId !== null) {
+      navigator.geolocation.clearWatch(watchId);
+      setWatchId(null);
+      console.log('Location tracking stopped');
+    }
+  };
+
+  // Function to update user marker with direction
+  const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null) => {
+    if (!mapRef.current) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Remove existing user marker
+      if (userMarkerRef.current) {
+        userMarkerRef.current.remove();
+        userMarkerRef.current = null;
+      }
+      
+      // Create user marker - different styles for navigation vs normal mode
+      const userElement = document.createElement('div');
+      
+      if (isNavigating) {
+        // Navigation mode: larger marker with direction
+        userElement.innerHTML = `
+          <div style="
+            width: 40px;
+            height: 40px;
+            position: relative;
+          ">
+            <!-- Outer circle -->
+            <div style="
+              width: 40px;
+              height: 40px;
+              background: rgba(16, 185, 129, 0.3);
+              border: 3px solid #10b981;
+              border-radius: 50%;
+              position: absolute;
+              top: 0;
+              left: 0;
+            "></div>
+            
+            <!-- Direction arrow -->
+            <div style="
+              width: 0;
+              height: 0;
+              border-left: 8px solid transparent;
+              border-right: 8px solid transparent;
+              border-bottom: 16px solid #10b981;
+              position: absolute;
+              top: 2px;
+              left: 50%;
+              transform: translateX(-50%) rotate(${heading || 0}deg);
+              transform-origin: center bottom;
+            "></div>
+            
+            <!-- Center dot -->
+            <div style="
+              width: 8px;
+              height: 8px;
+              background: #10b981;
+              border-radius: 50%;
+              position: absolute;
+              top: 50%;
+              left: 50%;
+              transform: translate(-50%, -50%);
+            "></div>
+          </div>
+        `;
+        userElement.style.width = '40px';
+        userElement.style.height = '40px';
+      } else {
+        // Normal mode: simple marker like before
+        userElement.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
+            <circle cx="12" cy="12" r="5" fill="#10b981" />
+          </svg>
+        `;
+        userElement.style.width = '28px';
+        userElement.style.height = '28px';
+        userElement.style.cursor = 'pointer';
+      }
+      
+      // Add user marker
+      const userMarker = new mapboxgl.Marker({
+        element: userElement,
+        anchor: 'center'
+      })
+        .setLngLat([location.lng, location.lat])
+        .addTo(map);
+      
+      userMarkerRef.current = userMarker;
+      console.log('User marker updated:', isNavigating ? 'navigation mode with direction' : 'normal mode', 'heading:', heading);
+    } catch (error) {
+      console.error('Error updating user marker:', error);
+    }
+  };
+
+  // Function to center map on user and start following
+  const centerMapOnUserAndFollow = () => {
+    if (!mapRef.current || !userLocation) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Center map on user location with high zoom
+      map.flyTo({
+        center: [userLocation.lng, userLocation.lat],
+        zoom: 19, // High zoom for detailed navigation
+        essential: true,
+        duration: 1500
+      });
+      
+      console.log('Map centered on user location for navigation');
+    } catch (error) {
+      console.error('Error centering map on user:', error);
+    }
+  };
+
+  // Function to update navigation progress
+  const updateNavigationProgress = async (currentLocation: {lat: number, lng: number}, destination: Station) => {
+    if (!mapRef.current) return;
+    
+    try {
+      const map = mapRef.current;
+      
+      // Calculate distance to destination
+      const distance = calculateDistance(
+        currentLocation.lat,
+        currentLocation.lng,
+        destination.lat,
+        destination.lng
+      );
+      
+      // Update distance display
+      setDistanceToDestination(Math.round(distance));
+      
+      // Center map on user location during navigation (smooth following) - only if not fixed
+      if (!isLocationFixed) {
+        map.flyTo({
+          center: [currentLocation.lng, currentLocation.lat],
+          zoom: 19, // High zoom for detailed navigation
+          essential: true,
+          duration: 2000 // Slower, smoother following
+        });
+      }
+      
+      // Check if user is close to destination (within 10 meters)
+      if (distance < 10) {
+        // User has arrived at destination
+        console.log('User has arrived at destination!');
+        if (voiceEnabled) {
+          speakInstruction('Sie haben Ihr Ziel erreicht!');
+        }
+        // Optionally stop navigation automatically
+        // stopNavigation();
+      }
+      
+    } catch (error) {
+      console.error('Error updating navigation progress:', error);
     }
   };
 
@@ -495,6 +744,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Validate coordinates
       if (!station.lat || !station.lng || isNaN(station.lat) || isNaN(station.lng)) {
         console.error('Invalid station coordinates:', station);
+        return;
+      }
+      
+      // If we're in navigation mode, automatically start navigation to the new station
+      if (isNavigating) {
+        console.log('Navigation mode active - switching to new station:', station.name);
+        await startNavigation(station);
         return;
       }
       
@@ -736,6 +992,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     setNearbyStations(nearby);
   }, [userLocation, stations]);
 
+  // Cleanup location tracking on unmount
+  useEffect(() => {
+    return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
+  }, [watchId]);
+
   useEffect(() => {
     if (mapRef.current || !mapElRef.current || isDarkMode === null || locationLoading) return;
     
@@ -783,6 +1048,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
         // Add user location marker if we have the location
         if (userLocation) {
+          // Use simple marker for initial load (not in navigation mode yet)
           const userElement = document.createElement('div');
           userElement.innerHTML = `
             <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
@@ -1049,6 +1315,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
       
       {/* Top bar with account and help buttons - optimiert für bessere UX */}
+      {!isFullScreenNavigation && (
       <div className="fixed left-0 right-0 top-4 z-[1000] flex items-start justify-between pl-4 pr-4 pointer-events-none">
         <button
           type="button"
@@ -1081,10 +1348,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             <path d="M12 17h.01" />
           </svg>
         </a>
-      </div>
+        </div>
+      )}
 
       {/* QR-Code Scannen Button - über dem Info-Panel, nur wenn Panel nicht bewegt wird */}
-      {selectedStation && !showStationList && !isPanelExpanded && dragOffset === 0 && (
+      {selectedStation && !showStationList && !isPanelExpanded && dragOffset === 0 && !isFullScreenNavigation && (
         <div className="fixed bottom-72 left-0 right-0 z-[1000] flex justify-center px-4 animate-slide-up">
           <button
             type="button"
@@ -1110,7 +1378,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
 
       {/* Selected Station Info Panel - Full Width from Bottom */}
-      {selectedStation && !showStationList && userLocation && (
+      {selectedStation && !showStationList && userLocation && !isFullScreenNavigation && (
         <div className={`fixed bottom-0 left-0 right-0 z-[999] ${isClosing ? 'animate-slide-down' : 'animate-slide-up'}`}>
           <div 
             className={`shadow-lg border-t flex flex-col rounded-t-3xl ${
@@ -1280,36 +1548,126 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                     </div>
                   )}
 
-                  {/* Navigation Buttons */}
-                  <div className="space-y-2">
-                    <button
-                      onClick={() => startNavigation(selectedStation)}
-                      className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
-                        isDarkMode === true
-                          ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                          : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                      } flex items-center justify-center gap-2`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 11l19-9-9 19-2-8-8-2z" />
-                      </svg>
-                      Navigation starten
-                    </button>
-                    
-                    <button
-                      onClick={() => openExternalNavigation(selectedStation)}
-                      className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
-                        isDarkMode === true
-                          ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                          : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
-                      } flex items-center justify-center gap-2`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-                        <circle cx="12" cy="12" r="4" />
-                      </svg>
-                      In externer App öffnen
-                    </button>
+                  {/* Navigation Section */}
+                  <div className="space-y-3">
+                    {/* Navigation Status */}
+                    {isNavigating && (
+                      <div className={`p-3 rounded-xl border ${
+                        isDarkMode === true 
+                          ? 'bg-emerald-900/30 border-emerald-700' 
+                          : 'bg-emerald-50 border-emerald-200'
+                      }`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                            <span className="text-sm font-semibold text-emerald-600">Navigation aktiv</span>
+                          </div>
+                          <button
+                            onClick={stopNavigation}
+                            className="p-1 rounded-full hover:bg-emerald-200/50 transition-colors"
+                            aria-label="Navigation beenden"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18"></line>
+                              <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                          </button>
+                        </div>
+                        
+                        {/* Distance and Time */}
+                        <div className="flex items-center justify-between text-sm">
+                          <div className="text-center">
+                            <div className="font-bold text-emerald-600">
+                              {distanceToDestination < 1000 
+                                ? `${distanceToDestination}m` 
+                                : `${(distanceToDestination / 1000).toFixed(1)}km`
+                              }
+                            </div>
+                            <div className="text-xs opacity-70">Entfernung</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="font-bold text-emerald-600">
+                              {timeToDestination} Min
+                            </div>
+                            <div className="text-xs opacity-70">Geschätzte Zeit</div>
+                          </div>
+                        </div>
+                        
+                        {/* Current Instruction */}
+                        {currentInstruction && (
+                          <div className="mt-2 p-2 rounded-lg bg-white/50 dark:bg-black/20">
+                            <div className="text-xs font-medium text-emerald-600 mb-1">Aktuelle Anweisung:</div>
+                            <div className="text-sm">{currentInstruction}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Navigation Buttons */}
+                    <div className="space-y-2">
+                      {!isNavigating ? (
+                        <button
+                          onClick={() => startNavigation(selectedStation)}
+                          className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
+                            isDarkMode === true
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                          } flex items-center justify-center gap-2`}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 11l19-9-9 19-2-8-8-2z" />
+                          </svg>
+                          Navigation starten
+                        </button>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={toggleVoiceNavigation}
+                            className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              voiceEnabled 
+                                ? 'bg-emerald-600 text-white' 
+                                : isDarkMode === true 
+                                  ? 'bg-gray-700 hover:bg-gray-600 text-white' 
+                                  : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                            } flex items-center justify-center gap-2`}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                              <line x1="12" y1="19" x2="12" y2="23"/>
+                              <line x1="8" y1="23" x2="16" y2="23"/>
+                            </svg>
+                            {voiceEnabled ? 'Stumm' : 'Laut'}
+                          </button>
+                          
+                          <button
+                            onClick={stopNavigation}
+                            className="flex-1 px-3 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-700 text-white flex items-center justify-center gap-2"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18"></line>
+                              <line x1="6" y1="6" x2="18" y2="18"></line>
+                            </svg>
+                            Beenden
+                          </button>
+                        </div>
+                      )}
+                      
+                  <button
+                    onClick={() => openExternalNavigation(selectedStation)}
+                    className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
+                      isDarkMode === true
+                        ? 'bg-gray-700 hover:bg-gray-600 text-white'
+                        : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
+                    } flex items-center justify-center gap-2`}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                      <circle cx="12" cy="12" r="4" />
+                    </svg>
+                        In externer App öffnen
+                  </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1339,7 +1697,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
 
       {/* Nearby stations text */}
-      <div className="fixed left-1/2 top-4 z-[1001] transform -translate-x-1/2">
+      {!isFullScreenNavigation && (
+        <div className="fixed left-1/2 top-4 z-[1001] transform -translate-x-1/2">
         <button
           onClick={() => {
             console.log('Button clicked! Current state:', showStationList, 'Nearby stations:', nearbyStations.length);
@@ -1371,7 +1730,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             <path d="M6 9l6 6 6-6"/>
           </svg>
         </button>
-      </div>
+        </div>
+      )}
 
       {/* Station list */}
       {showStationList && userLocation && nearbyStations.length > 0 && (
@@ -1421,7 +1781,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
 
       {/* Scannen Button - nur anzeigen wenn keine Station ausgewählt */}
-      {!selectedStation && (
+      {!selectedStation && !isFullScreenNavigation && (
         <button
           type="button"
           onClick={() => {
@@ -1440,115 +1800,142 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </button>
       )}
       
-      {/* Navigation Panel - nur anzeigen wenn Navigation aktiv ist */}
-      {isNavigating && (
-        <div className="fixed top-4 left-4 right-4 z-[1000]">
-          <div className={`rounded-2xl shadow-xl backdrop-blur-md border ${
-            isDarkMode === true
-              ? 'bg-gray-800/95 text-white border-gray-600' 
-              : 'bg-white/95 text-slate-900 border-gray-200'
-          }`}>
-            <div className="p-4">
-              {/* Navigation Header */}
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
-                  <span className="text-lg font-semibold">Navigation aktiv</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* Voice Navigation Toggle */}
-                  <button
-                    onClick={toggleVoiceNavigation}
-                    className={`p-2 rounded-full transition-colors ${
-                      voiceEnabled 
-                        ? 'bg-emerald-600 text-white' 
-                        : isDarkMode === true 
-                          ? 'hover:bg-gray-700/50' 
-                          : 'hover:bg-gray-100'
-                    }`}
-                    aria-label={voiceEnabled ? "Sprachansagen deaktivieren" : "Sprachansagen aktivieren"}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                      <line x1="12" y1="19" x2="12" y2="23"/>
-                      <line x1="8" y1="23" x2="16" y2="23"/>
-                    </svg>
-                  </button>
-                  
-                  {/* Stop Navigation Button */}
-                  <button
-                    onClick={stopNavigation}
-                    className={`p-2 rounded-full transition-colors ${
-                      isDarkMode === true ? 'hover:bg-gray-700/50' : 'hover:bg-gray-100'
-                    }`}
-                    aria-label="Navigation beenden"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
+
+      {/* Full Screen Navigation Interface */}
+      {isFullScreenNavigation && (
+        <div className="fixed inset-0 z-[2000] pointer-events-none">
+          {/* Navigation Header */}
+          <div className="absolute top-0 left-0 right-0 z-[2001] p-4 bg-gradient-to-b from-black/80 to-transparent">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
+                <div>
+                  <div className="text-white text-lg font-semibold">Navigation aktiv</div>
+                  <div className="text-emerald-400 text-sm">{selectedStation?.name}</div>
                 </div>
               </div>
+              
+              <div className="flex items-center gap-2 pointer-events-auto">
+                {/* Stations List Toggle */}
+                <button
+                  onClick={() => setShowStationList(!showStationList)}
+                  className="p-3 rounded-full bg-white/20 text-white hover:bg-white/30 transition-colors"
+                  aria-label="Stationen anzeigen"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                    <circle cx="12" cy="12" r="4" />
+                    <path d="M12 8l-4 4 4 4 4-4-4-4z" />
+                  </svg>
+                </button>
+                
+                {/* Voice Toggle */}
+                <button
+                  onClick={toggleVoiceNavigation}
+                  className={`p-3 rounded-full transition-colors ${
+                    voiceEnabled 
+                      ? 'bg-emerald-600 text-white' 
+                      : 'bg-white/20 text-white hover:bg-white/30'
+                  }`}
+                  aria-label={voiceEnabled ? "Sprachansagen deaktivieren" : "Sprachansagen aktivieren"}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                  </svg>
+                </button>
+                
+                {/* Stop Navigation */}
+                <button
+                  onClick={stopNavigation}
+                  className="p-3 rounded-full bg-red-600 hover:bg-red-700 text-white transition-colors"
+                  aria-label="Navigation beenden"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
 
+          {/* Navigation Info - Bottom */}
+          <div className="absolute bottom-0 left-0 right-0 z-[2001] p-4 bg-gradient-to-t from-black/80 to-transparent">
+            <div className="flex items-center justify-between mb-4">
               {/* Distance and Time */}
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-6">
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                  <div className="text-3xl font-bold text-emerald-400">
                     {distanceToDestination < 1000 
                       ? `${distanceToDestination}m` 
                       : `${(distanceToDestination / 1000).toFixed(1)}km`
                     }
                   </div>
-                  <div className="text-sm opacity-70">Entfernung</div>
+                  <div className="text-white/70 text-sm">Entfernung</div>
                 </div>
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                  <div className="text-3xl font-bold text-emerald-400">
                     {timeToDestination} Min
                   </div>
-                  <div className="text-sm opacity-70">Geschätzte Zeit</div>
+                  <div className="text-white/70 text-sm">Geschätzte Zeit</div>
                 </div>
               </div>
-
-              {/* Current Instruction */}
-              {currentInstruction && (
-                <div className={`mb-4 p-3 rounded-xl ${
-                  isDarkMode === true ? 'bg-emerald-900/30 border border-emerald-700' : 'bg-emerald-50 border border-emerald-200'
-                }`}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
-                      <path d="M3 11l19-9-9 19-2-8-8-2z"/>
-                    </svg>
-                    <span className="text-sm font-semibold text-emerald-600">Aktuelle Anweisung:</span>
-                  </div>
-                  <div className="text-sm">{currentInstruction}</div>
-                </div>
-              )}
-
-              {/* Navigation Instructions */}
-              {navigationInstructions.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-sm font-semibold opacity-70 mb-2">Abfolge der Schritte:</div>
-                  <div className="max-h-32 overflow-y-auto space-y-1">
-                    {navigationInstructions.slice(0, 3).map((instruction, index) => (
-                      <div key={index} className={`text-sm p-2 rounded-lg ${
-                        isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
-                      }`}>
-                        <span className="font-medium text-emerald-600 dark:text-emerald-400">
-                          {index + 1}.
-                        </span> {instruction}
-                      </div>
-                    ))}
-                    {navigationInstructions.length > 3 && (
-                      <div className="text-xs opacity-60 text-center">
-                        ... und {navigationInstructions.length - 3} weitere Schritte
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+              
+              {/* Location Fix Toggle */}
+              <div className="pointer-events-auto">
+                <button
+                  onClick={() => setIsLocationFixed(!isLocationFixed)}
+                  className={`p-3 rounded-full transition-colors ${
+                    isLocationFixed 
+                      ? 'bg-blue-600 text-white' 
+                      : 'bg-white/20 text-white hover:bg-white/30'
+                  }`}
+                  aria-label={isLocationFixed ? "Position freigeben" : "Position fixieren"}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                    <circle cx="12" cy="12" r="4" />
+                    {isLocationFixed && <path d="M12 8l-4 4 4 4 4-4-4-4z" />}
+                  </svg>
+                </button>
+              </div>
             </div>
+
+            {/* Current Instruction */}
+            {currentInstruction && (
+              <div className="bg-emerald-600/20 border border-emerald-500/30 rounded-xl p-4 mb-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-400">
+                    <path d="M3 11l19-9-9 19-2-8-8-2z"/>
+                  </svg>
+                  <span className="text-emerald-400 font-semibold text-sm">Aktuelle Anweisung:</span>
+                </div>
+                <div className="text-white text-lg font-medium">{currentInstruction}</div>
+              </div>
+            )}
+
+            {/* Navigation Steps */}
+            {navigationInstructions.length > 0 && (
+              <div className="bg-black/40 rounded-xl p-3">
+                <div className="text-white/70 text-sm font-semibold mb-2">Nächste Schritte:</div>
+                <div className="space-y-1">
+                  {navigationInstructions.slice(0, 2).map((instruction, index) => (
+                    <div key={index} className="text-white/80 text-sm flex items-start gap-2">
+                      <span className="text-emerald-400 font-bold text-xs mt-1">{index + 1}.</span>
+                      <span>{instruction}</span>
+                    </div>
+                  ))}
+                  {navigationInstructions.length > 2 && (
+                    <div className="text-white/50 text-xs text-center">
+                      ... und {navigationInstructions.length - 2} weitere Schritte
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
