@@ -46,6 +46,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [deviceOrientation, setDeviceOrientation] = useState<number>(0);
   const [isFollowingLocation, setIsFollowingLocation] = useState<boolean>(false);
   const [permissionRequested, setPermissionRequested] = useState<boolean>(false);
+  const [locationPermissionGranted, setLocationPermissionGranted] = useState<boolean>(false);
+  const [showPermissionModal, setShowPermissionModal] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -108,17 +110,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               setUserHeading(heading);
             }
             setLocationLoading(false);
+            setLocationPermissionGranted(true);
+            setShowPermissionModal(false);
             console.log('User location obtained:', { lat: latitude, lng: longitude, heading });
           },
           (error) => {
             console.error('Geolocation error:', error);
             if (error.code === error.PERMISSION_DENIED) {
               console.warn('Location permission denied by user');
-              alert('Standortberechtigung wurde verweigert. Bitte erlauben Sie den Zugriff auf Ihren Standort in den Browser-Einstellungen.');
+              setLocationPermissionGranted(false);
+              setShowPermissionModal(true);
+              setLocationLoading(false);
+            } else {
+              // Andere Fehler - auch Modal zeigen
+              setLocationPermissionGranted(false);
+              setShowPermissionModal(true);
+              setLocationLoading(false);
             }
-            // Fallback to Berlin coordinates
-            setUserLocation({ lat: 52.52, lng: 13.405 });
-            setLocationLoading(false);
           },
           { 
             enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
@@ -146,9 +154,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           console.log('Location permission granted');
+          setLocationPermissionGranted(true);
+          setShowPermissionModal(false);
         },
         (error) => {
           console.log('Location permission denied or error:', error);
+          setLocationPermissionGranted(false);
+          setShowPermissionModal(true);
         },
         { 
           enableHighAccuracy: true,
@@ -160,6 +172,36 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   }, [permissionRequested]);
 
   const center = useMemo(() => userLocation || { lat: 52.52, lng: 13.405 }, [userLocation]);
+
+  // Funktion um Standortberechtigung erneut anzufragen
+  const requestLocationPermissionAgain = () => {
+    if (!navigator.geolocation) return;
+    
+    console.log('Requesting location permission again...');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude, heading } = position.coords;
+        setUserLocation({ lat: latitude, lng: longitude });
+        if (heading !== null && !isNaN(heading)) {
+          setUserHeading(heading);
+        }
+        setLocationPermissionGranted(true);
+        setShowPermissionModal(false);
+        setLocationLoading(false);
+        console.log('Location permission granted:', { lat: latitude, lng: longitude, heading });
+      },
+      (error) => {
+        console.error('Location permission still denied:', error);
+        setLocationPermissionGranted(false);
+        setShowPermissionModal(true);
+      },
+      { 
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000
+      }
+    );
+  };
 
   // Function to calculate distance between two coordinates in meters
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -1752,9 +1794,50 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
   return (
     <>
+      {/* Standortberechtigung Modal */}
+      {showPermissionModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+                  <circle cx="12" cy="10" r="3"/>
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                Standortberechtigung erforderlich
+              </h2>
+              <p className="text-gray-600 dark:text-gray-300 mb-6">
+                Diese App benötigt Zugriff auf Ihren Standort, um die nächsten Ladestationen zu finden und die Navigation zu ermöglichen.
+              </p>
+              <div className="space-y-3">
+                <button
+                  onClick={requestLocationPermissionAgain}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors duration-200"
+                >
+                  Standortberechtigung gewähren
+                </button>
+                <button
+                  onClick={() => {
+                    setShowPermissionModal(false);
+                    // App trotzdem verwenden, aber mit eingeschränkter Funktionalität
+                    setUserLocation({ lat: 52.52, lng: 13.405 });
+                    setLocationLoading(false);
+                  }}
+                  className="w-full bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 font-semibold py-3 px-4 rounded-xl transition-colors duration-200"
+                >
+                  Ohne Standort fortfahren
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div 
         ref={mapElRef} 
-        className="fixed inset-0 z-0" 
+        className={`fixed inset-0 z-0 ${!locationPermissionGranted ? 'pointer-events-none opacity-50' : ''}`}
         style={{ 
           width: '100vw', 
           height: '100vh',
