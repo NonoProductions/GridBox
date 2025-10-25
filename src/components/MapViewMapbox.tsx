@@ -43,6 +43,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [isLocationFixed, setIsLocationFixed] = useState<boolean>(false);
   const [forceStationRerender, setForceStationRerender] = useState<number>(0);
   const [lastLocation, setLastLocation] = useState<{lat: number, lng: number} | null>(null);
+  const [deviceOrientation, setDeviceOrientation] = useState<number>(0);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -624,8 +625,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 500, // 0.5 seconds - sehr frische Position
-        timeout: 3000 // 3 seconds - schneller Timeout für bessere Responsivität
+        maximumAge: 100, // 0.1 seconds - extrem frische Position
+        timeout: 1000 // 1 second - sehr schneller Timeout
       }
     );
     
@@ -649,9 +650,30 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
-      // Remove existing user marker
+      // Update existing marker position instead of recreating
       if (userMarkerRef.current) {
-        userMarkerRef.current.remove();
+        userMarkerRef.current.setLngLat([location.lng, location.lat]);
+        
+        // Update heading if in navigation mode
+        const shouldShowNavigationMode = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
+        if (shouldShowNavigationMode && heading !== null && heading !== undefined) {
+          // Update the direction arrow rotation
+          const markerElement = userMarkerRef.current.getElement();
+          const arrowElement = markerElement.querySelector('[data-direction-arrow]') as HTMLElement;
+          if (arrowElement) {
+            arrowElement.style.transform = `translateX(-50%) rotate(${heading}deg)`;
+          }
+        }
+        return; // Exit early if marker already exists
+      }
+      
+      // Only create new marker if it doesn't exist
+      if (userMarkerRef.current) {
+        try {
+          (userMarkerRef.current as any).remove();
+        } catch (error) {
+          console.log('Error removing existing marker:', error);
+        }
         userMarkerRef.current = null;
       }
       
@@ -685,7 +707,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             "></div>
             
             <!-- Direction arrow - smooth rotation -->
-            <div style="
+            <div data-direction-arrow style="
               width: 0;
               height: 0;
               border-left: 8px solid transparent;
@@ -696,7 +718,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               left: 50%;
               transform: translateX(-50%) rotate(${validHeading}deg);
               transform-origin: center bottom;
-              transition: transform 0.3s ease-out;
+              transition: transform 0.1s ease-out;
             "></div>
             
             <!-- Center dot -->
@@ -798,13 +820,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Center map on user location during navigation (smooth following) - only if not fixed
       if (!isLocationFixed) {
-        // Verwende setCenter für flüssigere Updates anstatt flyTo
+        // Use setCenter for immediate updates without animation
         map.setCenter([currentLocation.lng, currentLocation.lat]);
         
-        // Nur bei größeren Bewegungen zoom anpassen
+        // Keep zoom at navigation level
         const currentZoom = map.getZoom();
         if (currentZoom < 18) {
           map.setZoom(19); // High zoom for detailed navigation
+        }
+        
+        // Apply device orientation rotation if available
+        if (deviceOrientation !== 0) {
+          map.setBearing(-deviceOrientation);
         }
       } else {
         // In fixed mode, only update the user marker position without moving the map
@@ -1146,6 +1173,37 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
     setNearbyStations(nearby);
   }, [userLocation, stations]);
+
+  // Device orientation tracking for map rotation
+  useEffect(() => {
+    const handleOrientationChange = (event: DeviceOrientationEvent) => {
+      if (event.alpha !== null) {
+        setDeviceOrientation(event.alpha);
+        
+        // Rotate map based on device orientation during navigation
+        if (isNavigating && mapRef.current && !isLocationFixed) {
+          const map = mapRef.current;
+          map.setBearing(-event.alpha); // Negative for correct rotation
+        }
+      }
+    };
+
+    // Request permission for device orientation
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+      (DeviceOrientationEvent as any).requestPermission().then((response: string) => {
+        if (response === 'granted') {
+          window.addEventListener('deviceorientation', handleOrientationChange);
+        }
+      });
+    } else {
+      // Fallback for browsers that don't require permission
+      window.addEventListener('deviceorientation', handleOrientationChange);
+    }
+
+    return () => {
+      window.removeEventListener('deviceorientation', handleOrientationChange);
+    };
+  }, [isNavigating, isLocationFixed]);
 
   // Cleanup location tracking on unmount
   useEffect(() => {
@@ -2032,10 +2090,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       if (isLocationFixed) {
                         // Currently fixed - switch to following mode
                         setIsLocationFixed(false);
+                        // Reset map bearing to north
+                        map.setBearing(0);
                         // Center map on user location and start following
                         map.flyTo({
                           center: [userLocation.lng, userLocation.lat],
                           zoom: 19, // High zoom for detailed navigation
+                          bearing: 0, // Reset rotation
                           essential: true,
                           duration: 1000 // Smooth animation
                         });
@@ -2043,11 +2104,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       } else {
                         // Currently following - switch to fixed mode
                         setIsLocationFixed(true);
-                        // Center map with offset to show user position optimally
-                        const offsetLat = 0.0005; // Small offset to position user marker better
+                        // Center map perfectly on user location
                         map.flyTo({
-                          center: [userLocation.lng, userLocation.lat + offsetLat],
+                          center: [userLocation.lng, userLocation.lat],
                           zoom: 19,
+                          bearing: 0, // Reset rotation for fixed mode
                           essential: true,
                           duration: 1000
                         });
