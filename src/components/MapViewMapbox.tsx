@@ -41,6 +41,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [isFullScreenNavigation, setIsFullScreenNavigation] = useState<boolean>(false);
   const [userHeading, setUserHeading] = useState<number>(0);
   const [isLocationFixed, setIsLocationFixed] = useState<boolean>(false);
+  const [forceStationRerender, setForceStationRerender] = useState<number>(0);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -170,9 +171,35 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           highlightMarkerRef.current = null;
         }
         
+        // Remove existing walking route (dashed line) if any
+        if (routeLayerRef.current) {
+          try {
+            if (map.getLayer(routeLayerRef.current)) {
+              map.removeLayer(routeLayerRef.current);
+            }
+            if (map.getSource('walking-route')) {
+              map.removeSource('walking-route');
+            }
+          } catch (error) {
+            console.log('Error removing existing walking route:', error instanceof Error ? error.message : String(error));
+          }
+          routeLayerRef.current = null;
+        }
+        
+        // Remove walking time label if any
+        if (walkingTimeLabelRef.current) {
+          try {
+            walkingTimeLabelRef.current.remove();
+          } catch (error) {
+            console.log('Error removing walking time label:', error instanceof Error ? error.message : String(error));
+          }
+          walkingTimeLabelRef.current = null;
+        }
+        
         // Set navigation state
         setIsNavigating(true);
         setIsFullScreenNavigation(true);
+        setIsLocationFixed(false); // Reset location fix when starting navigation
         setNavigationRoute(route);
         setDistanceToDestination(Math.round(route.distance));
         setTimeToDestination(Math.round(route.duration / 60));
@@ -180,6 +207,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Update selected station and close station list
         setSelectedStation(station);
         setShowStationList(false);
+        
+        // Force immediate update of user marker with navigation styling
+        // Use setTimeout to ensure the navigation state is properly set
+        setTimeout(() => {
+          updateUserMarker(userLocation, userHeading || 0, true);
+        }, 100);
         
         // Extract navigation instructions
         const instructions: string[] = [];
@@ -205,9 +238,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         if (watchId === null) {
           startLocationTracking();
         }
-        
-        // Update user marker with current heading (force update for navigation mode)
-        updateUserMarker(userLocation, userHeading);
         
         // Center map on user location and start following
         centerMapOnUserAndFollow();
@@ -390,7 +420,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   };
 
   // Function to clear navigation
-  const clearNavigation = () => {
+  const clearNavigation = (keepStationSelection = false) => {
     if (!mapRef.current) return;
     
     try {
@@ -419,13 +449,79 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Reset navigation state
       setIsNavigating(false);
       setIsFullScreenNavigation(false);
-      setIsLocationFixed(false);
+      setIsLocationFixed(false); // Reset location fix when ending navigation
       setNavigationRoute(null);
       setCurrentStep(0);
       setNavigationInstructions([]);
       setDistanceToDestination(0);
       setTimeToDestination(0);
       setCurrentInstruction('');
+      
+      // Update user marker to normal mode (no direction arrow)
+      if (userLocation) {
+        updateUserMarker(userLocation, null, false);
+      }
+      
+      // Re-add walking route if a station is selected (normal mode)
+      if (selectedStation && userLocation) {
+        addWalkingRoute(selectedStation);
+      }
+      
+      // Re-add highlight marker for selected station if one is selected
+      if (selectedStation && mapRef.current) {
+        const map = mapRef.current;
+        
+        // Create highlight marker for selected station
+        const highlightElement = document.createElement('div');
+        highlightElement.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="56" height="64" viewBox="0 0 32 40">
+            <!-- Main marker pin body -->
+            <path fill="#10b981" stroke="#10b981" stroke-width="1.5" d="M16 38s-10-6.2-10-14.3a10 10 0 1 1 20 0C26 31.8 16 38 16 38z"/>
+            <!-- Lightning bolt - centered at x=16, y=24 -->
+            <path d="M16.5 24h3l-4 6v-4h-3l4-6v4z" fill="white" stroke="white" stroke-width="1"/>
+          </svg>
+        `;
+        highlightElement.style.width = '56px';
+        highlightElement.style.height = '64px';
+        highlightElement.style.cursor = 'pointer';
+        
+        // Add highlight marker
+        const highlightMarker = new mapboxgl.Marker({
+          element: highlightElement,
+          anchor: 'bottom'
+        })
+          .setLngLat([selectedStation.lng, selectedStation.lat])
+          .addTo(map);
+        
+        highlightMarkerRef.current = highlightMarker;
+        console.log('Highlight marker re-added for selected station:', selectedStation.name);
+      }
+      
+      // Force re-render of station markers by triggering the useEffect
+      // This ensures all station markers are visible after navigation ends
+      setForceStationRerender(prev => prev + 1);
+      
+      // Ensure the panel is expanded for the selected station
+      if (selectedStation) {
+        setIsPanelExpanded(true);
+        console.log('Panel expanded for selected station:', selectedStation.name);
+        
+        // Center map on the selected station (same as when selecting a station normally)
+        const map = mapRef.current;
+        if (map) {
+          const latOffset = -0.0013; // Same offset as in highlightStation function
+          const targetCenter = [selectedStation.lng, selectedStation.lat + latOffset];
+          
+          map.flyTo({
+            center: targetCenter as [number, number],
+            zoom: 16,
+            essential: true,
+            duration: 1000 // Smooth animation
+          });
+          
+          console.log('Map centered on selected station after navigation:', selectedStation.name);
+        }
+      }
       
       console.log('Navigation cleared');
     } catch (error) {
@@ -436,6 +532,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Function to stop navigation
   const stopNavigation = () => {
     clearNavigation();
+    // Ensure user marker is updated to normal mode
+    if (userLocation) {
+      updateUserMarker(userLocation, null, false);
+    }
     console.log('Navigation stopped');
   };
 
@@ -489,7 +589,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         }
         
         // Update user marker on map with direction
-        updateUserMarker(newLocation, heading);
+        // Ensure we always pass a valid heading value for navigation mode
+        const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : 0;
+        updateUserMarker(newLocation, validHeading, isNavigating);
         
         // Update navigation if active
         if (isNavigating && selectedStation) {
@@ -522,7 +624,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   };
 
   // Function to update user marker with direction
-  const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null) => {
+  const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null, forceNavigationMode?: boolean) => {
     if (!mapRef.current) return;
     
     try {
@@ -537,8 +639,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Create user marker - different styles for navigation vs normal mode
       const userElement = document.createElement('div');
       
-      if (isNavigating) {
-        // Navigation mode: larger marker with direction
+      // Use forceNavigationMode parameter or current isNavigating state
+      const shouldShowNavigationMode = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
+      
+      if (shouldShowNavigationMode) {
+        // Navigation mode: larger marker with direction - ALWAYS show direction arrow
         userElement.innerHTML = `
           <div style="
             width: 40px;
@@ -557,7 +662,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               left: 0;
             "></div>
             
-            <!-- Direction arrow -->
+            <!-- Direction arrow - always visible in navigation mode -->
             <div style="
               width: 0;
               height: 0;
@@ -567,7 +672,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               position: absolute;
               top: 2px;
               left: 50%;
-              transform: translateX(-50%) rotate(${heading || 0}deg);
+              transform: translateX(-50%) rotate(${heading !== null && heading !== undefined ? heading : 0}deg);
               transform-origin: center bottom;
             "></div>
             
@@ -587,7 +692,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         userElement.style.width = '40px';
         userElement.style.height = '40px';
       } else {
-        // Normal mode: simple marker like before
+        // Normal mode: simple marker like before - NO direction arrow
         userElement.innerHTML = `
           <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
@@ -608,7 +713,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .addTo(map);
       
       userMarkerRef.current = userMarker;
-      console.log('User marker updated:', isNavigating ? 'navigation mode with direction' : 'normal mode', 'heading:', heading);
+      console.log('User marker updated:', shouldShowNavigationMode ? 'navigation mode with direction' : 'normal mode', 'heading:', heading);
     } catch (error) {
       console.error('Error updating user marker:', error);
     }
@@ -750,6 +855,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // If we're in navigation mode, automatically start navigation to the new station
       if (isNavigating) {
         console.log('Navigation mode active - switching to new station:', station.name);
+        // Clear current navigation first but keep station markers visible
+        clearNavigation(true);
+        // Start navigation to new station
         await startNavigation(station);
         return;
       }
@@ -783,8 +891,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       highlightMarkerRef.current = highlightMarker;
       
-      // Add walking route to station
-      await addWalkingRoute(station);
+      // Add walking route to station (only if not in navigation mode)
+      if (!isNavigating) {
+        await addWalkingRoute(station);
+      }
       
       // Center the map on the station with offset for panel interaction
       const latOffset = -0.0013; // Fine-tuned offset - perfect balance for panel interaction
@@ -924,6 +1034,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           zoom: 16,
           essential: true
         });
+        // Update user marker to normal mode
+        updateUserMarker(userLocation, null, false);
       }
       
       // Reset selected station and panel state
@@ -1134,7 +1246,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         stations.forEach((s) => {
           // Skip the selected station - it will be shown as highlight marker
-          if (selectedStation && selectedStation.id === s.id) {
+          // BUT only if we're NOT in navigation mode (in navigation mode, keep all stations visible)
+          if (selectedStation && selectedStation.id === s.id && !isNavigating) {
             return;
           }
           
@@ -1172,7 +1285,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
     
     addMarkers();
-  }, [stations, mapRef.current, userLocation, selectedStation]);
+  }, [stations, mapRef.current, userLocation, selectedStation, isNavigating, forceStationRerender]);
 
   async function locateMe() {
     if (!mapRef.current) return;
@@ -1652,21 +1765,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                           </button>
                         </div>
                       )}
-                      
-                  <button
-                    onClick={() => openExternalNavigation(selectedStation)}
-                    className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
-                      isDarkMode === true
-                        ? 'bg-gray-700 hover:bg-gray-600 text-white'
-                        : 'bg-gray-200 hover:bg-gray-300 text-gray-900'
-                    } flex items-center justify-center gap-2`}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-                      <circle cx="12" cy="12" r="4" />
-                    </svg>
-                        In externer App öffnen
-                  </button>
                     </div>
                   </div>
                 </div>
@@ -1738,9 +1836,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <div className="fixed left-1/2 top-16 z-[999] transform -translate-x-1/2 w-80 max-w-[calc(100vw-2rem)]">
           <div className={`rounded-2xl shadow-xl backdrop-blur-md border ${
             isDarkMode === true
-              ? 'bg-gray-800/95 text-white border-gray-600' 
+              ? 'text-white border-gray-600' 
               : 'bg-white/95 text-slate-900 border-gray-200'
-          }`}>
+          }`}
+          style={{
+            backgroundColor: isDarkMode === true ? '#282828' : 'rgba(255, 255, 255, 0.95)'
+          }}>
             <div className="p-4">
               <h3 className="text-lg font-semibold mb-3 text-center">Stationen in der Nähe</h3>
               <div className="space-y-3">
@@ -1752,7 +1853,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       onClick={() => highlightStation(station)}
                       className={`w-full flex items-center justify-between p-3 rounded-xl transition-all duration-200 hover:scale-[1.02] ${
                         isDarkMode === true
-                          ? 'bg-gray-700/50 hover:bg-gray-700/70 active:bg-gray-600/70' 
+                          ? 'bg-gray-700/30 hover:bg-gray-700/50 active:bg-gray-600/50' 
                           : 'bg-gray-50/50 hover:bg-gray-50/70 active:bg-gray-100/70'
                       }`}
                     >
@@ -1816,19 +1917,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               </div>
               
               <div className="flex items-center gap-2 pointer-events-auto">
-                {/* Stations List Toggle */}
-                <button
-                  onClick={() => setShowStationList(!showStationList)}
-                  className="p-3 rounded-full bg-white/20 text-white hover:bg-white/30 transition-colors"
-                  aria-label="Stationen anzeigen"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-                    <circle cx="12" cy="12" r="4" />
-                    <path d="M12 8l-4 4 4 4 4-4-4-4z" />
-                  </svg>
-                </button>
-                
                 {/* Voice Toggle */}
                 <button
                   onClick={toggleVoiceNavigation}
@@ -1884,21 +1972,30 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 </div>
               </div>
               
-              {/* Location Fix Toggle */}
+              {/* Location Center Button */}
               <div className="pointer-events-auto">
                 <button
-                  onClick={() => setIsLocationFixed(!isLocationFixed)}
-                  className={`p-3 rounded-full transition-colors ${
-                    isLocationFixed 
-                      ? 'bg-blue-600 text-white' 
-                      : 'bg-white/20 text-white hover:bg-white/30'
-                  }`}
-                  aria-label={isLocationFixed ? "Position freigeben" : "Position fixieren"}
+                  onClick={() => {
+                    if (userLocation && mapRef.current) {
+                      const map = mapRef.current;
+                      // Center map on user location and start following
+                      map.flyTo({
+                        center: [userLocation.lng, userLocation.lat],
+                        zoom: 19, // High zoom for detailed navigation
+                        essential: true,
+                        duration: 1000 // Smooth animation
+                      });
+                      // Reset location fix to allow following
+                      setIsLocationFixed(false);
+                      console.log('Map centered on user location and following enabled');
+                    }
+                  }}
+                  className="p-3 rounded-full transition-colors bg-white/20 text-white hover:bg-white/30"
+                  aria-label="Auf Position zentrieren und folgen"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
                     <circle cx="12" cy="12" r="4" />
-                    {isLocationFixed && <path d="M12 8l-4 4 4 4 4-4-4-4z" />}
                   </svg>
                 </button>
               </div>
@@ -1940,24 +2037,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </div>
       )}
 
-      {/* Standort zentrieren Button - nur anzeigen wenn keine Station ausgewählt und keine Navigation */}
-      {!selectedStation && !isNavigating && (
-        <button
-          type="button"
-          onClick={locateMe}
-          className={`fixed bottom-24 right-5 z-[1000] grid place-items-center rounded-full w-12 h-12 backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 ${
-            isDarkMode === true
-              ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
-              : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
-          }`}
-          aria-label="Standort zentrieren"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-            <circle cx="12" cy="12" r="4" />
-          </svg>
-        </button>
-      )}
       
       {scanning && <CameraOverlay onClose={() => setScanning(false)} />}
       <SideMenu 
