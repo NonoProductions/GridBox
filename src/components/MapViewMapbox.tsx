@@ -628,7 +628,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Google Maps style: Using device orientation as primary direction:', {
             deviceOrientation,
             finalHeading: calculatedHeading,
-            gpsHeading: heading
+            gpsHeading: heading,
+            speed,
+            accuracy
+          });
+        } else {
+          console.log('No device orientation in location tracking:', {
+            deviceOrientation,
+            gpsHeading: heading,
+            calculatedHeading,
+            speed,
+            accuracy
           });
         }
         
@@ -725,6 +735,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               // Google Maps Style: Device Orientation ist die primäre Richtung
               if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
                 validHeading = deviceOrientation;
+                console.log('Updated shimmer with device orientation:', {
+                  deviceOrientation,
+                  finalHeading: validHeading,
+                  isIn3DMode
+                });
+              } else {
+                console.log('No device orientation for shimmer update:', {
+                  deviceOrientation,
+                  heading,
+                  userHeading
+                });
               }
               
               // In 3D mode, adjust heading based on map bearing
@@ -787,7 +808,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Google Maps style direction:', {
             deviceOrientation,
             finalHeading: validHeading,
-            originalGPS: heading
+            originalGPS: heading,
+            selectedStation: selectedStation?.name || 'none'
+          });
+        } else {
+          console.log('No device orientation available:', {
+            deviceOrientation,
+            heading,
+            userHeading
           });
         }
         
@@ -1289,6 +1317,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Device orientation tracking for map rotation
   useEffect(() => {
     const handleOrientationChange = (event: DeviceOrientationEvent) => {
+      console.log('Device Orientation Event:', {
+        alpha: event.alpha,
+        beta: event.beta,
+        gamma: event.gamma,
+        absolute: event.absolute
+      });
+      
       if (event.alpha !== null) {
         // Device Orientation Event gibt die Rotation des Geräts relativ zum Norden an
         // 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
