@@ -44,6 +44,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [forceStationRerender, setForceStationRerender] = useState<number>(0);
   const [lastLocation, setLastLocation] = useState<{lat: number, lng: number} | null>(null);
   const [deviceOrientation, setDeviceOrientation] = useState<number>(0);
+  const [isFollowingLocation, setIsFollowingLocation] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -140,6 +141,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     
     try {
       const map = mapRef.current;
+      
+      // Beende Following-Modus wenn Navigation gestartet wird
+      if (isFollowingLocation) {
+        console.log('Navigation started - deactivating following mode');
+        setIsFollowingLocation(false);
+        stopLocationTracking();
+      }
       
       // Get Mapbox access token
       const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
@@ -467,9 +475,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       setTimeToDestination(0);
       setCurrentInstruction('');
       
-      // Update user marker to normal mode (no direction arrow)
+      // Update user marker to normal mode but keep direction if available
       if (userLocation) {
-        updateUserMarker(userLocation, null, false);
+        updateUserMarker(userLocation, userHeading, false);
       }
       
       // Re-add walking route if a station is selected (normal mode)
@@ -525,6 +533,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           map.flyTo({
             center: targetCenter as [number, number],
             zoom: 16, // Zurück zum ursprünglichen Zoom-Level
+            bearing: 0, // Reset rotation after navigation
             essential: true,
             duration: 1000 // Smooth animation
           });
@@ -542,9 +551,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Function to stop navigation
   const stopNavigation = () => {
     clearNavigation();
-    // Ensure user marker is updated to normal mode
+    // Ensure user marker is updated to normal mode but keep direction
     if (userLocation) {
-      updateUserMarker(userLocation, null, false);
+      updateUserMarker(userLocation, userHeading, false);
     }
     console.log('Navigation stopped');
   };
@@ -612,12 +621,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Calculated heading from movement:', calculatedHeading);
         }
         
-        // Update user marker on map with direction
+        // Update user marker on map with direction - always show direction if available
         updateUserMarker(newLocation, calculatedHeading, isNavigating);
         
         // Update navigation if active
         if (isNavigating && selectedStation) {
           updateNavigationProgress(newLocation, selectedStation);
+        }
+        
+        // Following-Modus: Karte folgt der Position mit 3D-Ansicht
+        if (isFollowingLocation && mapRef.current && !isNavigating) {
+          const map = mapRef.current;
+          map.setCenter([newLocation.lng, newLocation.lat]);
+          // Behalte 3D-Ansicht bei
+          const currentPitch = map.getPitch();
+          if (currentPitch < 45) {
+            map.setPitch(60); // 3D-Ansicht beibehalten
+          }
         }
         
         // Speichere aktuelle Position für nächste Heading-Berechnung
@@ -663,12 +683,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const markerElement = existingMarker.getElement();
         const hasDirectionArrow = markerElement.querySelector('[data-direction-arrow]') !== null;
         
-        // If we need navigation mode but marker doesn't have direction arrow, recreate it
-        if (shouldShowNavigationMode && !hasDirectionArrow) {
-          console.log('Recreating marker for navigation mode');
+        // Check if we need to recreate marker for direction display
+        const hasDirectionShimmer = markerElement.querySelector('[data-direction-shimmer]') !== null;
+        const shouldShowDirection = shouldShowNavigationMode || (heading !== null && heading !== undefined && !isNaN(heading) && heading >= 0);
+        
+        if (shouldShowDirection && !hasDirectionShimmer) {
+          console.log('Recreating marker for direction display');
           existingMarker.remove();
           userMarkerRef.current = null;
-        } else if (!shouldShowNavigationMode && hasDirectionArrow) {
+        } else if (!shouldShowDirection && hasDirectionShimmer) {
           console.log('Recreating marker for normal mode');
           existingMarker.remove();
           userMarkerRef.current = null;
@@ -676,13 +699,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           // Just update position and heading
           existingMarker.setLngLat([location.lng, location.lat]);
           
-          if (shouldShowNavigationMode) {
-            // Update the direction arrow rotation
-            const arrowElement = markerElement.querySelector('[data-direction-arrow]') as HTMLElement;
-            if (arrowElement) {
+          if (shouldShowDirection) {
+            // Update the direction shimmer rotation
+            const shimmerElement = markerElement.querySelector('[data-direction-shimmer]') as HTMLElement;
+            if (shimmerElement) {
               const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
-              arrowElement.style.transform = `translateX(-50%) rotate(${validHeading}deg)`;
-              console.log('Updated direction arrow to:', validHeading);
+              shimmerElement.style.transform = `rotate(${validHeading}deg)`;
+              shimmerElement.style.background = `conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg)`;
+              console.log('Updated direction shimmer to:', validHeading);
             }
           }
           return; // Exit early if marker already exists and is correct type
@@ -699,7 +723,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         userMarkerRef.current = null;
       }
       
-      // Create user marker - different styles for navigation vs normal mode
+      // Create user marker - ALWAYS show direction arrow if heading is available
       const userElement = document.createElement('div');
       
       // Use forceNavigationMode parameter or current isNavigating state
@@ -712,70 +736,76 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         heading
       });
       
-      if (shouldShowNavigationModeFinal) {
-        // Navigation mode: larger marker with direction - ALWAYS show direction arrow
-        const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : 0;
+      // Check if we have a valid heading to show direction
+      const hasValidHeading = heading !== null && heading !== undefined && !isNaN(heading) && heading >= 0;
+      const shouldShowDirection = shouldShowNavigationModeFinal || hasValidHeading;
+      
+      if (shouldShowDirection) {
+        // Navigation mode or direction available: small marker with shimmer direction indicator
+        const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : (userHeading || 0);
         
         userElement.innerHTML = `
           <div style="
-            width: 40px;
-            height: 40px;
+            width: 28px;
+            height: 28px;
             position: relative;
           ">
-            <!-- Outer circle with pulsing animation -->
+            <!-- Main circle - smaller -->
             <div style="
-              width: 40px;
-              height: 40px;
-              background: rgba(16, 185, 129, 0.3);
-              border: 3px solid #10b981;
+              width: 20px;
+              height: 20px;
+              background: rgba(16, 185, 129, 0.25);
               border-radius: 50%;
               position: absolute;
-              top: 0;
-              left: 0;
-              animation: pulse 2s infinite;
+              top: 4px;
+              left: 4px;
             "></div>
             
-            <!-- Direction arrow - smooth rotation -->
-            <div data-direction-arrow style="
-              width: 0;
-              height: 0;
-              border-left: 8px solid transparent;
-              border-right: 8px solid transparent;
-              border-bottom: 16px solid #10b981;
-              position: absolute;
-              top: 2px;
-              left: 50%;
-              transform: translateX(-50%) rotate(${validHeading}deg);
-              transform-origin: center bottom;
-              transition: transform 0.05s ease-out;
-            "></div>
-            
-            <!-- Center dot -->
+            <!-- Center dot - larger -->
             <div style="
-              width: 8px;
-              height: 8px;
+              width: 12px;
+              height: 12px;
               background: #10b981;
               border-radius: 50%;
               position: absolute;
               top: 50%;
               left: 50%;
               transform: translate(-50%, -50%);
-              box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+              z-index: 2;
+              box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+            "></div>
+            
+            <!-- Directional shimmer indicator - only in movement direction -->
+            <div data-direction-shimmer style="
+              width: 60px;
+              height: 60px;
+              position: absolute;
+              top: -16px;
+              left: -16px;
+              border-radius: 50%;
+              background: conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
+              animation: shimmer 2s linear infinite;
+              transform: rotate(${validHeading}deg);
             "></div>
           </div>
         `;
-        userElement.style.width = '40px';
-        userElement.style.height = '40px';
+        userElement.style.width = '28px';
+        userElement.style.height = '28px';
         
-        // Add CSS animation for pulsing effect
-        if (!document.querySelector('#navigation-pulse-style')) {
+        // Add CSS animation for shimmer effect
+        if (!document.querySelector('#shimmer-style')) {
           const style = document.createElement('style');
-          style.id = 'navigation-pulse-style';
+          style.id = 'shimmer-style';
           style.textContent = `
-            @keyframes pulse {
-              0% { transform: scale(1); opacity: 1; }
-              50% { transform: scale(1.1); opacity: 0.7; }
-              100% { transform: scale(1); opacity: 1; }
+            @keyframes shimmer {
+              0% { 
+                background: conic-gradient(from -45deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
+                transform: rotate(0deg);
+              }
+              100% { 
+                background: conic-gradient(from 315deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
+                transform: rotate(360deg);
+              }
             }
           `;
           document.head.appendChild(style);
@@ -802,7 +832,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .addTo(map);
       
       userMarkerRef.current = userMarker;
-      console.log('User marker updated:', shouldShowNavigationMode ? 'navigation mode with direction' : 'normal mode', 'heading:', heading);
+      console.log('User marker updated:', shouldShowDirection ? 'with direction arrow' : 'normal mode', 'heading:', heading);
     } catch (error) {
       console.error('Error updating user marker:', error);
     }
@@ -819,6 +849,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       map.flyTo({
         center: [userLocation.lng, userLocation.lat],
         zoom: 19, // High zoom for detailed navigation
+        bearing: 0, // Reset rotation for navigation
         essential: true,
         duration: 1500
       });
@@ -858,8 +889,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           map.setZoom(19); // High zoom for detailed navigation
         }
         
-        // Apply device orientation rotation if available
-        if (deviceOrientation !== 0) {
+        // Apply device orientation rotation if available and valid
+        if (deviceOrientation !== 0 && !isNaN(deviceOrientation)) {
           map.setBearing(-deviceOrientation + 180); // Add 180° to correct the rotation
         }
         console.log('Following mode: Map centered on user location');
@@ -943,6 +974,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
+      // Beende Following-Modus wenn Station ausgewählt wird
+      if (isFollowingLocation) {
+        console.log('Station selected - deactivating following mode');
+        setIsFollowingLocation(false);
+        stopLocationTracking();
+      }
+      
       // Debug: Log station coordinates and validate them
       console.log('Highlighting station:', station.name, 'Coordinates:', { lat: station.lat, lng: station.lng });
       
@@ -1003,9 +1041,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       const targetCenter = [station.lng, station.lat + latOffset];
       console.log('Flying to coordinates:', targetCenter);
       
+      // Reset bearing to 0 when highlighting a station to ensure proper positioning
       map.flyTo({
         center: targetCenter as [number, number],
         zoom: 16, // Zurück zum ursprünglichen Zoom-Level
+        bearing: 0, // Reset rotation to ensure proper positioning
         essential: true,
         duration: 1000 // Smooth animation
       });
@@ -1132,10 +1172,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         map.flyTo({
           center: [userLocation.lng, userLocation.lat],
           zoom: 16,
+          bearing: 0, // Reset rotation when clearing highlight
           essential: true
         });
-        // Update user marker to normal mode
-        updateUserMarker(userLocation, null, false);
+        // Update user marker to normal mode but keep direction if available
+        updateUserMarker(userLocation, userHeading, false);
       }
       
       // Reset selected station and panel state
@@ -1289,28 +1330,30 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         console.log('Mapbox map initialized successfully:', map);
         console.log('Map center set to:', center);
 
+        // Add event listeners for map interactions
+        map.on('dragstart', () => {
+          // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus
+          if (isFollowingLocation) {
+            console.log('User manually moved map - deactivating following mode');
+            setIsFollowingLocation(false);
+            stopLocationTracking();
+          }
+        });
+
+        map.on('zoomstart', () => {
+          // Wenn Benutzer zoomt, beende Following-Modus
+          if (isFollowingLocation) {
+            console.log('User zoomed map - deactivating following mode');
+            setIsFollowingLocation(false);
+            stopLocationTracking();
+          }
+        });
+
         // Add user location marker if we have the location
         if (userLocation) {
-          // Use simple marker for initial load (not in navigation mode yet)
-          const userElement = document.createElement('div');
-          userElement.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
-              <circle cx="12" cy="12" r="5" fill="#10b981" />
-            </svg>
-          `;
-          userElement.style.width = '28px';
-          userElement.style.height = '28px';
-          userElement.style.cursor = 'pointer';
-          
-          const userMarker = new mapboxgl.Marker({
-            element: userElement,
-            anchor: 'center'
-          })
-            .setLngLat([userLocation.lng, userLocation.lat])
-            .addTo(map);
-          userMarkerRef.current = userMarker;
-          console.log('User marker added at:', userLocation);
+          // Use updateUserMarker function to get proper direction display
+          updateUserMarker(userLocation, userHeading, false);
+          console.log('User marker added at:', userLocation, 'with heading:', userHeading);
         }
 
         // Force map to invalidate size and render
@@ -1401,7 +1444,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             .addTo(map);
           
           // Add click handler to open info panel
-          marker.getElement().addEventListener('click', () => {
+          marker.getElement().addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent event bubbling
             console.log('Marker clicked:', s.name);
             highlightStation(s);
           });
@@ -1426,68 +1470,110 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       return;
     }
     
-    // Verwende die bereits gecachte Position wenn vorhanden
-    if (userLocation) {
-      map.flyTo({
-        center: [userLocation.lng, userLocation.lat],
-        zoom: 17, // Zurück zum ursprünglichen Zoom-Level
-        essential: true
-      });
-      return;
-    }
-    
-    try {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          try {
-            const { latitude, longitude, heading } = pos.coords;
-            // Update user location state
-            setUserLocation({ lat: latitude, lng: longitude });
-            if (heading !== null && !isNaN(heading)) {
-              setUserHeading(heading);
-            }
-            map.flyTo({
-              center: [longitude, latitude],
-              zoom: 17, // Zurück zum ursprünglichen Zoom-Level
-              essential: true
-            });
-            if (userMarkerRef.current) {
-              userMarkerRef.current.setLngLat([longitude, latitude]);
-            } else {
-              const userElement = document.createElement('div');
-              userElement.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
-                  <circle cx="12" cy="12" r="5" fill="#10b981" />
-                </svg>
-              `;
-              userElement.style.width = '28px';
-              userElement.style.height = '28px';
-              userElement.style.cursor = 'pointer';
-              
-              const m = new mapboxgl.Marker({
-                element: userElement,
-                anchor: 'center'
-              })
-                .setLngLat([longitude, latitude])
-                .addTo(map);
-              userMarkerRef.current = m;
-            }
-          } catch (error) {
-            console.error('Error updating user location:', error);
+    if (isFollowingLocation) {
+      // Zustand 3: Zurück zu zentrieren (Following-Modus beenden)
+      console.log('Deactivating following mode - returning to center');
+      setIsFollowingLocation(false);
+      
+      // Stoppe Location Tracking
+      stopLocationTracking();
+      
+      if (userLocation) {
+        // Zurück zur normalen 2D-Ansicht
+        map.flyTo({
+          center: [userLocation.lng, userLocation.lat],
+          zoom: 17,
+          bearing: 0,
+          pitch: 0, // Zurück zur 2D-Ansicht
+          essential: true,
+          duration: 1500
+        });
+        
+        console.log('Following mode deactivated - back to normal view');
+      }
+    } else {
+      // Zustand 1 oder 2: Erst zentrieren, dann Following-Modus
+      // Prüfe ob bereits zentriert (durch Vergleich der aktuellen Kartenmitte mit Benutzerposition)
+      const currentCenter = map.getCenter();
+      const isAlreadyCentered = userLocation && 
+        Math.abs(currentCenter.lng - userLocation.lng) < 0.0001 && 
+        Math.abs(currentCenter.lat - userLocation.lat) < 0.0001;
+      
+      if (isAlreadyCentered) {
+        // Zustand 2: Following-Modus aktivieren (3D-Ansicht)
+        console.log('Already centered - activating following mode with 3D view');
+        setIsFollowingLocation(true);
+        
+        if (userLocation) {
+          // Starte Location Tracking für Following-Modus
+          if (watchId === null) {
+            startLocationTracking();
           }
-        },
-        (error) => {
-          console.error('Geolocation error:', error);
-        },
-        { 
-          enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
-          maximumAge: 30000, // 30 Sekunden - frischere Position
-          timeout: 10000 // 10 seconds - mehr Zeit für GPS
+          
+          // 3D-Ansicht aktivieren
+          map.flyTo({
+            center: [userLocation.lng, userLocation.lat],
+            zoom: 19, // Höherer Zoom für Following
+            bearing: 0,
+            pitch: 60, // 3D-Ansicht - schräger Blick
+            essential: true,
+            duration: 1500
+          });
+          
+          console.log('Following mode activated with 3D view');
         }
-      );
-    } catch (error) {
-      console.error('Error with geolocation:', error);
+      } else {
+        // Zustand 1: Normal zentrieren
+        console.log('Centering on user location');
+        
+        // Verwende die bereits gecachte Position wenn vorhanden
+        if (userLocation) {
+          map.flyTo({
+            center: [userLocation.lng, userLocation.lat],
+            zoom: 17,
+            bearing: 0,
+            pitch: 0, // Reset pitch to 0 for normal view
+            essential: true
+          });
+          return;
+        }
+        
+        try {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              try {
+                const { latitude, longitude, heading } = pos.coords;
+                // Update user location state
+                setUserLocation({ lat: latitude, lng: longitude });
+                if (heading !== null && !isNaN(heading)) {
+                  setUserHeading(heading);
+                }
+                map.flyTo({
+                  center: [longitude, latitude],
+                  zoom: 17,
+                  bearing: 0,
+                  pitch: 0, // Reset pitch to 0 for normal view
+                  essential: true
+                });
+                // Update user marker with direction
+                updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
+              } catch (error) {
+                console.error('Error updating user location:', error);
+              }
+            },
+            (error) => {
+              console.error('Geolocation error:', error);
+            },
+            { 
+              enableHighAccuracy: true,
+              maximumAge: 30000,
+              timeout: 10000
+            }
+          );
+        } catch (error) {
+          console.error('Error with geolocation:', error);
+        }
+      }
     }
   }
 
@@ -1599,7 +1685,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             <path d="M12 17h.01" />
           </svg>
         </a>
-        </div>
+      </div>
       )}
 
       {/* QR-Code Scannen Button - über dem Info-Panel, nur wenn Panel nicht bewegt wird */}
@@ -2017,6 +2103,30 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Positionierungsknopf - unten rechts, höher positioniert */}
+      {!selectedStation && !isFullScreenNavigation && (
+        <button
+          type="button"
+          onClick={locateMe}
+          aria-label={isFollowingLocation ? "Position folgt (grün) - zum Zentrieren wechseln" : "Meine Position zentrieren"}
+          className={`fixed bottom-28 right-4 z-[1000] grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+            isFollowingLocation 
+              ? 'bg-emerald-600 text-white border border-emerald-500 hover:bg-emerald-700' // Grüner Hintergrund im Following-Modus
+              : isDarkMode === true
+                ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
+                : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30'
+          }`}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+            <circle cx="12" cy="12" r="4" />
+            {isFollowingLocation && (
+              <path d="M12 8v8M8 12h8" strokeWidth="1.5" />
+            )}
+          </svg>
+        </button>
       )}
 
       {/* Scannen Button - nur anzeigen wenn keine Station ausgewählt */}
