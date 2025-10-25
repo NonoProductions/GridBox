@@ -42,6 +42,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [userHeading, setUserHeading] = useState<number>(0);
   const [isLocationFixed, setIsLocationFixed] = useState<boolean>(false);
   const [forceStationRerender, setForceStationRerender] = useState<number>(0);
+  const [lastLocation, setLastLocation] = useState<{lat: number, lng: number} | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -92,10 +93,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const { latitude, longitude } = position.coords;
+        const { latitude, longitude, heading } = position.coords;
         setUserLocation({ lat: latitude, lng: longitude });
+        if (heading !== null && !isNaN(heading)) {
+          setUserHeading(heading);
+        }
         setLocationLoading(false);
-        console.log('User location obtained:', { lat: latitude, lng: longitude });
+        console.log('User location obtained:', { lat: latitude, lng: longitude, heading });
       },
       (error) => {
         console.error('Geolocation error:', error);
@@ -104,9 +108,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setLocationLoading(false);
       },
       { 
-        enableHighAccuracy: false, // Reduziert die Anzahl der Anfragen
-        maximumAge: 600000, // 10 Minuten - nutze gecachte Position
-        timeout: 10000 // 10 seconds
+        enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
+        maximumAge: 30000, // 30 Sekunden - frischere Position
+        timeout: 15000 // 15 seconds - mehr Zeit für GPS
       }
     );
   }, []);
@@ -579,34 +583,49 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        const { latitude, longitude, heading } = position.coords;
+        const { latitude, longitude, heading, speed, accuracy } = position.coords;
         const newLocation = { lat: latitude, lng: longitude };
         
         // Update user location and heading
         setUserLocation(newLocation);
-        if (heading !== null && !isNaN(heading)) {
+        
+        // Verbesserte Heading-Verarbeitung für mobile Geräte
+        let calculatedHeading = userHeading; // Fallback auf aktuellen Heading
+        
+        if (heading !== null && !isNaN(heading) && heading >= 0) {
+          // GPS Heading ist verfügbar
+          calculatedHeading = heading;
           setUserHeading(heading);
+        } else if (lastLocation && speed && speed > 0.5) {
+          // Fallback: Berechne Heading basierend auf Bewegungsrichtung
+          const deltaLat = newLocation.lat - lastLocation.lat;
+          const deltaLng = newLocation.lng - lastLocation.lng;
+          const bearing = Math.atan2(deltaLng, deltaLat) * 180 / Math.PI;
+          calculatedHeading = (bearing + 360) % 360; // Normalisiere auf 0-360°
+          setUserHeading(calculatedHeading);
+          console.log('Calculated heading from movement:', calculatedHeading);
         }
         
         // Update user marker on map with direction
-        // Ensure we always pass a valid heading value for navigation mode
-        const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : 0;
-        updateUserMarker(newLocation, validHeading, isNavigating);
+        updateUserMarker(newLocation, calculatedHeading, isNavigating);
         
         // Update navigation if active
         if (isNavigating && selectedStation) {
           updateNavigationProgress(newLocation, selectedStation);
         }
         
-        console.log('Location updated during navigation:', newLocation, 'Heading:', heading);
+        // Speichere aktuelle Position für nächste Heading-Berechnung
+        setLastLocation(newLocation);
+        
+        console.log('Location updated during navigation:', newLocation, 'Heading:', heading, 'Calculated:', calculatedHeading, 'Speed:', speed, 'Accuracy:', accuracy);
       },
       (error) => {
         console.error('Geolocation error during navigation:', error);
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 1000, // 1 second
-        timeout: 5000
+        maximumAge: 500, // 0.5 seconds - sehr frische Position
+        timeout: 3000 // 3 seconds - schneller Timeout für bessere Responsivität
       }
     );
     
@@ -644,13 +663,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       if (shouldShowNavigationMode) {
         // Navigation mode: larger marker with direction - ALWAYS show direction arrow
+        const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : 0;
+        
         userElement.innerHTML = `
           <div style="
             width: 40px;
             height: 40px;
             position: relative;
           ">
-            <!-- Outer circle -->
+            <!-- Outer circle with pulsing animation -->
             <div style="
               width: 40px;
               height: 40px;
@@ -660,9 +681,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               position: absolute;
               top: 0;
               left: 0;
+              animation: pulse 2s infinite;
             "></div>
             
-            <!-- Direction arrow - always visible in navigation mode -->
+            <!-- Direction arrow - smooth rotation -->
             <div style="
               width: 0;
               height: 0;
@@ -672,8 +694,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               position: absolute;
               top: 2px;
               left: 50%;
-              transform: translateX(-50%) rotate(${heading !== null && heading !== undefined ? heading : 0}deg);
+              transform: translateX(-50%) rotate(${validHeading}deg);
               transform-origin: center bottom;
+              transition: transform 0.3s ease-out;
             "></div>
             
             <!-- Center dot -->
@@ -686,11 +709,26 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               top: 50%;
               left: 50%;
               transform: translate(-50%, -50%);
+              box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
             "></div>
           </div>
         `;
         userElement.style.width = '40px';
         userElement.style.height = '40px';
+        
+        // Add CSS animation for pulsing effect
+        if (!document.querySelector('#navigation-pulse-style')) {
+          const style = document.createElement('style');
+          style.id = 'navigation-pulse-style';
+          style.textContent = `
+            @keyframes pulse {
+              0% { transform: scale(1); opacity: 1; }
+              50% { transform: scale(1.1); opacity: 0.7; }
+              100% { transform: scale(1); opacity: 1; }
+            }
+          `;
+          document.head.appendChild(style);
+        }
       } else {
         // Normal mode: simple marker like before - NO direction arrow
         userElement.innerHTML = `
@@ -760,12 +798,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Center map on user location during navigation (smooth following) - only if not fixed
       if (!isLocationFixed) {
-        map.flyTo({
-          center: [currentLocation.lng, currentLocation.lat],
-          zoom: 19, // High zoom for detailed navigation
-          essential: true,
-          duration: 2000 // Slower, smoother following
-        });
+        // Verwende setCenter für flüssigere Updates anstatt flyTo
+        map.setCenter([currentLocation.lng, currentLocation.lat]);
+        
+        // Nur bei größeren Bewegungen zoom anpassen
+        const currentZoom = map.getZoom();
+        if (currentZoom < 18) {
+          map.setZoom(19); // High zoom for detailed navigation
+        }
+      } else {
+        // In fixed mode, only update the user marker position without moving the map
+        console.log('Position is fixed - map will not follow user movement');
       }
       
       // Check if user is close to destination (within 10 meters)
@@ -1309,9 +1352,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           try {
-            const { latitude, longitude } = pos.coords;
+            const { latitude, longitude, heading } = pos.coords;
             // Update user location state
             setUserLocation({ lat: latitude, lng: longitude });
+            if (heading !== null && !isNaN(heading)) {
+              setUserHeading(heading);
+            }
             map.flyTo({
               center: [longitude, latitude],
               zoom: 17,
@@ -1346,7 +1392,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         (error) => {
           console.error('Geolocation error:', error);
         },
-        { enableHighAccuracy: false, maximumAge: 600000, timeout: 5000 } // Nutze gecachte Position
+        { 
+          enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
+          maximumAge: 30000, // 30 Sekunden - frischere Position
+          timeout: 10000 // 10 seconds - mehr Zeit für GPS
+        }
       );
     } catch (error) {
       console.error('Error with geolocation:', error);
@@ -1972,31 +2022,60 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 </div>
               </div>
               
-              {/* Location Center Button */}
+              {/* Location Toggle Button - Follow vs Fixed */}
               <div className="pointer-events-auto">
                 <button
                   onClick={() => {
                     if (userLocation && mapRef.current) {
                       const map = mapRef.current;
-                      // Center map on user location and start following
-                      map.flyTo({
-                        center: [userLocation.lng, userLocation.lat],
-                        zoom: 19, // High zoom for detailed navigation
-                        essential: true,
-                        duration: 1000 // Smooth animation
-                      });
-                      // Reset location fix to allow following
-                      setIsLocationFixed(false);
-                      console.log('Map centered on user location and following enabled');
+                      
+                      if (isLocationFixed) {
+                        // Currently fixed - switch to following mode
+                        setIsLocationFixed(false);
+                        // Center map on user location and start following
+                        map.flyTo({
+                          center: [userLocation.lng, userLocation.lat],
+                          zoom: 19, // High zoom for detailed navigation
+                          essential: true,
+                          duration: 1000 // Smooth animation
+                        });
+                        console.log('Switched to following mode');
+                      } else {
+                        // Currently following - switch to fixed mode
+                        setIsLocationFixed(true);
+                        // Center map with offset to show user position optimally
+                        const offsetLat = 0.0005; // Small offset to position user marker better
+                        map.flyTo({
+                          center: [userLocation.lng, userLocation.lat + offsetLat],
+                          zoom: 19,
+                          essential: true,
+                          duration: 1000
+                        });
+                        console.log('Switched to fixed mode');
+                      }
                     }
                   }}
-                  className="p-3 rounded-full transition-colors bg-white/20 text-white hover:bg-white/30"
-                  aria-label="Auf Position zentrieren und folgen"
+                  className={`p-3 rounded-full transition-colors ${
+                    isLocationFixed 
+                      ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
+                      : 'bg-white/20 text-white hover:bg-white/30'
+                  }`}
+                  aria-label={isLocationFixed ? "Position fixiert - zum Folgen wechseln" : "Position folgen - zum Fixieren wechseln"}
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-                    <circle cx="12" cy="12" r="4" />
-                  </svg>
+                  {isLocationFixed ? (
+                    // Fixed mode icon
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                      <circle cx="12" cy="12" r="4" />
+                      <path d="M12 8v8M8 12h8" />
+                    </svg>
+                  ) : (
+                    // Following mode icon
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+                      <circle cx="12" cy="12" r="4" />
+                    </svg>
+                  )}
                 </button>
               </div>
             </div>
