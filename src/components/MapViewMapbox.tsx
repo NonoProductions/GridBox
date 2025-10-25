@@ -93,28 +93,53 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const { latitude, longitude, heading } = position.coords;
-        setUserLocation({ lat: latitude, lng: longitude });
-        if (heading !== null && !isNaN(heading)) {
-          setUserHeading(heading);
+    // Explizite Berechtigungsanfrage für Standort
+    const requestLocationPermission = async () => {
+      try {
+        // Prüfe ob Permission API verfügbar ist
+        if ('permissions' in navigator) {
+          const permission = await navigator.permissions.query({ name: 'geolocation' });
+          console.log('Geolocation permission status:', permission.state);
+          
+          if (permission.state === 'denied') {
+            console.warn('Geolocation permission denied');
+            setUserLocation({ lat: 52.52, lng: 13.405 });
+            setLocationLoading(false);
+            return;
+          }
         }
-        setLocationLoading(false);
-        console.log('User location obtained:', { lat: latitude, lng: longitude, heading });
-      },
-      (error) => {
-        console.error('Geolocation error:', error);
-        // Fallback to Berlin coordinates
+
+        // Versuche Standort zu erhalten
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude, heading } = position.coords;
+            setUserLocation({ lat: latitude, lng: longitude });
+            if (heading !== null && !isNaN(heading)) {
+              setUserHeading(heading);
+            }
+            setLocationLoading(false);
+            console.log('User location obtained:', { lat: latitude, lng: longitude, heading });
+          },
+          (error) => {
+            console.error('Geolocation error:', error);
+            // Fallback to Berlin coordinates
+            setUserLocation({ lat: 52.52, lng: 13.405 });
+            setLocationLoading(false);
+          },
+          { 
+            enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
+            maximumAge: 30000, // 30 Sekunden - frischere Position
+            timeout: 15000 // 15 seconds - mehr Zeit für GPS
+          }
+        );
+      } catch (error) {
+        console.error('Permission request error:', error);
         setUserLocation({ lat: 52.52, lng: 13.405 });
         setLocationLoading(false);
-      },
-      { 
-        enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
-        maximumAge: 30000, // 30 Sekunden - frischere Position
-        timeout: 15000 // 15 seconds - mehr Zeit für GPS
       }
-    );
+    };
+
+    requestLocationPermission();
   }, []);
 
   const center = useMemo(() => userLocation || { lat: 52.52, lng: 13.405 }, [userLocation]);
@@ -1345,16 +1370,32 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
 
     // Request permission for device orientation
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-      (DeviceOrientationEvent as any).requestPermission().then((response: string) => {
-        if (response === 'granted') {
+    const requestDeviceOrientationPermission = async () => {
+      try {
+        if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+          console.log('Requesting device orientation permission...');
+          const response = await (DeviceOrientationEvent as any).requestPermission();
+          console.log('Device orientation permission response:', response);
+          
+          if (response === 'granted') {
+            window.addEventListener('deviceorientation', handleOrientationChange);
+            console.log('Device orientation permission granted - listener added');
+          } else {
+            console.warn('Device orientation permission denied');
+          }
+        } else {
+          // Fallback for browsers that don't require permission
+          console.log('Device orientation permission not required - adding listener');
           window.addEventListener('deviceorientation', handleOrientationChange);
         }
-      });
-    } else {
-      // Fallback for browsers that don't require permission
-      window.addEventListener('deviceorientation', handleOrientationChange);
-    }
+      } catch (error) {
+        console.error('Device orientation permission error:', error);
+        // Fallback: try to add listener anyway
+        window.addEventListener('deviceorientation', handleOrientationChange);
+      }
+    };
+
+    requestDeviceOrientationPermission();
 
     return () => {
       window.removeEventListener('deviceorientation', handleOrientationChange);
@@ -1561,6 +1602,25 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (!navigator.geolocation) {
       console.warn('Geolocation is not supported by this browser');
       return;
+    }
+
+    // Explizite Berechtigungsanfrage für Standort
+    try {
+      console.log('Requesting location permission for locateMe...');
+      
+      // Prüfe ob Permission API verfügbar ist
+      if ('permissions' in navigator) {
+        const permission = await navigator.permissions.query({ name: 'geolocation' });
+        console.log('Geolocation permission status in locateMe:', permission.state);
+        
+        if (permission.state === 'denied') {
+          console.warn('Geolocation permission denied in locateMe');
+          alert('Standortberechtigung wurde verweigert. Bitte erlauben Sie den Zugriff auf Ihren Standort in den Browser-Einstellungen.');
+          return;
+        }
+      }
+    } catch (error) {
+      console.error('Permission check error in locateMe:', error);
     }
     
     if (isFollowingLocation) {
