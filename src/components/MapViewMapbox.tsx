@@ -621,6 +621,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Calculated heading from movement:', calculatedHeading);
         }
         
+        // Google Maps Style: Device Orientation hat Priorität über GPS-Heading
+        if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
+          // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
+          calculatedHeading = deviceOrientation;
+          console.log('Google Maps style: Using device orientation as primary direction:', {
+            deviceOrientation,
+            finalHeading: calculatedHeading,
+            gpsHeading: heading
+          });
+        }
+        
         // Update user marker on map with direction - always show direction if available
         updateUserMarker(newLocation, calculatedHeading, isNavigating);
         
@@ -668,6 +679,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     }
   };
 
+
   // Function to update user marker with direction
   const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null, forceNavigationMode?: boolean) => {
     if (!mapRef.current) return;
@@ -709,6 +721,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             const shimmerElement = markerElement.querySelector('[data-direction-shimmer]') as HTMLElement;
             if (shimmerElement) {
               let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
+              
+              // Google Maps Style: Device Orientation ist die primäre Richtung
+              if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
+                validHeading = deviceOrientation;
+              }
               
               // In 3D mode, adjust heading based on map bearing
               if (isIn3DMode) {
@@ -762,6 +779,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       if (shouldShowDirection) {
         // Navigation mode or direction available: small marker with shimmer direction indicator
         let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : (userHeading || 0);
+        
+        // Google Maps Style: Device Orientation ist die primäre Richtung
+        if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
+          // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
+          validHeading = deviceOrientation;
+          console.log('Google Maps style direction:', {
+            deviceOrientation,
+            finalHeading: validHeading,
+            originalGPS: heading
+          });
+        }
         
         // In 3D mode, adjust heading based on map bearing for better visual alignment
         if (isIn3DMode) {
@@ -1262,12 +1290,21 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   useEffect(() => {
     const handleOrientationChange = (event: DeviceOrientationEvent) => {
       if (event.alpha !== null) {
+        // Device Orientation Event gibt die Rotation des Geräts relativ zum Norden an
+        // 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
         setDeviceOrientation(event.alpha);
         
         // Rotate map based on device orientation during navigation
         if (isNavigating && mapRef.current && !isLocationFixed) {
           const map = mapRef.current;
-          map.setBearing(-event.alpha + 180); // Add 180° to correct the rotation
+          // Korrigiere die Kartenrotation für die richtige Ausrichtung
+          map.setBearing(-event.alpha);
+        }
+        
+        // Update user marker with new device orientation
+        if (userLocation) {
+          // Verwende Device Orientation als primäre Richtung
+          updateUserMarker(userLocation, null, isNavigating);
         }
       }
     };
