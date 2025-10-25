@@ -48,6 +48,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [permissionRequested, setPermissionRequested] = useState<boolean>(false);
   const [locationPermissionGranted, setLocationPermissionGranted] = useState<boolean>(false);
   const [showPermissionModal, setShowPermissionModal] = useState<boolean>(false);
+  const [compassPermissionGranted, setCompassPermissionGranted] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -142,6 +143,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
 
     requestLocationPermission();
+    
+    // Kompass-Berechtigung anfragen
+    requestCompassPermission();
   }, []);
 
   // Explizite Berechtigungsanfrage beim ersten Laden
@@ -201,6 +205,33 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         timeout: 10000
       }
     );
+  };
+
+  // Funktion um Kompass-Berechtigung anzufragen
+  const requestCompassPermission = async () => {
+    try {
+      console.log('Requesting compass permission...');
+      
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+        const response = await (DeviceOrientationEvent as any).requestPermission();
+        console.log('Compass permission response:', response);
+        
+        if (response === 'granted') {
+          setCompassPermissionGranted(true);
+          console.log('Compass permission granted');
+        } else {
+          setCompassPermissionGranted(false);
+          console.warn('Compass permission denied');
+        }
+      } else {
+        // Fallback für Browser ohne Permission API
+        setCompassPermissionGranted(true);
+        console.log('Compass permission not required');
+      }
+    } catch (error) {
+      console.error('Compass permission error:', error);
+      setCompassPermissionGranted(false);
+    }
   };
 
   // Function to calculate distance between two coordinates in meters
@@ -705,21 +736,21 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Calculated heading from movement:', calculatedHeading);
         }
         
-        // Google Maps Style: Device Orientation hat Priorität über GPS-Heading
-        if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
-          // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          // Device Orientation direkt verwenden (keine Korrektur)
-          calculatedHeading = deviceOrientation;
-          console.log('Google Maps style: Using device orientation as primary direction:', {
+        // Kompass-Richtung für Location Tracking
+        if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
+          // Kompass: Korrigiere die Richtung für die Kartenansicht
+          calculatedHeading = (360 - deviceOrientation) % 360;
+          console.log('Compass direction for location tracking:', {
             deviceOrientation,
-            finalHeading: calculatedHeading,
+            compassHeading: calculatedHeading,
             gpsHeading: heading,
             speed,
             accuracy
           });
         } else {
-          console.log('No device orientation in location tracking:', {
+          console.log('No compass orientation in location tracking:', {
             deviceOrientation,
+            compassPermissionGranted,
             gpsHeading: heading,
             calculatedHeading,
             speed,
@@ -817,18 +848,19 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             if (shimmerElement) {
               let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
               
-              // Google Maps Style: Device Orientation ist die primäre Richtung
-              if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
-                // Device Orientation direkt verwenden (keine Korrektur)
-                validHeading = deviceOrientation;
-                console.log('Updated shimmer with device orientation:', {
+              // Kompass-Richtung für Shimmer
+              if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
+                // Kompass: Korrigiere die Richtung für die Kartenansicht
+                validHeading = (360 - deviceOrientation) % 360;
+                console.log('Updated shimmer with compass direction:', {
                   deviceOrientation,
-                  finalHeading: validHeading,
+                  compassHeading: validHeading,
                   isIn3DMode
                 });
               } else {
-                console.log('No device orientation for shimmer update:', {
+                console.log('No compass orientation for shimmer update:', {
                   deviceOrientation,
+                  compassPermissionGranted,
                   heading,
                   userHeading
                 });
@@ -887,20 +919,22 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Navigation mode or direction available: small marker with shimmer direction indicator
         let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : (userHeading || 0);
         
-        // Google Maps Style: Device Orientation ist die primäre Richtung
-        if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
+        // Kompass-Richtung für Shimmer
+        if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
           // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          // Für die Kartenansicht: Device Orientation direkt verwenden (keine Korrektur)
-          validHeading = deviceOrientation;
-          console.log('Google Maps style direction:', {
+          // Für Kompass: Korrigiere die Richtung für die Kartenansicht
+          // Kompass zeigt nach Norden (0°), aber Karte braucht andere Orientierung
+          validHeading = (360 - deviceOrientation) % 360;
+          console.log('Compass direction for shimmer:', {
             deviceOrientation,
-            finalHeading: validHeading,
+            compassHeading: validHeading,
             originalGPS: heading,
             selectedStation: selectedStation?.name || 'none'
           });
         } else {
-          console.log('No device orientation available:', {
+          console.log('No compass orientation available:', {
             deviceOrientation,
+            compassPermissionGranted,
             heading,
             userHeading
           });
@@ -1813,14 +1847,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 Standortberechtigung erforderlich
               </h2>
               <p className="text-gray-600 dark:text-gray-300 mb-6">
-                Diese App benötigt Zugriff auf Ihren Standort, um die nächsten Ladestationen zu finden und die Navigation zu ermöglichen.
+                Diese App benötigt Zugriff auf Ihren Standort und Kompass, um die nächsten Ladestationen zu finden und die Navigation zu ermöglichen.
               </p>
               <div className="space-y-3">
                 <button
-                  onClick={requestLocationPermissionAgain}
+                  onClick={async () => {
+                    await requestLocationPermissionAgain();
+                    await requestCompassPermission();
+                  }}
                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 px-4 rounded-xl transition-colors duration-200"
                 >
-                  Standortberechtigung gewähren
+                  Standort & Kompass-Berechtigung gewähren
                 </button>
                 <button
                   onClick={() => {
