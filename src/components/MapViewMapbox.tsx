@@ -675,6 +675,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
+      // Get current map bearing for 3D mode
+      const mapBearing = map.getBearing();
+      const mapPitch = map.getPitch();
+      const isIn3DMode = mapPitch > 30; // Consider 3D mode if pitch > 30 degrees
+      
       // Check if we need to recreate marker for navigation mode
       const shouldShowNavigationMode = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
       const existingMarker = userMarkerRef.current;
@@ -700,13 +705,19 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           existingMarker.setLngLat([location.lng, location.lat]);
           
           if (shouldShowDirection) {
-            // Update the direction shimmer rotation
+            // Update the direction indicator rotation and gradient
             const shimmerElement = markerElement.querySelector('[data-direction-shimmer]') as HTMLElement;
             if (shimmerElement) {
-              const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
+              let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
+              
+              // In 3D mode, adjust heading based on map bearing
+              if (isIn3DMode) {
+                validHeading = (validHeading + mapBearing) % 360;
+              }
+              
               shimmerElement.style.transform = `rotate(${validHeading}deg)`;
               shimmerElement.style.background = `conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg)`;
-              console.log('Updated direction shimmer to:', validHeading);
+              console.log('Updated direction indicator to:', validHeading, 'degrees', isIn3DMode ? '(3D mode)' : '(2D mode)');
             }
           }
           return; // Exit early if marker already exists and is correct type
@@ -740,9 +751,29 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       const hasValidHeading = heading !== null && heading !== undefined && !isNaN(heading) && heading >= 0;
       const shouldShowDirection = shouldShowNavigationModeFinal || hasValidHeading;
       
+      console.log('Direction display check:', {
+        hasValidHeading,
+        shouldShowNavigationModeFinal,
+        shouldShowDirection,
+        heading,
+        userHeading
+      });
+      
       if (shouldShowDirection) {
         // Navigation mode or direction available: small marker with shimmer direction indicator
-        const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : (userHeading || 0);
+        let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : (userHeading || 0);
+        
+        // In 3D mode, adjust heading based on map bearing for better visual alignment
+        if (isIn3DMode) {
+          // Combine user heading with map bearing for realistic 3D appearance
+          validHeading = (validHeading + mapBearing) % 360;
+          console.log('3D mode: Adjusted heading with map bearing', {
+            originalHeading: heading,
+            mapBearing,
+            adjustedHeading: validHeading,
+            mapPitch
+          });
+        }
         
         userElement.innerHTML = `
           <div style="
@@ -775,7 +806,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
             "></div>
             
-            <!-- Directional shimmer indicator - only in movement direction -->
+            <!-- Directional indicator - shows actual movement direction -->
             <div data-direction-shimmer style="
               width: 60px;
               height: 60px;
@@ -784,7 +815,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               left: -16px;
               border-radius: 50%;
               background: conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
-              animation: shimmer 2s linear infinite;
               transform: rotate(${validHeading}deg);
             "></div>
           </div>
@@ -792,24 +822,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         userElement.style.width = '28px';
         userElement.style.height = '28px';
         
-        // Add CSS animation for shimmer effect
-        if (!document.querySelector('#shimmer-style')) {
-          const style = document.createElement('style');
-          style.id = 'shimmer-style';
-          style.textContent = `
-            @keyframes shimmer {
-              0% { 
-                background: conic-gradient(from -45deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
-                transform: rotate(0deg);
-              }
-              100% { 
-                background: conic-gradient(from 315deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
-                transform: rotate(360deg);
-              }
-            }
-          `;
-          document.head.appendChild(style);
-        }
+        // No animation needed - static directional indicator
       } else {
         // Normal mode: simple marker like before - NO direction arrow
         userElement.innerHTML = `
@@ -1346,6 +1359,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             console.log('User zoomed map - deactivating following mode');
             setIsFollowingLocation(false);
             stopLocationTracking();
+          }
+        });
+
+        // Update user marker when map bearing changes in 3D mode
+        map.on('rotate', () => {
+          if (userLocation && map.getPitch() > 30) {
+            // Update marker direction in 3D mode when map rotates
+            updateUserMarker(userLocation, userHeading, false);
           }
         });
 
