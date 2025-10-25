@@ -45,6 +45,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [lastLocation, setLastLocation] = useState<{lat: number, lng: number} | null>(null);
   const [deviceOrientation, setDeviceOrientation] = useState<number>(0);
   const [isFollowingLocation, setIsFollowingLocation] = useState<boolean>(false);
+  const [permissionRequested, setPermissionRequested] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -96,20 +97,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     // Explizite Berechtigungsanfrage für Standort
     const requestLocationPermission = async () => {
       try {
-        // Prüfe ob Permission API verfügbar ist
-        if ('permissions' in navigator) {
-          const permission = await navigator.permissions.query({ name: 'geolocation' });
-          console.log('Geolocation permission status:', permission.state);
-          
-          if (permission.state === 'denied') {
-            console.warn('Geolocation permission denied');
-            setUserLocation({ lat: 52.52, lng: 13.405 });
-            setLocationLoading(false);
-            return;
-          }
-        }
-
-        // Versuche Standort zu erhalten
+        console.log('Requesting location permission...');
+        
+        // Versuche Standort zu erhalten - das triggert die Berechtigungsanfrage
         navigator.geolocation.getCurrentPosition(
           (position) => {
             const { latitude, longitude, heading } = position.coords;
@@ -122,14 +112,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           },
           (error) => {
             console.error('Geolocation error:', error);
+            if (error.code === error.PERMISSION_DENIED) {
+              console.warn('Location permission denied by user');
+              alert('Standortberechtigung wurde verweigert. Bitte erlauben Sie den Zugriff auf Ihren Standort in den Browser-Einstellungen.');
+            }
             // Fallback to Berlin coordinates
             setUserLocation({ lat: 52.52, lng: 13.405 });
             setLocationLoading(false);
           },
           { 
             enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
-            maximumAge: 30000, // 30 Sekunden - frischere Position
-            timeout: 15000 // 15 seconds - mehr Zeit für GPS
+            maximumAge: 0, // Keine gecachte Position - immer frische Daten
+            timeout: 10000 // 10 seconds timeout
           }
         );
       } catch (error) {
@@ -141,6 +135,29 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
     requestLocationPermission();
   }, []);
+
+  // Explizite Berechtigungsanfrage beim ersten Laden
+  useEffect(() => {
+    if (!permissionRequested && navigator.geolocation) {
+      setPermissionRequested(true);
+      console.log('Requesting explicit location permission...');
+      
+      // Explizite Berechtigungsanfrage
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          console.log('Location permission granted');
+        },
+        (error) => {
+          console.log('Location permission denied or error:', error);
+        },
+        { 
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 5000
+        }
+      );
+    }
+  }, [permissionRequested]);
 
   const center = useMemo(() => userLocation || { lat: 52.52, lng: 13.405 }, [userLocation]);
 
@@ -649,10 +666,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Google Maps Style: Device Orientation hat Priorität über GPS-Heading
         if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
           // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          calculatedHeading = deviceOrientation;
+          // Korrigiere für Kartenansicht
+          calculatedHeading = (360 - deviceOrientation) % 360;
           console.log('Google Maps style: Using device orientation as primary direction:', {
             deviceOrientation,
-            finalHeading: calculatedHeading,
+            correctedHeading: calculatedHeading,
             gpsHeading: heading,
             speed,
             accuracy
@@ -759,10 +777,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
               // Google Maps Style: Device Orientation ist die primäre Richtung
               if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
-                validHeading = deviceOrientation;
+                // Korrigiere Device Orientation für Kartenansicht
+                validHeading = (360 - deviceOrientation) % 360;
                 console.log('Updated shimmer with device orientation:', {
                   deviceOrientation,
-                  finalHeading: validHeading,
+                  correctedHeading: validHeading,
                   isIn3DMode
                 });
               } else {
@@ -829,10 +848,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Google Maps Style: Device Orientation ist die primäre Richtung
         if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
           // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          validHeading = deviceOrientation;
+          // Für die Kartenansicht müssen wir das korrigieren
+          validHeading = (360 - deviceOrientation) % 360;
           console.log('Google Maps style direction:', {
             deviceOrientation,
-            finalHeading: validHeading,
+            correctedHeading: validHeading,
             originalGPS: heading,
             selectedStation: selectedStation?.name || 'none'
           });
