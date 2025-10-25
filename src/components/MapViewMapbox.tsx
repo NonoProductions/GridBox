@@ -214,8 +214,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setShowStationList(false);
         
         // Force immediate update of user marker with navigation styling
-        // Use setTimeout to ensure the navigation state is properly set
+        // Update marker immediately to show direction arrow
+        console.log('Starting navigation - updating user marker with direction');
+        updateUserMarker(userLocation, userHeading || 0, true);
+        
+        // Also update after a short delay to ensure state is set
         setTimeout(() => {
+          console.log('Delayed update of user marker for navigation');
           updateUserMarker(userLocation, userHeading || 0, true);
         }, 100);
         
@@ -519,7 +524,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           
           map.flyTo({
             center: targetCenter as [number, number],
-            zoom: 16,
+            zoom: 16, // Zurück zum ursprünglichen Zoom-Level
             essential: true,
             duration: 1000 // Smooth animation
           });
@@ -625,8 +630,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 100, // 0.1 seconds - extrem frische Position
-        timeout: 1000 // 1 second - sehr schneller Timeout
+        maximumAge: 0, // 0 seconds - sofortige Updates
+        timeout: 500 // 0.5 seconds - extrem schneller Timeout
       }
     );
     
@@ -650,21 +655,38 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
-      // Update existing marker position instead of recreating
-      if (userMarkerRef.current) {
-        userMarkerRef.current.setLngLat([location.lng, location.lat]);
+      // Check if we need to recreate marker for navigation mode
+      const shouldShowNavigationMode = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
+      const existingMarker = userMarkerRef.current;
+      
+      if (existingMarker) {
+        const markerElement = existingMarker.getElement();
+        const hasDirectionArrow = markerElement.querySelector('[data-direction-arrow]') !== null;
         
-        // Update heading if in navigation mode
-        const shouldShowNavigationMode = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
-        if (shouldShowNavigationMode && heading !== null && heading !== undefined) {
-          // Update the direction arrow rotation
-          const markerElement = userMarkerRef.current.getElement();
-          const arrowElement = markerElement.querySelector('[data-direction-arrow]') as HTMLElement;
-          if (arrowElement) {
-            arrowElement.style.transform = `translateX(-50%) rotate(${heading}deg)`;
+        // If we need navigation mode but marker doesn't have direction arrow, recreate it
+        if (shouldShowNavigationMode && !hasDirectionArrow) {
+          console.log('Recreating marker for navigation mode');
+          existingMarker.remove();
+          userMarkerRef.current = null;
+        } else if (!shouldShowNavigationMode && hasDirectionArrow) {
+          console.log('Recreating marker for normal mode');
+          existingMarker.remove();
+          userMarkerRef.current = null;
+        } else if (existingMarker) {
+          // Just update position and heading
+          existingMarker.setLngLat([location.lng, location.lat]);
+          
+          if (shouldShowNavigationMode) {
+            // Update the direction arrow rotation
+            const arrowElement = markerElement.querySelector('[data-direction-arrow]') as HTMLElement;
+            if (arrowElement) {
+              const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
+              arrowElement.style.transform = `translateX(-50%) rotate(${validHeading}deg)`;
+              console.log('Updated direction arrow to:', validHeading);
+            }
           }
+          return; // Exit early if marker already exists and is correct type
         }
-        return; // Exit early if marker already exists
       }
       
       // Only create new marker if it doesn't exist
@@ -681,9 +703,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       const userElement = document.createElement('div');
       
       // Use forceNavigationMode parameter or current isNavigating state
-      const shouldShowNavigationMode = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
+      const shouldShowNavigationModeFinal = forceNavigationMode !== undefined ? forceNavigationMode : isNavigating;
       
-      if (shouldShowNavigationMode) {
+      console.log('updateUserMarker called with:', {
+        forceNavigationMode,
+        isNavigating,
+        shouldShowNavigationModeFinal,
+        heading
+      });
+      
+      if (shouldShowNavigationModeFinal) {
         // Navigation mode: larger marker with direction - ALWAYS show direction arrow
         const validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : 0;
         
@@ -718,7 +747,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               left: 50%;
               transform: translateX(-50%) rotate(${validHeading}deg);
               transform-origin: center bottom;
-              transition: transform 0.1s ease-out;
+              transition: transform 0.05s ease-out;
             "></div>
             
             <!-- Center dot -->
@@ -831,11 +860,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         // Apply device orientation rotation if available
         if (deviceOrientation !== 0) {
-          map.setBearing(-deviceOrientation);
+          map.setBearing(-deviceOrientation + 180); // Add 180° to correct the rotation
         }
+        console.log('Following mode: Map centered on user location');
       } else {
         // In fixed mode, only update the user marker position without moving the map
-        console.log('Position is fixed - map will not follow user movement');
+        console.log('Fixed mode: Map will not follow user movement, only marker updates');
       }
       
       // Check if user is close to destination (within 10 meters)
@@ -975,7 +1005,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       map.flyTo({
         center: targetCenter as [number, number],
-        zoom: 16,
+        zoom: 16, // Zurück zum ursprünglichen Zoom-Level
         essential: true,
         duration: 1000 // Smooth animation
       });
@@ -1183,7 +1213,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Rotate map based on device orientation during navigation
         if (isNavigating && mapRef.current && !isLocationFixed) {
           const map = mapRef.current;
-          map.setBearing(-event.alpha); // Negative for correct rotation
+          map.setBearing(-event.alpha + 180); // Add 180° to correct the rotation
         }
       }
     };
@@ -1250,7 +1280,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           container: mapContainer,
           style: isDarkMode ? darkStyle : lightStyle,
           center: [center.lng, center.lat], // Use current user location
-          zoom: 17, // Same zoom level as the "locate me" button
+          zoom: 17, // Zurück zum ursprünglichen Zoom-Level
           pitch: 0,
           bearing: 0
         });
@@ -1400,7 +1430,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (userLocation) {
       map.flyTo({
         center: [userLocation.lng, userLocation.lat],
-        zoom: 17,
+        zoom: 17, // Zurück zum ursprünglichen Zoom-Level
         essential: true
       });
       return;
@@ -1418,7 +1448,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             }
             map.flyTo({
               center: [longitude, latitude],
-              zoom: 17,
+              zoom: 17, // Zurück zum ursprünglichen Zoom-Level
               essential: true
             });
             if (userMarkerRef.current) {
@@ -2089,6 +2119,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       
                       if (isLocationFixed) {
                         // Currently fixed - switch to following mode
+                        console.log('Switching from FIXED to FOLLOWING mode');
                         setIsLocationFixed(false);
                         // Reset map bearing to north
                         map.setBearing(0);
@@ -2100,9 +2131,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                           essential: true,
                           duration: 1000 // Smooth animation
                         });
-                        console.log('Switched to following mode');
+                        console.log('Now in FOLLOWING mode - map will follow user');
                       } else {
                         // Currently following - switch to fixed mode
+                        console.log('Switching from FOLLOWING to FIXED mode');
                         setIsLocationFixed(true);
                         // Center map perfectly on user location
                         map.flyTo({
@@ -2112,7 +2144,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                           essential: true,
                           duration: 1000
                         });
-                        console.log('Switched to fixed mode');
+                        console.log('Now in FIXED mode - map will NOT follow user');
                       }
                     }
                   }}
@@ -2121,7 +2153,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
                       : 'bg-white/20 text-white hover:bg-white/30'
                   }`}
-                  aria-label={isLocationFixed ? "Position fixiert - zum Folgen wechseln" : "Position folgen - zum Fixieren wechseln"}
+                  aria-label={isLocationFixed ? "Position fixiert (grün) - Karte folgt NICHT - zum Folgen wechseln" : "Position folgt (transparent) - Karte folgt Benutzer - zum Fixieren wechseln"}
                 >
                   {isLocationFixed ? (
                     // Fixed mode icon
