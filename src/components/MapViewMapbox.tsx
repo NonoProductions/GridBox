@@ -708,11 +708,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Google Maps Style: Device Orientation hat Priorität über GPS-Heading
         if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
           // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          // Korrigiere für Kartenansicht
-          calculatedHeading = (360 - deviceOrientation) % 360;
+          // Device Orientation direkt verwenden (keine Korrektur)
+          calculatedHeading = deviceOrientation;
           console.log('Google Maps style: Using device orientation as primary direction:', {
             deviceOrientation,
-            correctedHeading: calculatedHeading,
+            finalHeading: calculatedHeading,
             gpsHeading: heading,
             speed,
             accuracy
@@ -819,11 +819,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
               // Google Maps Style: Device Orientation ist die primäre Richtung
               if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
-                // Korrigiere Device Orientation für Kartenansicht
-                validHeading = (360 - deviceOrientation) % 360;
+                // Device Orientation direkt verwenden (keine Korrektur)
+                validHeading = deviceOrientation;
                 console.log('Updated shimmer with device orientation:', {
                   deviceOrientation,
-                  correctedHeading: validHeading,
+                  finalHeading: validHeading,
                   isIn3DMode
                 });
               } else {
@@ -841,7 +841,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
               shimmerElement.style.transform = `rotate(${validHeading}deg)`;
               shimmerElement.style.background = `conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg)`;
-              console.log('Updated direction indicator to:', validHeading, 'degrees', isIn3DMode ? '(3D mode)' : '(2D mode)');
+              console.log('Updated direction indicator to:', validHeading, 'degrees', isIn3DMode ? '(3D mode)' : '(2D mode)', 'Device Orientation:', deviceOrientation);
             }
           }
           return; // Exit early if marker already exists and is correct type
@@ -890,11 +890,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Google Maps Style: Device Orientation ist die primäre Richtung
         if (deviceOrientation !== null && !isNaN(deviceOrientation)) {
           // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          // Für die Kartenansicht müssen wir das korrigieren
-          validHeading = (360 - deviceOrientation) % 360;
+          // Für die Kartenansicht: Device Orientation direkt verwenden (keine Korrektur)
+          validHeading = deviceOrientation;
           console.log('Google Maps style direction:', {
             deviceOrientation,
-            correctedHeading: validHeading,
+            finalHeading: validHeading,
             originalGPS: heading,
             selectedStation: selectedStation?.name || 'none'
           });
@@ -1428,6 +1428,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           // Verwende Device Orientation als primäre Richtung
           updateUserMarker(userLocation, null, isNavigating);
         }
+        
+        console.log('Device orientation updated:', event.alpha, 'degrees');
       }
     };
 
@@ -1444,6 +1446,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             console.log('Device orientation permission granted - listener added');
           } else {
             console.warn('Device orientation permission denied');
+            // Versuche trotzdem den Listener hinzuzufügen
+            window.addEventListener('deviceorientation', handleOrientationChange);
           }
         } else {
           // Fallback for browsers that don't require permission
