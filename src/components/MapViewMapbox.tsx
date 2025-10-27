@@ -849,7 +849,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .addTo(map);
       
       userMarkerRef.current = userMarker;
-      console.log('User marker updated:', shouldShowDirection ? 'with direction arrow' : 'normal mode', 'heading:', heading);
+      console.log('User marker updated: normal mode', 'heading:', heading);
     } catch (error) {
       console.error('Error updating user marker:', error);
     }
