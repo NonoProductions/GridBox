@@ -226,11 +226,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       } else {
         // Fallback für Browser ohne Permission API
         setCompassPermissionGranted(true);
-        console.log('Compass permission not required');
+        console.log('Compass permission not required - using fallback');
       }
     } catch (error) {
       console.error('Compass permission error:', error);
-      setCompassPermissionGranted(false);
+      // Fallback: Versuche trotzdem zu funktionieren
+      setCompassPermissionGranted(true);
     }
   };
 
@@ -736,10 +737,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Calculated heading from movement:', calculatedHeading);
         }
         
-        // Kompass-Richtung für Location Tracking
+        // Kompass-Richtung für Location Tracking - verwende Device Orientation direkt
         if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
-          // Kompass: Korrigiere die Richtung für die Kartenansicht
-          calculatedHeading = (360 - deviceOrientation) % 360;
+          // Device Orientation Event: alpha = rotation around z-axis (compass heading)
+          calculatedHeading = deviceOrientation;
           console.log('Compass direction for location tracking:', {
             deviceOrientation,
             compassHeading: calculatedHeading,
@@ -848,10 +849,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             if (shimmerElement) {
               let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : userHeading;
               
-              // Kompass-Richtung für Shimmer
+              // Kompass-Richtung für Shimmer - verwende Device Orientation direkt
               if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
-                // Kompass: Korrigiere die Richtung für die Kartenansicht
-                validHeading = (360 - deviceOrientation) % 360;
+                // Device Orientation Event: alpha = rotation around z-axis (compass heading)
+                validHeading = deviceOrientation;
                 console.log('Updated shimmer with compass direction:', {
                   deviceOrientation,
                   compassHeading: validHeading,
@@ -871,8 +872,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 validHeading = (validHeading + mapBearing) % 360;
               }
               
+              // Update compass rotation with smooth animation
               shimmerElement.style.transform = `rotate(${validHeading}deg)`;
-              shimmerElement.style.background = `conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg)`;
+              
+              // Update direction arrow rotation with smooth animation
+              const directionArrow = shimmerElement.querySelector('div[style*="border-bottom"]') as HTMLElement;
+              if (directionArrow) {
+                directionArrow.style.transform = `translate(-50%, -50%) rotate(${validHeading}deg)`;
+              }
               console.log('Updated direction indicator to:', validHeading, 'degrees', isIn3DMode ? '(3D mode)' : '(2D mode)', 'Device Orientation:', deviceOrientation);
             }
           }
@@ -919,12 +926,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Navigation mode or direction available: small marker with shimmer direction indicator
         let validHeading = heading !== null && heading !== undefined && !isNaN(heading) ? heading : (userHeading || 0);
         
-        // Kompass-Richtung für Shimmer
+        // Kompass-Richtung für Shimmer - verwende Device Orientation direkt
         if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
-          // Device Orientation Event: 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-          // Für Kompass: Korrigiere die Richtung für die Kartenansicht
-          // Kompass zeigt nach Norden (0°), aber Karte braucht andere Orientierung
-          validHeading = (360 - deviceOrientation) % 360;
+          // Device Orientation Event: alpha = rotation around z-axis (compass heading)
+          // 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
+          // Für die Karte: 0° = Norden auf der Karte
+          validHeading = deviceOrientation;
           console.log('Compass direction for shimmer:', {
             deviceOrientation,
             compassHeading: validHeading,
@@ -983,17 +990,82 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
             "></div>
             
-            <!-- Directional indicator - shows actual movement direction -->
+            <!-- Modern compass indicator like Google Maps/Apple Maps -->
             <div data-direction-shimmer style="
-              width: 60px;
-              height: 60px;
+              width: 80px;
+              height: 80px;
               position: absolute;
-              top: -16px;
-              left: -16px;
+              top: -26px;
+              left: -26px;
               border-radius: 50%;
-              background: conic-gradient(from ${validHeading - 45}deg, transparent 0deg, transparent 45deg, rgba(16, 185, 129, 0.1) 50deg, rgba(16, 185, 129, 0.6) 60deg, rgba(16, 185, 129, 0.8) 70deg, rgba(16, 185, 129, 0.6) 80deg, rgba(16, 185, 129, 0.1) 90deg, transparent 95deg, transparent 360deg);
+              background: radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.7) 70%, transparent 100%);
+              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
               transform: rotate(${validHeading}deg);
-            "></div>
+              transition: transform 0.3s ease-out;
+            ">
+              <!-- Compass needle pointing north (always points to map north) -->
+              <div style="
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 2px;
+                height: 30px;
+                background: linear-gradient(to bottom, #ff4444 0%, #ff4444 50%, #333333 50%, #333333 100%);
+                transform: translate(-50%, -50%);
+                border-radius: 1px;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+                z-index: 3;
+              "></div>
+              <!-- Direction arrow pointing to device heading -->
+              <div style="
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 0;
+                height: 0;
+                border-left: 8px solid transparent;
+                border-right: 8px solid transparent;
+                border-bottom: 20px solid #10b981;
+                transform: translate(-50%, -50%) rotate(${validHeading}deg);
+                filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+                transition: transform 0.3s ease-out;
+              "></div>
+              <!-- Compass ring with degree markers -->
+              <div style="
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                width: 70px;
+                height: 70px;
+                border: 2px solid rgba(16, 185, 129, 0.3);
+                border-radius: 50%;
+                transform: translate(-50%, -50%);
+              "></div>
+              <!-- North indicator -->
+              <div style="
+                position: absolute;
+                top: 8px;
+                left: 50%;
+                width: 2px;
+                height: 8px;
+                background: #ff4444;
+                transform: translateX(-50%);
+                border-radius: 1px;
+                z-index: 4;
+              "></div>
+              <!-- North letter indicator -->
+              <div style="
+                position: absolute;
+                top: 4px;
+                left: 50%;
+                color: #ff4444;
+                font-size: 10px;
+                font-weight: bold;
+                transform: translateX(-50%);
+                text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+                z-index: 4;
+              ">N</div>
+            </div>
           </div>
         `;
         userElement.style.width = '28px';
@@ -1446,24 +1518,27 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       });
       
       if (event.alpha !== null) {
-        // Device Orientation Event gibt die Rotation des Geräts relativ zum Norden an
+        // Device Orientation Event: alpha = rotation around z-axis (compass heading)
         // 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-        setDeviceOrientation(event.alpha);
+        // Für die Karte müssen wir das umkehren: 0° = Norden auf der Karte
+        let compassHeading = event.alpha;
         
-        // Rotate map based on device orientation during navigation
-        if (isNavigating && mapRef.current && !isLocationFixed) {
-          const map = mapRef.current;
-          // Korrigiere die Kartenrotation für die richtige Ausrichtung
-          map.setBearing(-event.alpha);
+        // Normalisiere auf 0-360°
+        if (compassHeading < 0) {
+          compassHeading += 360;
         }
         
-        // Update user marker with new device orientation
+        setDeviceOrientation(compassHeading);
+        
+        // Update user heading with compass data for better accuracy
+        setUserHeading(compassHeading);
+        
+        // Update user marker with new compass orientation
         if (userLocation) {
-          // Verwende Device Orientation als primäre Richtung
-          updateUserMarker(userLocation, null, isNavigating);
+          updateUserMarker(userLocation, compassHeading, isNavigating);
         }
         
-        console.log('Device orientation updated:', event.alpha, 'degrees');
+        console.log('Compass heading updated:', compassHeading, 'degrees');
       }
     };
 
@@ -1476,21 +1551,25 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           console.log('Device orientation permission response:', response);
           
           if (response === 'granted') {
+            setCompassPermissionGranted(true);
             window.addEventListener('deviceorientation', handleOrientationChange);
             console.log('Device orientation permission granted - listener added');
           } else {
-            console.warn('Device orientation permission denied');
+            console.warn('Device orientation permission denied - trying fallback');
+            setCompassPermissionGranted(false);
             // Versuche trotzdem den Listener hinzuzufügen
             window.addEventListener('deviceorientation', handleOrientationChange);
           }
         } else {
           // Fallback for browsers that don't require permission
           console.log('Device orientation permission not required - adding listener');
+          setCompassPermissionGranted(true);
           window.addEventListener('deviceorientation', handleOrientationChange);
         }
       } catch (error) {
         console.error('Device orientation permission error:', error);
         // Fallback: try to add listener anyway
+        setCompassPermissionGranted(true);
         window.addEventListener('deviceorientation', handleOrientationChange);
       }
     };
