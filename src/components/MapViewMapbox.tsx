@@ -710,8 +710,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Funktion zur Positionsglättung für flüssigere Standortaktualisierung
   const smoothLocation = (newLocation: {lat: number, lng: number}): {lat: number, lng: number} => {
     const now = Date.now();
-    const maxHistory = 5; // Nutze die letzten 5 Positionen für Glättung
-    const maxAge = 2000; // Berücksichtige nur Positionen der letzten 2 Sekunden
+    const maxHistory = 3; // Nutze die letzten 3 Positionen für Glättung (reduziert für bessere Performance)
+    const maxAge = 1500; // Berücksichtige nur Positionen der letzten 1.5 Sekunden
     
     // Füge neue Position zur Historie hinzu
     locationHistoryRef.current.push({
@@ -730,26 +730,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       locationHistoryRef.current = locationHistoryRef.current.slice(-maxHistory);
     }
     
-    // Berechne gewichteten Durchschnitt (neuere Positionen haben mehr Gewicht)
-    if (locationHistoryRef.current.length === 0) {
+    // Wenn nur eine Position vorhanden ist, gib sie direkt zurück
+    if (locationHistoryRef.current.length <= 1) {
       return newLocation;
     }
     
-    let totalWeight = 0;
-    let weightedLat = 0;
-    let weightedLng = 0;
+    // Einfacher Durchschnitt für bessere Performance
+    let avgLat = 0;
+    let avgLng = 0;
+    const count = locationHistoryRef.current.length;
     
-    locationHistoryRef.current.forEach((pos, index) => {
-      // Exponentielles Gewicht: neuere Positionen sind wichtiger
-      const weight = Math.pow(1.5, index);
-      totalWeight += weight;
-      weightedLat += pos.lat * weight;
-      weightedLng += pos.lng * weight;
+    locationHistoryRef.current.forEach((pos) => {
+      avgLat += pos.lat;
+      avgLng += pos.lng;
     });
     
     return {
-      lat: weightedLat / totalWeight,
-      lng: weightedLng / totalWeight
+      lat: avgLat / count,
+      lng: avgLng / count
     };
   };
 
@@ -757,27 +755,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const updateMapPosition = (
     location: {lat: number, lng: number}, 
     bearing: number, 
-    distance: number
+    distance: number,
+    use3D: boolean = false
   ) => {
     if (!mapRef.current || !isFollowingLocation) return;
     
     const map = mapRef.current;
     
-    // Dynamische Animationsdauer basierend auf Distanz
-    // Kleinere Bewegungen = kürzere Animation für flüssigere Updates
-    let duration;
-    if (distance < 0.000005) { // Sehr kleine Bewegung (~0.5m)
-      duration = 100;
-    } else if (distance < 0.00001) { // Kleine Bewegung (~1m)
-      duration = 200;
-    } else if (distance < 0.00005) { // Mittlere Bewegung (~5m)
-      duration = 300;
-    } else { // Größere Bewegung
-      duration = 500;
-    }
+    // Längere Animationsdauer für flüssigere Übergänge
+    const duration = 1000; // Konstante 1 Sekunde für sanfte Animationen
     
     // Verwende easeTo für flüssige Animation
-    if (is3DFollowing) {
+    if (use3D) {
       // 3D-Modus: Mit Bearing und Pitch
       map.easeTo({
         center: [location.lng, location.lat],
@@ -880,7 +869,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
           
           // Verwende optimierte Kartenaktualisierung für flüssigere Bewegung
-          updateMapPosition(smoothedLocation, targetBearing, distance);
+          updateMapPosition(smoothedLocation, targetBearing, distance, is3DFollowing);
         }
         
         // Speichere aktuelle Position für nächste Heading-Berechnung
@@ -900,8 +889,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 0, // Immer frische GPS-Daten holen
-        timeout: 5000 // 5 Sekunden Timeout für stabilere Verbindung
+        maximumAge: 1000, // Akzeptiere GPS-Daten die bis zu 1 Sekunde alt sind für bessere Performance
+        timeout: 10000 // 10 Sekunden Timeout
       }
     );
     
@@ -1034,17 +1023,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           ? -deviceOrientation + 180 
           : map.getBearing();
         
-        // Dynamische Animationsdauer basierend auf Bewegung
-        let duration;
-        if (movementDistance < 0.000005) { // Sehr kleine Bewegung (~0.5m)
-          duration = 100;
-        } else if (movementDistance < 0.00001) { // Kleine Bewegung (~1m)
-          duration = 200;
-        } else if (movementDistance < 0.00005) { // Mittlere Bewegung (~5m)
-          duration = 300;
-        } else { // Größere Bewegung
-          duration = 500;
-        }
+        // Sanfte Animation mit fester Dauer
+        const duration = 1000; // 1 Sekunde für flüssige Bewegung
         
         map.easeTo({
           center: [currentLocation.lng, currentLocation.lat],
@@ -1538,14 +1518,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           container: mapContainer,
           style: isDarkMode ? darkStyle : lightStyle,
           center: [center.lng, center.lat], // Use current user location
-          zoom: 17, // Zurück zum ursprünglichen Zoom-Level
+          zoom: 17,
           pitch: 0,
           bearing: 0,
-          // Optimierungen für flüssigere Performance
-          antialias: true, // Bessere Grafik-Qualität
           attributionControl: false, // Reduziert Overhead
-          refreshExpiredTiles: true, // Aktualisiert Tiles automatisch
-          fadeDuration: 150 // Schnellere Tile-Übergänge
+          fadeDuration: 300 // Standard Tile-Übergänge
         });
 
         mapRef.current = map;
