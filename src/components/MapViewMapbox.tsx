@@ -45,6 +45,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [lastLocation, setLastLocation] = useState<{lat: number, lng: number} | null>(null);
   const [deviceOrientation, setDeviceOrientation] = useState<number>(0);
   const [isFollowingLocation, setIsFollowingLocation] = useState<boolean>(false);
+  const [isCentered, setIsCentered] = useState<boolean>(false); // Trackt ob gerade zentriert wurde
+  const [isStationFollowingActive, setIsStationFollowingActive] = useState<boolean>(false); // Trackt ob Station-Following aktiv ist
   const [permissionRequested, setPermissionRequested] = useState<boolean>(false);
   const [locationPermissionGranted, setLocationPermissionGranted] = useState<boolean>(false);
   const [showPermissionModal, setShowPermissionModal] = useState<boolean>(false);
@@ -258,7 +260,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
-      // Beende Following-Modus wenn Navigation gestartet wird
+      // Beende Following-Modus und Zentrierung wenn Navigation gestartet wird
+      setIsCentered(false);
       if (isFollowingLocation) {
         console.log('Navigation started - deactivating following mode');
         setIsFollowingLocation(false);
@@ -770,12 +773,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Following-Modus: Karte folgt der Position mit 3D-Ansicht
         if (isFollowingLocation && mapRef.current && !isNavigating) {
           const map = mapRef.current;
-          map.setCenter([newLocation.lng, newLocation.lat]);
-          // Behalte 3D-Ansicht bei
-          const currentPitch = map.getPitch();
-          if (currentPitch < 45) {
-            map.setPitch(60); // 3D-Ansicht beibehalten
+          
+          // Berechne Bearing basierend auf Geräteausrichtung oder Bewegungsrichtung
+          let targetBearing = map.getBearing();
+          if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
+            targetBearing = -deviceOrientation + 180;
+          } else if (calculatedHeading !== null && !isNaN(calculatedHeading)) {
+            targetBearing = -calculatedHeading;
           }
+          
+          // Verwende easeTo für flüssige Animation mit Rotation
+          map.easeTo({
+            center: [newLocation.lng, newLocation.lat],
+            bearing: targetBearing,
+            pitch: 60, // 3D-Ansicht beibehalten
+            duration: 300, // 300ms für flüssige Bewegung
+            essential: true // Respektiert prefers-reduced-motion
+          });
         }
         
         // Speichere aktuelle Position für nächste Heading-Berechnung
@@ -788,8 +802,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 0, // 0 seconds - sofortige Updates
-        timeout: 500 // 0.5 seconds - extrem schneller Timeout
+        maximumAge: 100, // 100ms Cache für flüssigere Updates
+        timeout: 5000 // 5 Sekunden Timeout für stabilere Verbindung
       }
     );
     
@@ -897,20 +911,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Center map on user location during navigation (smooth following) - only if not fixed
       if (!isLocationFixed) {
-        // Use setCenter for immediate updates without animation
-        map.setCenter([currentLocation.lng, currentLocation.lat]);
-        
-        // Keep zoom at navigation level
+        // Verwende easeTo für flüssige Bewegung während der Navigation
         const currentZoom = map.getZoom();
-        if (currentZoom < 18) {
-          map.setZoom(19); // High zoom for detailed navigation
-        }
+        const targetZoom = currentZoom < 18 ? 19 : currentZoom;
         
         // Apply device orientation rotation if available and valid
-        if (deviceOrientation !== 0 && !isNaN(deviceOrientation)) {
-          map.setBearing(-deviceOrientation + 180); // Add 180° to correct the rotation
-        }
-        console.log('Following mode: Map centered on user location');
+        const targetBearing = (deviceOrientation !== 0 && !isNaN(deviceOrientation)) 
+          ? -deviceOrientation + 180 
+          : map.getBearing();
+        
+        map.easeTo({
+          center: [currentLocation.lng, currentLocation.lat],
+          zoom: targetZoom,
+          bearing: targetBearing,
+          duration: 300, // 300ms für flüssige Bewegung
+          essential: true // Respektiert prefers-reduced-motion
+        });
+        
+        console.log('Following mode: Map centered on user location (smooth)');
       } else {
         // In fixed mode, only update the user marker position without moving the map
         console.log('Fixed mode: Map will not follow user movement, only marker updates');
@@ -997,6 +1015,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setIsFollowingLocation(false);
         stopLocationTracking();
       }
+      // Deaktiviere Station-Following wenn neue Station ausgewählt wird
+      setIsStationFollowingActive(false);
       
       // Debug: Log station coordinates and validate them
       console.log('Highlighting station:', station.name, 'Coordinates:', { lat: station.lat, lng: station.lng });
@@ -1199,6 +1219,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Reset selected station and panel state
       setSelectedStation(null);
       setIsPanelExpanded(false);
+      setIsStationFollowingActive(false); // Deaktiviere Station-Following
+      
+      // Deaktiviere auch den normalen Following-Modus
+      if (isFollowingLocation) {
+        console.log('Clearing highlight - deactivating following mode');
+        setIsFollowingLocation(false);
+        stopLocationTracking();
+      }
       
       console.log('Station highlight and route cleared');
     } catch (error) {
@@ -1392,7 +1420,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
         // Add event listeners for map interactions
         map.on('dragstart', () => {
-          // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus
+          // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus und Zentrierung
+          setIsCentered(false); // Nicht mehr zentriert
+          setIsStationFollowingActive(false); // Deaktiviere Station-Following (grüner Rand)
           if (isFollowingLocation) {
             console.log('User manually moved map - deactivating following mode');
             setIsFollowingLocation(false);
@@ -1401,7 +1431,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         });
 
         map.on('zoomstart', () => {
-          // Wenn Benutzer zoomt, beende Following-Modus
+          // Wenn Benutzer zoomt, beende Following-Modus und Zentrierung
+          setIsCentered(false); // Nicht mehr zentriert
+          setIsStationFollowingActive(false); // Deaktiviere Station-Following (grüner Rand)
           if (isFollowingLocation) {
             console.log('User zoomed map - deactivating following mode');
             setIsFollowingLocation(false);
@@ -1561,6 +1593,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Zustand 3: Zurück zu zentrieren (Following-Modus beenden)
       console.log('Deactivating following mode - returning to center');
       setIsFollowingLocation(false);
+      setIsCentered(false);
       
       // Stoppe Location Tracking
       stopLocationTracking();
@@ -1578,90 +1611,130 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         console.log('Following mode deactivated - back to normal view');
       }
-    } else {
-      // Zustand 1 oder 2: Erst zentrieren, dann Following-Modus
-      // Prüfe ob bereits zentriert (durch Vergleich der aktuellen Kartenmitte mit Benutzerposition)
-      const currentCenter = map.getCenter();
-      const isAlreadyCentered = userLocation && 
-        Math.abs(currentCenter.lng - userLocation.lng) < 0.0001 && 
-        Math.abs(currentCenter.lat - userLocation.lat) < 0.0001;
+    } else if (isCentered && userLocation) {
+      // Zustand 2: Bereits zentriert -> Following-Modus aktivieren (3D-Ansicht)
+      console.log('Already centered - activating following mode with 3D view');
+      setIsFollowingLocation(true);
+        
+      // Starte Location Tracking für Following-Modus
+      if (watchId === null) {
+        startLocationTracking();
+      }
       
-      if (isAlreadyCentered) {
-        // Zustand 2: Following-Modus aktivieren (3D-Ansicht)
-        console.log('Already centered - activating following mode with 3D view');
-        setIsFollowingLocation(true);
+      // 3D-Ansicht aktivieren
+      map.flyTo({
+        center: [userLocation.lng, userLocation.lat],
+        zoom: 19, // Höherer Zoom für Following
+        bearing: 0,
+        pitch: 60, // 3D-Ansicht - schräger Blick
+        essential: true,
+        duration: 1500
+      });
+      
+      console.log('Following mode activated with 3D view');
+    } else {
+      // Zustand 1: Normal zentrieren
+      console.log('Centering on user location');
+      
+      // Verwende die bereits gecachte Position wenn vorhanden
+      if (userLocation) {
+        map.flyTo({
+          center: [userLocation.lng, userLocation.lat],
+          zoom: 17,
+          bearing: 0,
+          pitch: 0, // Reset pitch to 0 for normal view
+          essential: true,
+          duration: 1500
+        });
         
-        if (userLocation) {
-          // Starte Location Tracking für Following-Modus
-          if (watchId === null) {
-            startLocationTracking();
-          }
-          
-          // 3D-Ansicht aktivieren
-          map.flyTo({
-            center: [userLocation.lng, userLocation.lat],
-            zoom: 19, // Höherer Zoom für Following
-            bearing: 0,
-            pitch: 60, // 3D-Ansicht - schräger Blick
-            essential: true,
-            duration: 1500
-          });
-          
-          console.log('Following mode activated with 3D view');
-        }
-      } else {
-        // Zustand 1: Normal zentrieren
-        console.log('Centering on user location');
+        // Markiere als zentriert nach der Animation
+        setTimeout(() => {
+          setIsCentered(true);
+        }, 1500);
         
-        // Verwende die bereits gecachte Position wenn vorhanden
-        if (userLocation) {
-          map.flyTo({
-            center: [userLocation.lng, userLocation.lat],
-            zoom: 17,
-            bearing: 0,
-            pitch: 0, // Reset pitch to 0 for normal view
-            essential: true
-          });
-          return;
-        }
-        
-        try {
-          navigator.geolocation.getCurrentPosition(
-            (pos) => {
-              try {
-                const { latitude, longitude, heading } = pos.coords;
-                // Update user location state
-                setUserLocation({ lat: latitude, lng: longitude });
-                if (heading !== null && !isNaN(heading)) {
-                  setUserHeading(heading);
-                }
-                map.flyTo({
-                  center: [longitude, latitude],
-                  zoom: 17,
-                  bearing: 0,
-                  pitch: 0, // Reset pitch to 0 for normal view
-                  essential: true
-                });
-                // Update user marker with direction
-                updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
-              } catch (error) {
-                console.error('Error updating user location:', error);
+        console.log('Map centered on user location');
+        return;
+      }
+      
+      try {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            try {
+              const { latitude, longitude, heading } = pos.coords;
+              // Update user location state
+              setUserLocation({ lat: latitude, lng: longitude });
+              if (heading !== null && !isNaN(heading)) {
+                setUserHeading(heading);
               }
-            },
-            (error) => {
-              console.error('Geolocation error:', error);
-            },
-            { 
-              enableHighAccuracy: true,
-              maximumAge: 30000,
-              timeout: 10000
+              map.flyTo({
+                center: [longitude, latitude],
+                zoom: 17,
+                bearing: 0,
+                pitch: 0, // Reset pitch to 0 for normal view
+                essential: true,
+                duration: 1500
+              });
+              
+              // Markiere als zentriert nach der Animation
+              setTimeout(() => {
+                setIsCentered(true);
+              }, 1500);
+              
+              // Update user marker with direction
+              updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
+              console.log('Map centered on user location');
+            } catch (error) {
+              console.error('Error updating user location:', error);
             }
-          );
-        } catch (error) {
-          console.error('Error with geolocation:', error);
-        }
+          },
+          (error) => {
+            console.error('Geolocation error:', error);
+          },
+          { 
+            enableHighAccuracy: true,
+            maximumAge: 30000,
+            timeout: 10000
+          }
+        );
+      } catch (error) {
+        console.error('Error with geolocation:', error);
       }
     }
+  }
+
+  // Funktion für den Button beim Station-Panel: Zentriert auf Station und aktiviert Following-Modus
+  async function centerOnStationAndFollow() {
+    if (!mapRef.current || !selectedStation || !userLocation) return;
+    const map = mapRef.current;
+    
+    console.log('Centering on station and activating following mode');
+    
+    // Gleicher Offset wie beim Klick auf die Station
+    const latOffset = -0.0013;
+    const targetCenter = [selectedStation.lng, selectedStation.lat + latOffset];
+    
+    // Zentriere auf die Station (gleiche Position wie das Panel zeigt)
+    map.flyTo({
+      center: targetCenter as [number, number],
+      zoom: 16, // Gleicher Zoom wie beim Klick auf die Station
+      bearing: 0,
+      pitch: 0,
+      essential: true,
+      duration: 1000
+    });
+    
+    // Nach der Animation: Aktiviere Following-Modus
+    setTimeout(() => {
+      setIsFollowingLocation(true);
+      setIsStationFollowingActive(true); // Aktiviere den grünen Rand
+      
+      // Starte Location Tracking für Following-Modus
+      if (watchId === null) {
+        startLocationTracking();
+      }
+      
+      console.log('Station-following mode activated');
+    }, 1000);
   }
 
   return (
@@ -1821,28 +1894,53 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
       {/* QR-Code Scannen Button - über dem Info-Panel, nur wenn Panel nicht bewegt wird */}
       {selectedStation && !showStationList && !isPanelExpanded && dragOffset === 0 && !isFullScreenNavigation && (
-        <div className="fixed bottom-72 left-0 right-0 z-[1000] flex justify-center px-4 animate-slide-up">
+        <>
+          {/* QR-Code Scannen Button - zentriert */}
+          <div className="fixed bottom-72 left-0 right-0 z-[1000] flex justify-center px-4 animate-slide-up">
+            <button
+              type="button"
+              onClick={() => {
+                setScanning(true);
+              }}
+              className={`flex items-center gap-3 px-6 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+                isDarkMode === true
+                  ? 'bg-black/30 text-white border border-white/30 hover:bg-black/40' 
+                  : 'bg-white/40 text-slate-900 border border-slate-400/40 hover:bg-white/50'
+              }`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+                <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+                <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+                <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+                <rect x="7" y="7" width="10" height="10" rx="2" />
+              </svg>
+              <span className="text-sm font-semibold">QR-Code Scannen</span>
+            </button>
+          </div>
+
+          {/* Positionierungs-Button - rechts, größer */}
           <button
             type="button"
-            onClick={() => {
-              setScanning(true);
-            }}
-            className={`flex items-center gap-3 px-6 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
-              isDarkMode === true
-                ? 'bg-black/30 text-white border border-white/30 hover:bg-black/40' 
-                : 'bg-white/40 text-slate-900 border border-slate-400/40 hover:bg-white/50'
+            onClick={centerOnStationAndFollow}
+            aria-label="Auf Station zentrieren und Position verfolgen"
+            className={`fixed bottom-72 right-4 z-[1001] flex items-center justify-center gap-2 px-4 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg animate-slide-up ${
+              isStationFollowingActive 
+                ? 'bg-emerald-600 text-white border-2 border-emerald-400 hover:bg-emerald-700 animate-pulse' 
+                : isDarkMode === true
+                  ? 'bg-black/30 text-white border border-white/30 hover:bg-black/40' 
+                  : 'bg-white/40 text-slate-900 border border-slate-400/40 hover:bg-white/50'
             }`}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-              <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-              <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-              <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-              <rect x="7" y="7" width="10" height="10" rx="2" />
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
+              <circle cx="12" cy="12" r="4" fill={isStationFollowingActive ? "currentColor" : "none"} />
+              {isStationFollowingActive && (
+                <circle cx="12" cy="12" r="2" fill="white" />
+              )}
             </svg>
-            <span className="text-sm font-semibold">QR-Code Scannen</span>
           </button>
-        </div>
+        </>
       )}
 
       {/* Selected Station Info Panel - Full Width from Bottom */}
@@ -2241,10 +2339,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <button
           type="button"
           onClick={locateMe}
-          aria-label={isFollowingLocation ? "Position folgt (grün) - zum Zentrieren wechseln" : "Meine Position zentrieren"}
+          aria-label={
+            isFollowingLocation 
+              ? "3D-Modus aktiv (klicken zum Deaktivieren)" 
+              : isCentered
+                ? "Zentriert (klicken für 3D-Modus)"
+                : "Meine Position zentrieren"
+          }
           className={`fixed bottom-28 right-4 z-[1000] grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
             isFollowingLocation 
-              ? 'bg-emerald-600 text-white border border-emerald-500 hover:bg-emerald-700' // Grüner Hintergrund im Following-Modus
+              ? 'bg-emerald-600 text-white border-2 border-emerald-400 hover:bg-emerald-700 animate-pulse' // Grüner Hintergrund + Puls-Animation im Following-Modus
               : isDarkMode === true
                 ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
                 : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30'
@@ -2252,9 +2356,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
-            <circle cx="12" cy="12" r="4" />
+            <circle cx="12" cy="12" r="4" fill={isFollowingLocation ? "currentColor" : "none"} />
             {isFollowingLocation && (
-              <path d="M12 8v8M8 12h8" strokeWidth="1.5" />
+              <circle cx="12" cy="12" r="2" fill="white" />
             )}
           </svg>
         </button>
