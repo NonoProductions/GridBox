@@ -1418,48 +1418,37 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Add event listeners for map interactions
         map.on('dragstart', () => {
           // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus komplett
+          console.log('User drag detected - deactivating following mode');
           setIsCentered(false);
           setIsStationFollowingActive(false);
-          if (isFollowingLocation) {
-            console.log('User manually moved map - deactivating following mode');
-            setIsFollowingLocation(false);
-            setIs3DFollowing(false); // Auch 3D-Following zurücksetzen
+          setIsFollowingLocation(false);
+          setIs3DFollowing(false);
+          
+          if (watchId !== null) {
             stopLocationTracking();
-            
-            // Zurück zur normalen Ansicht
-            setTimeout(() => {
-              if (map && map.getPitch() > 30) {
-                map.easeTo({
-                  pitch: 0,
-                  duration: 500
-                });
-              }
-            }, 100);
+          }
+          
+          // Zurück zur normalen Ansicht
+          if (map.getPitch() > 30) {
+            map.easeTo({
+              pitch: 0,
+              duration: 500
+            });
           }
         });
 
-        map.on('zoomstart', () => {
-          // Nur deaktivieren, wenn der User manuell zoomt (nicht bei programmatischem Zoom)
-          const isUserZoom = !map.isMoving();
-          if (isUserZoom) {
-            setIsCentered(false);
-            setIsStationFollowingActive(false);
-            if (isFollowingLocation) {
-              console.log('User zoomed map - deactivating following mode');
-              setIsFollowingLocation(false);
-              setIs3DFollowing(false); // Auch 3D-Following zurücksetzen
-              stopLocationTracking();
-              
-              // Zurück zur normalen Ansicht
-              setTimeout(() => {
-                if (map && map.getPitch() > 30) {
-                  map.easeTo({
-                    pitch: 0,
-                    duration: 500
-                  });
-                }
-              }, 100);
-            }
+        map.on('pitchstart', () => {
+          // Nur deaktivieren wenn Following aktiv ist (um programmatische Pitch-Änderungen zu ignorieren)
+          if (!isFollowingLocation) return;
+          
+          console.log('User pitch detected - deactivating following mode');
+          setIsCentered(false);
+          setIsStationFollowingActive(false);
+          setIsFollowingLocation(false);
+          setIs3DFollowing(false);
+          
+          if (watchId !== null) {
+            stopLocationTracking();
           }
         });
 
