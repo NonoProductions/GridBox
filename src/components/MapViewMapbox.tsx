@@ -1496,8 +1496,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
 
     initMap();
-    
-    // Cleanup function beim Unmount
+  }, [center, isDarkMode, locationLoading, userLocation]);
+
+  // Cleanup beim Component Unmount
+  useEffect(() => {
     return () => {
       stopLocationTracking();
       if (mapRef.current) {
@@ -1505,7 +1507,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         mapRef.current = null;
       }
     };
-  }, [center, isDarkMode, locationLoading, userLocation]);
+  }, []);
 
   // Effect to change map style when theme changes
   useEffect(() => {
@@ -1536,47 +1538,48 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
   // Automatisches Starten/Stoppen des Location Tracking bei Following-Modus
   useEffect(() => {
+    // Nur ausführen wenn Map und User Location bereit sind
+    if (!mapRef.current || !userLocation) return;
+    
     if (isFollowingLocation && !isNavigating) {
       // Following-Modus aktiviert - starte Location Tracking
-      if (watchId === null && mapRef.current && userLocation) {
+      if (watchId === null) {
         console.log('Following mode activated - starting location tracking');
         startLocationTracking();
-        
-        // Setze Pitch basierend auf 2D/3D-Modus
-        const map = mapRef.current;
-        if (is3DFollowing) {
-          // 3D-Ansicht
-          map.easeTo({
-            pitch: 60,
-            bearing: deviceOrientation !== 0 ? -deviceOrientation + 180 : map.getBearing(),
-            duration: 800,
-            essential: true
-          });
-        } else {
-          // 2D-Ansicht
-          map.easeTo({
-            pitch: 0,
-            bearing: 0,
-            duration: 800,
-            essential: true
-          });
-        }
       }
-    } else if (!isFollowingLocation && !isNavigating) {
-      // Following-Modus deaktiviert - stoppe Location Tracking (nur wenn nicht navigiert wird)
-      if (watchId !== null) {
-        console.log('Following mode deactivated - stopping location tracking');
-        stopLocationTracking();
-        
-        // Zurück zur 2D-Ansicht
-        if (mapRef.current) {
-          const map = mapRef.current;
-          map.easeTo({
-            pitch: 0,
-            duration: 800,
-            essential: true
-          });
-        }
+      
+      // Setze Pitch basierend auf 2D/3D-Modus
+      const map = mapRef.current;
+      if (is3DFollowing) {
+        // 3D-Ansicht
+        map.easeTo({
+          pitch: 60,
+          bearing: deviceOrientation !== 0 ? -deviceOrientation + 180 : map.getBearing(),
+          duration: 800,
+          essential: true
+        });
+      } else {
+        // 2D-Ansicht
+        map.easeTo({
+          pitch: 0,
+          bearing: 0,
+          duration: 800,
+          essential: true
+        });
+      }
+    } else if (!isFollowingLocation && !isNavigating && watchId !== null) {
+      // Following-Modus deaktiviert - stoppe Location Tracking nur wenn es läuft
+      console.log('Following mode deactivated - stopping location tracking');
+      stopLocationTracking();
+      
+      // Zurück zur 2D-Ansicht
+      if (mapRef.current) {
+        const map = mapRef.current;
+        map.easeTo({
+          pitch: 0,
+          duration: 800,
+          essential: true
+        });
       }
     }
   }, [isFollowingLocation, is3DFollowing, isNavigating]);
