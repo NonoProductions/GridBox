@@ -45,6 +45,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [lastLocation, setLastLocation] = useState<{lat: number, lng: number} | null>(null);
   const [deviceOrientation, setDeviceOrientation] = useState<number>(0);
   const [isFollowingLocation, setIsFollowingLocation] = useState<boolean>(false);
+  const [is3DFollowing, setIs3DFollowing] = useState<boolean>(false); // Trackt ob 3D-Following aktiv ist
   const [isCentered, setIsCentered] = useState<boolean>(false); // Trackt ob gerade zentriert wurde
   const [isStationFollowingActive, setIsStationFollowingActive] = useState<boolean>(false); // Trackt ob Station-Following aktiv ist
   const [permissionRequested, setPermissionRequested] = useState<boolean>(false);
@@ -62,6 +63,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const navigationSourceRef = useRef<string | null>(null);
   const touchStartY = useRef<number>(0);
   const isDragging = useRef(false);
+  // Position smoothing für flüssigere Standortaktualisierung
+  const locationHistoryRef = useRef<{lat: number, lng: number, timestamp: number}[]>([]);
+  const smoothedLocationRef = useRef<{lat: number, lng: number} | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
   const stationManager = StationManager({ 
@@ -115,6 +120,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             setLocationLoading(false);
             setLocationPermissionGranted(true);
             setShowPermissionModal(false);
+            
             console.log('User location obtained:', { lat: latitude, lng: longitude, heading });
           },
           (error) => {
@@ -265,6 +271,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       if (isFollowingLocation) {
         console.log('Navigation started - deactivating following mode');
         setIsFollowingLocation(false);
+        setIs3DFollowing(false);
         stopLocationTracking();
       }
       
@@ -700,6 +707,99 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     }
   };
 
+  // Funktion zur Positionsglättung für flüssigere Standortaktualisierung
+  const smoothLocation = (newLocation: {lat: number, lng: number}): {lat: number, lng: number} => {
+    const now = Date.now();
+    const maxHistory = 5; // Nutze die letzten 5 Positionen für Glättung
+    const maxAge = 2000; // Berücksichtige nur Positionen der letzten 2 Sekunden
+    
+    // Füge neue Position zur Historie hinzu
+    locationHistoryRef.current.push({
+      lat: newLocation.lat,
+      lng: newLocation.lng,
+      timestamp: now
+    });
+    
+    // Entferne alte Positionen
+    locationHistoryRef.current = locationHistoryRef.current.filter(
+      pos => now - pos.timestamp < maxAge
+    );
+    
+    // Behalte nur die letzten N Positionen
+    if (locationHistoryRef.current.length > maxHistory) {
+      locationHistoryRef.current = locationHistoryRef.current.slice(-maxHistory);
+    }
+    
+    // Berechne gewichteten Durchschnitt (neuere Positionen haben mehr Gewicht)
+    if (locationHistoryRef.current.length === 0) {
+      return newLocation;
+    }
+    
+    let totalWeight = 0;
+    let weightedLat = 0;
+    let weightedLng = 0;
+    
+    locationHistoryRef.current.forEach((pos, index) => {
+      // Exponentielles Gewicht: neuere Positionen sind wichtiger
+      const weight = Math.pow(1.5, index);
+      totalWeight += weight;
+      weightedLat += pos.lat * weight;
+      weightedLng += pos.lng * weight;
+    });
+    
+    return {
+      lat: weightedLat / totalWeight,
+      lng: weightedLng / totalWeight
+    };
+  };
+
+  // Funktion für sanfte Kartenaktualisierung mit optimierter Animation
+  const updateMapPosition = (
+    location: {lat: number, lng: number}, 
+    bearing: number, 
+    distance: number
+  ) => {
+    if (!mapRef.current || !isFollowingLocation) return;
+    
+    const map = mapRef.current;
+    
+    // Dynamische Animationsdauer basierend auf Distanz
+    // Kleinere Bewegungen = kürzere Animation für flüssigere Updates
+    let duration;
+    if (distance < 0.000005) { // Sehr kleine Bewegung (~0.5m)
+      duration = 100;
+    } else if (distance < 0.00001) { // Kleine Bewegung (~1m)
+      duration = 200;
+    } else if (distance < 0.00005) { // Mittlere Bewegung (~5m)
+      duration = 300;
+    } else { // Größere Bewegung
+      duration = 500;
+    }
+    
+    // Verwende easeTo für flüssige Animation
+    if (is3DFollowing) {
+      // 3D-Modus: Mit Bearing und Pitch
+      map.easeTo({
+        center: [location.lng, location.lat],
+        bearing: bearing,
+        pitch: 60,
+        duration: duration,
+        easing: (t) => t, // Lineare Interpolation für gleichmäßige Bewegung
+        essential: true
+      });
+    } else {
+      // 2D-Modus: Ohne Bearing und Pitch
+      map.easeTo({
+        center: [location.lng, location.lat],
+        bearing: 0,
+        pitch: 0,
+        duration: duration,
+        easing: (t) => t,
+        essential: true
+      });
+    }
+  };
+
   // Function to toggle voice navigation
   const toggleVoiceNavigation = () => {
     setVoiceEnabled(!voiceEnabled);
@@ -718,10 +818,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
         const { latitude, longitude, heading, speed, accuracy } = position.coords;
-        const newLocation = { lat: latitude, lng: longitude };
+        const rawLocation = { lat: latitude, lng: longitude };
+        
+        // Wende Positionsglättung an für flüssigere Darstellung
+        const smoothedLocation = smoothLocation(rawLocation);
+        
+        // Berechne Distanz zur vorherigen Position
+        let distance = 0;
+        if (smoothedLocationRef.current) {
+          const dLat = smoothedLocation.lat - smoothedLocationRef.current.lat;
+          const dLng = smoothedLocation.lng - smoothedLocationRef.current.lng;
+          distance = Math.sqrt(dLat * dLat + dLng * dLng);
+        }
+        
+        // Aktualisiere geglättete Position
+        smoothedLocationRef.current = smoothedLocation;
         
         // Update user location and heading
-        setUserLocation(newLocation);
+        setUserLocation(smoothedLocation);
         
         // Verbesserte Heading-Verarbeitung für mobile Geräte
         let calculatedHeading = userHeading; // Fallback auf aktuellen Heading
@@ -732,42 +846,25 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           setUserHeading(heading);
         } else if (lastLocation && speed && speed > 0.5) {
           // Fallback: Berechne Heading basierend auf Bewegungsrichtung
-          const deltaLat = newLocation.lat - lastLocation.lat;
-          const deltaLng = newLocation.lng - lastLocation.lng;
+          const deltaLat = smoothedLocation.lat - lastLocation.lat;
+          const deltaLng = smoothedLocation.lng - lastLocation.lng;
           const bearing = Math.atan2(deltaLng, deltaLat) * 180 / Math.PI;
           calculatedHeading = (bearing + 360) % 360; // Normalisiere auf 0-360°
           setUserHeading(calculatedHeading);
-          console.log('Calculated heading from movement:', calculatedHeading);
         }
         
         // Kompass-Richtung für Location Tracking - verwende Device Orientation direkt
         if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
           // Device Orientation Event: alpha = rotation around z-axis (compass heading)
           calculatedHeading = deviceOrientation;
-          console.log('Compass direction for location tracking:', {
-            deviceOrientation,
-            compassHeading: calculatedHeading,
-            gpsHeading: heading,
-            speed,
-            accuracy
-          });
-        } else {
-          console.log('No compass orientation in location tracking:', {
-            deviceOrientation,
-            compassPermissionGranted,
-            gpsHeading: heading,
-            calculatedHeading,
-            speed,
-            accuracy
-          });
         }
         
         // Update user marker on map with direction - always show direction if available
-        updateUserMarker(newLocation, calculatedHeading, isNavigating);
+        updateUserMarker(smoothedLocation, calculatedHeading, isNavigating);
         
         // Update navigation if active
         if (isNavigating && selectedStation) {
-          updateNavigationProgress(newLocation, selectedStation);
+          updateNavigationProgress(smoothedLocation, selectedStation);
         }
         
         // Following-Modus: Karte folgt der Position mit 3D-Ansicht
@@ -782,27 +879,28 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             targetBearing = -calculatedHeading;
           }
           
-          // Verwende easeTo für flüssige Animation mit Rotation
-          map.easeTo({
-            center: [newLocation.lng, newLocation.lat],
-            bearing: targetBearing,
-            pitch: 60, // 3D-Ansicht beibehalten
-            duration: 300, // 300ms für flüssige Bewegung
-            essential: true // Respektiert prefers-reduced-motion
-          });
+          // Verwende optimierte Kartenaktualisierung für flüssigere Bewegung
+          updateMapPosition(smoothedLocation, targetBearing, distance);
         }
         
         // Speichere aktuelle Position für nächste Heading-Berechnung
-        setLastLocation(newLocation);
+        setLastLocation(smoothedLocation);
         
-        console.log('Location updated during navigation:', newLocation, 'Heading:', heading, 'Calculated:', calculatedHeading, 'Speed:', speed, 'Accuracy:', accuracy);
+        console.log('Location updated:', {
+          raw: rawLocation,
+          smoothed: smoothedLocation,
+          heading: calculatedHeading,
+          speed,
+          accuracy,
+          distance
+        });
       },
       (error) => {
         console.error('Geolocation error during navigation:', error);
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 100, // 100ms Cache für flüssigere Updates
+        maximumAge: 0, // Immer frische GPS-Daten holen
         timeout: 5000 // 5 Sekunden Timeout für stabilere Verbindung
       }
     );
@@ -818,6 +916,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       setWatchId(null);
       console.log('Location tracking stopped');
     }
+    
+    // Cleanup animation frame
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    
+    // Reset location history
+    locationHistoryRef.current = [];
+    smoothedLocationRef.current = null;
   };
 
 
@@ -911,6 +1019,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Center map on user location during navigation (smooth following) - only if not fixed
       if (!isLocationFixed) {
+        // Berechne Distanz zur vorherigen Position für dynamische Animationsdauer
+        const prevCenter = map.getCenter();
+        const dLat = currentLocation.lat - prevCenter.lat;
+        const dLng = currentLocation.lng - prevCenter.lng;
+        const movementDistance = Math.sqrt(dLat * dLat + dLng * dLng);
+        
         // Verwende easeTo für flüssige Bewegung während der Navigation
         const currentZoom = map.getZoom();
         const targetZoom = currentZoom < 18 ? 19 : currentZoom;
@@ -920,15 +1034,28 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           ? -deviceOrientation + 180 
           : map.getBearing();
         
+        // Dynamische Animationsdauer basierend auf Bewegung
+        let duration;
+        if (movementDistance < 0.000005) { // Sehr kleine Bewegung (~0.5m)
+          duration = 100;
+        } else if (movementDistance < 0.00001) { // Kleine Bewegung (~1m)
+          duration = 200;
+        } else if (movementDistance < 0.00005) { // Mittlere Bewegung (~5m)
+          duration = 300;
+        } else { // Größere Bewegung
+          duration = 500;
+        }
+        
         map.easeTo({
           center: [currentLocation.lng, currentLocation.lat],
           zoom: targetZoom,
           bearing: targetBearing,
-          duration: 300, // 300ms für flüssige Bewegung
-          essential: true // Respektiert prefers-reduced-motion
+          duration: duration,
+          easing: (t) => t, // Lineare Interpolation für gleichmäßige Bewegung
+          essential: true
         });
         
-        console.log('Following mode: Map centered on user location (smooth)');
+        console.log('Following mode: Map centered on user location (smooth, duration:', duration, 'ms)');
       } else {
         // In fixed mode, only update the user marker position without moving the map
         console.log('Fixed mode: Map will not follow user movement, only marker updates');
@@ -1013,6 +1140,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       if (isFollowingLocation) {
         console.log('Station selected - deactivating following mode');
         setIsFollowingLocation(false);
+        setIs3DFollowing(false);
         stopLocationTracking();
       }
       // Deaktiviere Station-Following wenn neue Station ausgewählt wird
@@ -1225,6 +1353,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       if (isFollowingLocation) {
         console.log('Clearing highlight - deactivating following mode');
         setIsFollowingLocation(false);
+        setIs3DFollowing(false);
         stopLocationTracking();
       }
       
@@ -1411,7 +1540,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           center: [center.lng, center.lat], // Use current user location
           zoom: 17, // Zurück zum ursprünglichen Zoom-Level
           pitch: 0,
-          bearing: 0
+          bearing: 0,
+          // Optimierungen für flüssigere Performance
+          antialias: true, // Bessere Grafik-Qualität
+          attributionControl: false, // Reduziert Overhead
+          refreshExpiredTiles: true, // Aktualisiert Tiles automatisch
+          fadeDuration: 150 // Schnellere Tile-Übergänge
         });
 
         mapRef.current = map;
@@ -1420,24 +1554,49 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
         // Add event listeners for map interactions
         map.on('dragstart', () => {
-          // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus und Zentrierung
-          setIsCentered(false); // Nicht mehr zentriert
-          setIsStationFollowingActive(false); // Deaktiviere Station-Following (grüner Rand)
+          // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus komplett
+          setIsCentered(false);
+          setIsStationFollowingActive(false);
           if (isFollowingLocation) {
             console.log('User manually moved map - deactivating following mode');
             setIsFollowingLocation(false);
+            setIs3DFollowing(false); // Auch 3D-Following zurücksetzen
             stopLocationTracking();
+            
+            // Zurück zur normalen Ansicht
+            setTimeout(() => {
+              if (map && map.getPitch() > 30) {
+                map.easeTo({
+                  pitch: 0,
+                  duration: 500
+                });
+              }
+            }, 100);
           }
         });
 
         map.on('zoomstart', () => {
-          // Wenn Benutzer zoomt, beende Following-Modus und Zentrierung
-          setIsCentered(false); // Nicht mehr zentriert
-          setIsStationFollowingActive(false); // Deaktiviere Station-Following (grüner Rand)
-          if (isFollowingLocation) {
-            console.log('User zoomed map - deactivating following mode');
-            setIsFollowingLocation(false);
-            stopLocationTracking();
+          // Nur deaktivieren, wenn der User manuell zoomt (nicht bei programmatischem Zoom)
+          const isUserZoom = !map.isMoving();
+          if (isUserZoom) {
+            setIsCentered(false);
+            setIsStationFollowingActive(false);
+            if (isFollowingLocation) {
+              console.log('User zoomed map - deactivating following mode');
+              setIsFollowingLocation(false);
+              setIs3DFollowing(false); // Auch 3D-Following zurücksetzen
+              stopLocationTracking();
+              
+              // Zurück zur normalen Ansicht
+              setTimeout(() => {
+                if (map && map.getPitch() > 30) {
+                  map.easeTo({
+                    pitch: 0,
+                    duration: 500
+                  });
+                }
+              }, 100);
+            }
           }
         });
 
@@ -1474,6 +1633,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
 
     initMap();
+    
+    // Cleanup function beim Unmount
+    return () => {
+      stopLocationTracking();
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, [center, isDarkMode, locationLoading, userLocation]);
 
   // Effect to change map style when theme changes
@@ -1502,6 +1670,53 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     
     changeMapStyle();
   }, [isDarkMode]);
+
+  // Automatisches Starten/Stoppen des Location Tracking bei Following-Modus
+  useEffect(() => {
+    if (isFollowingLocation && !isNavigating) {
+      // Following-Modus aktiviert - starte Location Tracking
+      if (watchId === null && mapRef.current && userLocation) {
+        console.log('Following mode activated - starting location tracking');
+        startLocationTracking();
+        
+        // Setze Pitch basierend auf 2D/3D-Modus
+        const map = mapRef.current;
+        if (is3DFollowing) {
+          // 3D-Ansicht
+          map.easeTo({
+            pitch: 60,
+            bearing: deviceOrientation !== 0 ? -deviceOrientation + 180 : map.getBearing(),
+            duration: 800,
+            essential: true
+          });
+        } else {
+          // 2D-Ansicht
+          map.easeTo({
+            pitch: 0,
+            bearing: 0,
+            duration: 800,
+            essential: true
+          });
+        }
+      }
+    } else if (!isFollowingLocation && !isNavigating) {
+      // Following-Modus deaktiviert - stoppe Location Tracking (nur wenn nicht navigiert wird)
+      if (watchId !== null) {
+        console.log('Following mode deactivated - stopping location tracking');
+        stopLocationTracking();
+        
+        // Zurück zur 2D-Ansicht
+        if (mapRef.current) {
+          const map = mapRef.current;
+          map.easeTo({
+            pitch: 0,
+            duration: 800,
+            essential: true
+          });
+        }
+      }
+    }
+  }, [isFollowingLocation, is3DFollowing, isNavigating]);
 
   // Stationen auf Karte anzeigen
   useEffect(() => {
@@ -1589,70 +1804,67 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       console.error('Permission check error in locateMe:', error);
     }
     
-    if (isFollowingLocation) {
-      // Zustand 3: Zurück zu zentrieren (Following-Modus beenden)
-      console.log('Deactivating following mode - returning to center');
+    if (isFollowingLocation && is3DFollowing) {
+      // Zustand 3: Following 3D ist aktiv -> Deaktiviere Following komplett
+      console.log('Deactivating 3D following mode');
       setIsFollowingLocation(false);
+      setIs3DFollowing(false);
       setIsCentered(false);
       
       // Stoppe Location Tracking
       stopLocationTracking();
       
       if (userLocation) {
-        // Zurück zur normalen 2D-Ansicht
+        // Zurück zur normalen Ansicht ohne Following
         map.flyTo({
           center: [userLocation.lng, userLocation.lat],
           zoom: 17,
           bearing: 0,
-          pitch: 0, // Zurück zur 2D-Ansicht
+          pitch: 0,
           essential: true,
-          duration: 1500
+          duration: 800
         });
         
-        console.log('Following mode deactivated - back to normal view');
+        console.log('Following mode deactivated');
       }
-    } else if (isCentered && userLocation) {
-      // Zustand 2: Bereits zentriert -> Following-Modus aktivieren (3D-Ansicht)
-      console.log('Already centered - activating following mode with 3D view');
-      setIsFollowingLocation(true);
+    } else if (isFollowingLocation && !is3DFollowing) {
+      // Zustand 2: Following 2D ist aktiv -> Wechsel zu Following 3D
+      console.log('Switching to 3D following mode');
+      setIs3DFollowing(true);
+      
+      if (userLocation) {
+        // Aktiviere 3D-Ansicht
+        map.flyTo({
+          center: [userLocation.lng, userLocation.lat],
+          zoom: 19,
+          bearing: deviceOrientation !== 0 ? -deviceOrientation + 180 : 0,
+          pitch: 60, // 3D-Ansicht
+          essential: true,
+          duration: 800
+        });
         
-      // Starte Location Tracking für Following-Modus
-      if (watchId === null) {
-        startLocationTracking();
+        console.log('3D following mode activated');
       }
-      
-      // 3D-Ansicht aktivieren
-      map.flyTo({
-        center: [userLocation.lng, userLocation.lat],
-        zoom: 19, // Höherer Zoom für Following
-        bearing: 0,
-        pitch: 60, // 3D-Ansicht - schräger Blick
-        essential: true,
-        duration: 1500
-      });
-      
-      console.log('Following mode activated with 3D view');
     } else {
-      // Zustand 1: Normal zentrieren
-      console.log('Centering on user location');
+      // Zustand 1: Following 2D aktivieren
+      console.log('Activating 2D following mode');
       
       // Verwende die bereits gecachte Position wenn vorhanden
       if (userLocation) {
+        setIsFollowingLocation(true);
+        setIs3DFollowing(false);
+        // Location Tracking wird automatisch durch useEffect gestartet
+        
         map.flyTo({
           center: [userLocation.lng, userLocation.lat],
-          zoom: 17,
+          zoom: 18,
           bearing: 0,
-          pitch: 0, // Reset pitch to 0 for normal view
+          pitch: 0, // 2D-Ansicht
           essential: true,
-          duration: 1500
+          duration: 800
         });
         
-        // Markiere als zentriert nach der Animation
-        setTimeout(() => {
-          setIsCentered(true);
-        }, 1500);
-        
-        console.log('Map centered on user location');
+        console.log('2D following mode activated');
         return;
       }
       
@@ -1666,23 +1878,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               if (heading !== null && !isNaN(heading)) {
                 setUserHeading(heading);
               }
+              
+              setIsFollowingLocation(true);
+              setIs3DFollowing(false);
+              // Location Tracking wird automatisch durch useEffect gestartet
+              
               map.flyTo({
                 center: [longitude, latitude],
-                zoom: 17,
+                zoom: 18,
                 bearing: 0,
-                pitch: 0, // Reset pitch to 0 for normal view
+                pitch: 0, // 2D-Ansicht
                 essential: true,
-                duration: 1500
+                duration: 800
               });
-              
-              // Markiere als zentriert nach der Animation
-              setTimeout(() => {
-                setIsCentered(true);
-              }, 1500);
               
               // Update user marker with direction
               updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
-              console.log('Map centered on user location');
+              console.log('2D following mode activated');
             } catch (error) {
               console.error('Error updating user location:', error);
             }
@@ -1692,7 +1904,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           },
           { 
             enableHighAccuracy: true,
-            maximumAge: 30000,
+            maximumAge: 0,
             timeout: 10000
           }
         );
@@ -1727,11 +1939,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     setTimeout(() => {
       setIsFollowingLocation(true);
       setIsStationFollowingActive(true); // Aktiviere den grünen Rand
-      
-      // Starte Location Tracking für Following-Modus
-      if (watchId === null) {
-        startLocationTracking();
-      }
+      // Location Tracking wird automatisch durch useEffect gestartet
       
       console.log('Station-following mode activated');
     }, 1000);
