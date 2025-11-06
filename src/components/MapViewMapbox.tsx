@@ -2618,7 +2618,50 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
 
       
-      {scanning && <CameraOverlay onClose={() => setScanning(false)} />}
+      {scanning && (
+        <CameraOverlay 
+          onClose={() => setScanning(false)}
+          onStationScanned={async (stationId: string) => {
+            console.log('Station gescannt via QR-Code:', stationId);
+            setScanning(false);
+            
+            // Suche die Station in der Liste
+            let station = stations.find(s => s.id === stationId);
+            
+            if (station) {
+              // Station gefunden - wähle sie aus
+              highlightStation(station);
+              
+              // Optional: Zeige Bestätigung
+              if (navigator.vibrate) {
+                navigator.vibrate([200, 100, 200]); // Doppeltes Vibrieren
+              }
+            } else {
+              // Station nicht in der Liste - versuche Stationen neu zu laden
+              try {
+                await stationManager.refreshStations();
+                
+                // Suche erneut nach der Station
+                station = stations.find(s => s.id === stationId);
+                
+                if (station) {
+                  highlightStation(station);
+                  
+                  // Vibriere bei Erfolg
+                  if (navigator.vibrate) {
+                    navigator.vibrate([200, 100, 200]);
+                  }
+                } else {
+                  alert('Station nicht gefunden oder nicht aktiv');
+                }
+              } catch (err) {
+                console.error('Fehler beim Laden der Station:', err);
+                alert('Fehler beim Laden der Station');
+              }
+            }
+          }}
+        />
+      )}
       <SideMenu 
         open={menuOpen} 
         onClose={() => setMenuOpen(false)} 

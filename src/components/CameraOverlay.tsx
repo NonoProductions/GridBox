@@ -1,8 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { BrowserQRCodeReader } from '@zxing/library';
 
-export default function CameraOverlay({ onClose }: { onClose: () => void }) {
+interface CameraOverlayProps {
+  onClose: () => void;
+  onStationScanned?: (stationId: string) => void;
+}
+
+export default function CameraOverlay({ onClose, onStationScanned }: CameraOverlayProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -13,6 +19,9 @@ export default function CameraOverlay({ onClose }: { onClose: () => void }) {
   const [torchSupported, setTorchSupported] = useState(false);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualCode, setManualCode] = useState(["", "", "", ""]);
+  const [scanningActive, setScanningActive] = useState(false);
+  const [lastScannedCode, setLastScannedCode] = useState<string>("");
+  const qrCodeReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const inputRefs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
@@ -71,6 +80,7 @@ export default function CameraOverlay({ onClose }: { onClose: () => void }) {
               .then(() => {
                 console.log('Camera started successfully');
                 setLoading(false);
+                setScanningActive(true);
               })
               .catch((playError) => {
                 console.error('Error playing video:', playError);
@@ -122,6 +132,73 @@ export default function CameraOverlay({ onClose }: { onClose: () => void }) {
       }
     };
   }, []);
+
+  // QR-Code Scanning
+  useEffect(() => {
+    if (!scanningActive || !videoRef.current) return;
+
+    const codeReader = new BrowserQRCodeReader();
+    qrCodeReaderRef.current = codeReader;
+    let isScanning = true;
+
+    const scanQRCode = async () => {
+      try {
+        while (isScanning && videoRef.current) {
+          try {
+            const result = await codeReader.decodeFromVideoElement(videoRef.current);
+            
+            if (result && result.getText()) {
+              const scannedText = result.getText();
+              console.log('QR Code scanned:', scannedText);
+              
+              // Verhindere mehrfaches Scannen desselben Codes
+              if (scannedText !== lastScannedCode) {
+                setLastScannedCode(scannedText);
+                
+                // Versuche Station-ID zu extrahieren
+                // Format: "GRIDBOX-STATION-{stationId}" oder direkt die Station-ID
+                let stationId = scannedText;
+                if (scannedText.startsWith('GRIDBOX-STATION-')) {
+                  stationId = scannedText.replace('GRIDBOX-STATION-', '');
+                }
+                
+                // Callback mit Station-ID
+                if (onStationScanned) {
+                  onStationScanned(stationId);
+                }
+                
+                // Optional: Visuelles/akustisches Feedback
+                // Vibrieren falls unterstützt
+                if (navigator.vibrate) {
+                  navigator.vibrate(200);
+                }
+                
+                // Kurze Pause nach erfolgreichem Scan
+                await new Promise(resolve => setTimeout(resolve, 2000));
+              }
+            }
+          } catch (err) {
+            // Ignoriere einzelne Decode-Fehler (kein QR-Code im Bild)
+            if (err instanceof Error && !err.message.includes('NotFoundException')) {
+              console.error('QR scan error:', err);
+            }
+          }
+          
+          // Kurze Pause zwischen Scans
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      } catch (error) {
+        console.error('QR scanning error:', error);
+      }
+    };
+
+    scanQRCode();
+
+    return () => {
+      isScanning = false;
+      codeReader.reset();
+    };
+  }, [scanningActive, lastScannedCode, onStationScanned]);
 
   // Taschenlampe ein/ausschalten
   const toggleTorch = async () => {
