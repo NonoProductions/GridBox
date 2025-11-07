@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BrowserQRCodeReader } from '@zxing/library';
+import { BarcodeFormat, BrowserQRCodeReader, DecodeHintType, NotFoundException } from '@zxing/library';
 
 interface CameraOverlayProps {
   onClose: () => void;
@@ -21,7 +21,12 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
   const [manualCode, setManualCode] = useState(["", "", "", ""]);
   const [scanningActive, setScanningActive] = useState(false);
   const [lastScannedCode, setLastScannedCode] = useState<string>("");
+  const [scanFeedback, setScanFeedback] = useState<string>("");
   const qrCodeReaderRef = useRef<BrowserQRCodeReader | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scanIntervalRef = useRef<number | null>(null);
+  const lastScannedRef = useRef<string>("");
+  const scanCooldownRef = useRef(false);
   const inputRefs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
@@ -133,72 +138,149 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     };
   }, []);
 
-  // QR-Code Scanning
+  // QR-Code Scanning - Optimiert für mobile Geräte
   useEffect(() => {
     if (!scanningActive || !videoRef.current) return;
 
-    const codeReader = new BrowserQRCodeReader();
+    const codeReader = new BrowserQRCodeReader(0);
+    const hints = new Map<DecodeHintType, unknown>();
+    hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]);
+    hints.set(DecodeHintType.TRY_HARDER, true);
+    codeReader.hints = hints;
+    codeReader.timeBetweenDecodingAttempts = 0;
     qrCodeReaderRef.current = codeReader;
+    lastScannedRef.current = lastScannedCode;
+    scanCooldownRef.current = false;
+    
+    // Erstelle Canvas für Frame-Capturing
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvasRef.current = canvas;
+    
     let isScanning = true;
+    let scanAttempts = 0;
 
-    const scanQRCode = async () => {
+    const scanFrame = async () => {
+      if (!isScanning || !videoRef.current || !ctx) return;
+      
+      const video = videoRef.current;
+      
+      // Warte bis Video bereit ist
+      if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+        scanIntervalRef.current = window.setTimeout(scanFrame, 100);
+        return;
+      }
+      
       try {
-        while (isScanning && videoRef.current) {
-          try {
-            const result = await codeReader.decodeFromVideoElement(videoRef.current);
+        const minDimension = Math.min(video.videoWidth, video.videoHeight);
+        if (!minDimension) {
+          scanIntervalRef.current = window.setTimeout(scanFrame, 120);
+          return;
+        }
+
+        const regionSize = Math.max(200, Math.floor(minDimension * 0.7));
+        const sx = Math.max(0, Math.floor((video.videoWidth - regionSize) / 2));
+        const sy = Math.max(0, Math.floor((video.videoHeight - regionSize) / 2));
+
+        const targetSize = 480;
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+
+        ctx.save();
+        ctx.clearRect(0, 0, targetSize, targetSize);
+        ctx.drawImage(
+          video,
+          sx,
+          sy,
+          regionSize,
+          regionSize,
+          0,
+          0,
+          targetSize,
+          targetSize,
+        );
+        ctx.restore();
+        
+        // Versuche QR-Code zu dekodieren
+        try {
+          const result = await codeReader.decodeFromCanvas(canvas);
+          
+          if (result && result.getText()) {
+            const scannedText = result.getText();
+            console.log('✅ QR Code erfolgreich gescannt:', scannedText);
             
-            if (result && result.getText()) {
-              const scannedText = result.getText();
-              console.log('QR Code scanned:', scannedText);
-              
-              // Verhindere mehrfaches Scannen desselben Codes
-              if (scannedText !== lastScannedCode) {
-                setLastScannedCode(scannedText);
-                
-                // Versuche Station-ID zu extrahieren
-                // Format: "GRIDBOX-STATION-{stationId}" oder direkt die Station-ID
-                let stationId = scannedText;
-                if (scannedText.startsWith('GRIDBOX-STATION-')) {
-                  stationId = scannedText.replace('GRIDBOX-STATION-', '');
-                }
-                
-                // Callback mit Station-ID
-                if (onStationScanned) {
-                  onStationScanned(stationId);
-                }
-                
-                // Optional: Visuelles/akustisches Feedback
-                // Vibrieren falls unterstützt
-                if (navigator.vibrate) {
-                  navigator.vibrate(200);
-                }
-                
-                // Kurze Pause nach erfolgreichem Scan
-                await new Promise(resolve => setTimeout(resolve, 2000));
-              }
+            // Verhindere mehrfaches Scannen desselben Codes
+            const normalizedText = scannedText.trim();
+            if (!normalizedText) {
+              scanIntervalRef.current = window.setTimeout(scanFrame, 120);
+              return;
             }
-          } catch (err) {
-            // Ignoriere einzelne Decode-Fehler (kein QR-Code im Bild)
-            if (err instanceof Error && !err.message.includes('NotFoundException')) {
-              console.error('QR scan error:', err);
+
+            if (normalizedText !== lastScannedRef.current && !scanCooldownRef.current) {
+              isScanning = false; // Stoppe weitere Scans
+              lastScannedRef.current = normalizedText;
+              scanCooldownRef.current = true;
+              setLastScannedCode(normalizedText);
+              setScanFeedback('✅ Erkannt!');
+              
+              // Versuche Station-ID zu extrahieren
+              let stationId = normalizedText;
+              if (normalizedText.startsWith('GRIDBOX-STATION-')) {
+                stationId = normalizedText.replace('GRIDBOX-STATION-', '');
+              }
+              
+              // Starkes Vibrationsfeedback
+              if (navigator.vibrate) {
+                navigator.vibrate([100, 50, 100, 50, 200]);
+              }
+              
+              // Callback mit Station-ID
+              if (onStationScanned) {
+                onStationScanned(stationId);
+              }
+              
+              return; // Beende Scanning
             }
           }
-          
-          // Kurze Pause zwischen Scans
-          await new Promise(resolve => setTimeout(resolve, 300));
+        } catch (err) {
+          if (!(err instanceof NotFoundException)) {
+            console.error('Decoder error:', err);
+          }
+          scanAttempts++;
+          if (scanAttempts % 15 === 0) {
+            setScanFeedback(scanAttempts >= 60 ? 'Bitte näher an den QR-Code gehen' : 'Suche...');
+          }
+        }
+        
+        // Nächster Scan-Versuch nach sehr kurzer Pause (50ms für bessere Performance)
+        if (isScanning) {
+          scanIntervalRef.current = window.setTimeout(scanFrame, 60);
         }
       } catch (error) {
-        console.error('QR scanning error:', error);
+        console.error('Frame scanning error:', error);
+        if (isScanning) {
+          scanIntervalRef.current = window.setTimeout(scanFrame, 100);
+        }
       }
     };
 
-    scanQRCode();
+    // Starte Scanning
+    console.log('🔍 QR-Code Scanner gestartet');
+    setScanFeedback('Suche QR-Code...');
+    scanFrame();
 
     return () => {
+      console.log('🛑 QR-Code Scanner gestoppt');
       isScanning = false;
+      if (scanIntervalRef.current) {
+        clearTimeout(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
+      scanCooldownRef.current = false;
+      lastScannedRef.current = "";
       codeReader.reset();
     };
-  }, [scanningActive, lastScannedCode, onStationScanned]);
+  }, [scanningActive, onStationScanned]);
 
   // Taschenlampe ein/ausschalten
   const toggleTorch = async () => {
@@ -225,7 +307,13 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     const code = manualCode.join("");
     if (code.length === 4) {
       console.log('Manual code entered:', code);
-      // TODO: Hier die Logik zum Verarbeiten des Codes hinzufügen
+      const normalized = code.toUpperCase();
+      setLastScannedCode(normalized);
+      lastScannedRef.current = normalized;
+      setScanFeedback('✅ Code übernommen');
+      if (onStationScanned) {
+        onStationScanned(normalized);
+      }
       setShowManualInput(false);
       setManualCode(["", "", "", ""]);
       onClose();
@@ -330,22 +418,82 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
       
       {/* Darken outside using giant box-shadow to avoid seams */}
       {!loading && !error && (
-        <div className="absolute inset-0 pointer-events-none flex items-center justify-center" aria-hidden>
-          <div
-            className="rounded-2xl"
-            style={{
-              width: "70vw",
-              maxWidth: "320px",
-              aspectRatio: "1 / 1",
-              boxShadow: "0 0 0 9999px rgba(0,0,0,0.7)",
-              border: "2px solid rgba(16,185,129,0.8)",
-              position: "absolute",
-              left: "50%",
-              top: "50%",
-              transform: "translate(-50%, -50%)",
-            }}
-          />
-        </div>
+        <>
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center" aria-hidden>
+            <div
+              className="rounded-2xl relative overflow-hidden"
+              style={{
+                width: "70vw",
+                maxWidth: "320px",
+                aspectRatio: "1 / 1",
+                boxShadow: "0 0 0 9999px rgba(0,0,0,0.7)",
+                border: scanFeedback.includes('Erkannt') ? "3px solid rgba(16,185,129,1)" : "2px solid rgba(16,185,129,0.8)",
+                position: "absolute",
+                left: "50%",
+                top: "50%",
+                transform: "translate(-50%, -50%)",
+              }}
+            >
+              {/* Animierte Scan-Linie */}
+              {!scanFeedback.includes('Erkannt') && scanningActive && (
+                <div 
+                  className="absolute inset-x-0 h-1 bg-gradient-to-r from-transparent via-emerald-400 to-transparent"
+                  style={{
+                    animation: "scanLine 2s ease-in-out infinite",
+                    boxShadow: "0 0 10px rgba(16,185,129,0.8)",
+                  }}
+                />
+              )}
+              
+              {/* Ecken-Indikatoren für bessere Zielführung */}
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-2xl" />
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-2xl" />
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-2xl" />
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl" />
+            </div>
+          </div>
+          
+          {/* CSS Animation für Scan-Linie */}
+          <style jsx>{`
+            @keyframes scanLine {
+              0% {
+                top: 0%;
+                opacity: 0;
+              }
+              10% {
+                opacity: 1;
+              }
+              90% {
+                opacity: 1;
+              }
+              100% {
+                top: 100%;
+                opacity: 0;
+              }
+            }
+          `}</style>
+          
+          {/* Scan Feedback - direkt über dem QR-Code-Rahmen */}
+          {scanFeedback && (
+            <div 
+              className="absolute z-[1002] pointer-events-none"
+              style={{
+                left: "50%",
+                top: "50%",
+                transform: "translate(-50%, calc(-35vw - 3rem))",
+                maxWidth: "min(70vw, 320px)",
+              }}
+            >
+              <div className={`text-center px-4 py-2 rounded-xl backdrop-blur-xl font-medium transition-all ${
+                scanFeedback.includes('Erkannt') 
+                  ? 'bg-emerald-500/90 text-white text-lg scale-110' 
+                  : 'bg-black/60 text-emerald-400 text-sm'
+              }`}>
+                {scanFeedback}
+              </div>
+            </div>
+          )}
+        </>
       )}
       
       <div

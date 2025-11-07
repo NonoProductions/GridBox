@@ -39,7 +39,7 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
   const [error, setError] = useState<string | null>(null);
 
   // Lade Stationen aus der Datenbank
-  const fetchStations = async () => {
+  const fetchStations = async (): Promise<Station[]> => {
     try {
       setLoading(true);
       setError(null);
@@ -54,11 +54,14 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
         throw error;
       }
 
-      setStations(data || []);
-      onStationsUpdate(data || []);
+      const result = data || [];
+      setStations(result);
+      onStationsUpdate(result);
+      return result;
     } catch (err) {
       console.error('Fehler beim Laden der Stationen:', err);
       setError('Fehler beim Laden der Stationen');
+      return [];
     } finally {
       setLoading(false);
     }
@@ -80,8 +83,11 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
       }
 
       // Aktualisiere die lokale Liste
-      setStations(prev => [data, ...prev]);
-      onStationsUpdate([data, ...stations]);
+      setStations(prev => {
+        const updated = [data, ...prev];
+        onStationsUpdate(updated);
+        return updated;
+      });
       
       return data;
     } catch (err) {
@@ -108,12 +114,11 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
       }
 
       // Aktualisiere die lokale Liste
-      setStations(prev => prev.map(station => 
-        station.id === id ? data : station
-      ));
-      onStationsUpdate(stations.map(station => 
-        station.id === id ? data : station
-      ));
+      setStations(prev => {
+        const updated = prev.map(station => station.id === id ? data : station);
+        onStationsUpdate(updated);
+        return updated;
+      });
       
       return data;
     } catch (err) {
@@ -138,9 +143,11 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
       }
 
       // Entferne aus der lokalen Liste
-      const updatedStations = stations.filter(station => station.id !== id);
-      setStations(updatedStations);
-      onStationsUpdate(updatedStations);
+      setStations(prev => {
+        const updated = prev.filter(station => station.id !== id);
+        onStationsUpdate(updated);
+        return updated;
+      });
     } catch (err) {
       console.error('Fehler beim Löschen der Station:', err);
       setError('Fehler beim Löschen der Station');

@@ -2639,10 +2639,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             } else {
               // Station nicht in der Liste - versuche Stationen neu zu laden
               try {
-                await stationManager.refreshStations();
+                const refreshedStations = await stationManager.refreshStations();
                 
                 // Suche erneut nach der Station
-                station = stations.find(s => s.id === stationId);
+                station = refreshedStations.find(s => s.id === stationId);
                 
                 if (station) {
                   highlightStation(station);
