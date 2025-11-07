@@ -1,40 +1,5 @@
 @import "tailwindcss";
 
-/* html5-qrcode Scanner Styles - Verstecke das Standard-UI */
-#qr-reader {
-  width: 100% !important;
-  height: 100% !important;
-  border: none !important;
-}
-
-#qr-reader video {
-  width: 100% !important;
-  height: 100% !important;
-  object-fit: cover !important;
-  border: none !important;
-}
-
-#qr-reader__dashboard,
-#qr-reader__dashboard_section,
-#qr-reader__dashboard_section_csr,
-#qr-reader__header_message {
-  display: none !important;
-}
-
-#qr-reader__camera_selection {
-  display: none !important;
-}
-
-#qr-reader__scan_region {
-  border: none !important;
-  background: transparent !important;
-}
-
-/* Verstecke Standard QR-Box von html5-qrcode */
-#qr-reader__scan_region video + div {
-  display: none !important;
-}
-
 /* Smooth Animations */
 @keyframes slideUp {
   from {
