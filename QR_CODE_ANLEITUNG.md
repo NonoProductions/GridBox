@@ -65,10 +65,14 @@ GRIDBOX-STATION-123e4567-e89b-12d3-a456-426614174000
 ### Komponenten
 
 **1. CameraOverlay (`src/components/CameraOverlay.tsx`)**
-- Kamera-Zugriff
-- QR-Code Scanning mit @zxing/library
+- Kamera-Zugriff mit optimierten Einstellungen (Full HD, 30 FPS)
+- **Kontinuierliches QR-Code Scanning** mit @zxing/library (verbesserte Zuverlässigkeit)
+- **Autofokus** für schärfere QR-Code-Erkennung
+- **Echtzeit-Scan-Animation** mit visueller Scan-Linie
+- **Sofort-Feedback** bei erfolgreichem Scan (grüner Rahmen + Checkmark)
 - Manuelle Code-Eingabe als Fallback
 - Taschenlampen-Funktion (auf unterstützten Geräten)
+- Haptisches Feedback (Doppel-Vibration bei Erfolg)
 
 **2. StationQRCode (`src/components/StationQRCode.tsx`)**
 - QR-Code Generierung mit qrcode.react
@@ -129,7 +133,7 @@ Die QR-Code Scanner-Funktionalität wurde in folgende Komponenten integriert:
 1. **Callback immer bereitstellen**: Stelle sicher, dass `onStationScanned` implementiert ist
 2. **Fehlerbehandlung**: Behandle Fälle, wo Stationen nicht gefunden werden
 3. **User Feedback**: Nutze Vibrationen oder visuelle Hinweise für Scan-Erfolg
-4. **Performance**: QR-Scanning läuft in Intervallen (300ms) um Akku zu schonen
+4. **Performance**: QR-Scanning läuft kontinuierlich mit optimierter Geschwindigkeit für sofortige Erkennung
 
 ### Für Nutzer
 
@@ -244,7 +248,16 @@ Bei Fragen oder Problemen:
 
 ## Changelog
 
-### Version 1.0.0 (Aktuell)
+### Version 1.1.0 (Aktuell) - Performance & Zuverlässigkeits-Update
+- ✅ **Kontinuierliches Scanning**: Umstellung auf `decodeFromVideoDevice` für instant QR-Erkennung
+- ✅ **Autofokus**: Automatischer Fokus für schärfere QR-Code-Erkennung
+- ✅ **Optimierte Kamera-Einstellungen**: Full HD (1920x1080), 30 FPS für beste Erkennungsqualität
+- ✅ **Echtzeit-Scan-Animation**: Animierte Scan-Linie zeigt aktiven Scan-Prozess
+- ✅ **Sofortiges visuelles Feedback**: Grüner Rahmen + Checkmark bei erfolgreichem Scan
+- ✅ **Verbesserte Scan-Geschwindigkeit**: Entfernung von unnötigen Pausen für sofortige Reaktion
+- ✅ **Optimiertes Haptik-Feedback**: Doppel-Vibration für besseres taktiles Feedback
+
+### Version 1.0.0 - Initial Release
 - ✅ QR-Code Scanning implementiert
 - ✅ QR-Code Generierung implementiert
 - ✅ Integration in Hauptkarte (MapViewMapbox & MapView)
