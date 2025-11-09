@@ -354,7 +354,9 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
       
       try {
         // Versuche QR-Code vom Canvas zu lesen
-        const result = await codeReader.decodeFromCanvas(canvas);
+        // Verwende decodeFromImageData mit Canvas ImageData
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        const result = await codeReader.decodeFromImageData(imageData);
         
         if (result) {
           const scannedText = result.getText();
