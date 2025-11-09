@@ -66,15 +66,12 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
           throw new Error("Kamera-API wird von diesem Browser nicht unterstützt");
         }
 
-        // Erweiterte Kamera-Constraints für bessere mobile Kompatibilität und schnelleres Scannen
+        // Einfache Kamera-Constraints - verhindert Zoom-Effekte
         const constraints: MediaStreamConstraints = {
           video: {
-            facingMode: { ideal: "environment" }, // Rückkamera bevorzugen, aber nicht erzwingen
-            // Hohe Auflösung für bessere QR-Code-Erkennung, aber flexibel für Kompatibilität
-            width: { ideal: 1920, min: 640 },
-            height: { ideal: 1080, min: 480 },
-            aspectRatio: { ideal: 16/9 },
-            frameRate: { ideal: 30, min: 10, max: 60 },
+            facingMode: "environment", // Rückkamera ohne "ideal" - direkter
+            width: { ideal: 1280 }, // Moderate Auflösung ohne min/max
+            height: { ideal: 720 },
           },
           audio: false
         };
@@ -105,23 +102,25 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         const el = videoRef.current;
         
         if (el) {
+          // Setze Stream direkt - kein Warten
           el.srcObject = stream;
           
-          // Warte auf Metadaten und starte dann das Video
-          el.onloadedmetadata = () => {
-            console.log('Camera metadata loaded');
-            el.play()
-              .then(() => {
-                console.log('Camera started successfully');
-                setLoading(false);
-                setScanningActive(true);
-              })
-              .catch((playError) => {
-                console.error('Error playing video:', playError);
-                setError("Video konnte nicht gestartet werden");
-                setLoading(false);
-              });
+          // Sofort-Start: play() direkt nach Stream-Zuweisung
+          const startVideo = async () => {
+            try {
+              await el.play();
+              console.log('✅ Camera started');
+              setLoading(false);
+              setScanningActive(true);
+            } catch (playError) {
+              console.error('Error playing video:', playError);
+              setError("Video konnte nicht gestartet werden");
+              setLoading(false);
+            }
           };
+          
+          // Starte Video sobald Metadaten geladen sind (nur einmal)
+          el.addEventListener('loadedmetadata', startVideo, { once: true });
           
           el.onerror = (e) => {
             console.error('Video element error:', e);
@@ -399,11 +398,12 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[1200] bg-black/90 text-white">
+    <div className="fixed inset-0 z-[1200] bg-black text-white">
       <div className="absolute inset-0">
         <video 
           ref={videoRef} 
-          className="h-full w-full object-cover" 
+          className="h-full w-full object-cover"
+          style={{ transform: 'none', transition: 'none' }}
           playsInline 
           muted 
           autoPlay
