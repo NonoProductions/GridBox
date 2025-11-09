@@ -217,7 +217,7 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     
     // Hole das Video-Device von der aktuellen Stream
     const videoTrack = streamRef.current.getVideoTracks()[0];
-    const deviceId = videoTrack.getSettings().deviceId;
+    const deviceId = videoTrack.getSettings().deviceId || null;
 
     console.log('🚀 Starting continuous QR code scanning...');
     console.log('📹 Video ready state:', video.readyState);
