@@ -229,11 +229,24 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
           setTimeout(() => setScanSuccess(false), 1000);
           
           // Versuche Station-ID zu extrahieren
-          // Format: "GRIDBOX-STATION-{stationId}" oder direkt die Station-ID
+          // Unterstützte Formate:
+          // 1. URL: https://domain.com/rent/{stationId}
+          // 2. Alt: "GRIDBOX-STATION-{stationId}"
+          // 3. Direkt: nur die Station-ID
           let stationId = scannedText;
-          if (scannedText.startsWith('GRIDBOX-STATION-')) {
+          
+          // Format 1: URL mit /rent/
+          if (scannedText.includes('/rent/')) {
+            const match = scannedText.match(/\/rent\/([a-f0-9-]+)/i);
+            if (match) {
+              stationId = match[1];
+            }
+          }
+          // Format 2: Alt-Format GRIDBOX-STATION-
+          else if (scannedText.startsWith('GRIDBOX-STATION-')) {
             stationId = scannedText.replace('GRIDBOX-STATION-', '');
           }
+          // Format 3: Sonst direkt die ID verwenden
           
           console.log('📍 Extracted Station ID:', stationId);
           

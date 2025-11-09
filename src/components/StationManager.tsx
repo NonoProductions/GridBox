@@ -21,6 +21,7 @@ export interface Station {
   address?: string;
   owner_id?: string;
   is_active: boolean;
+  short_code?: string; // 4-stelliger Code für manuelle Eingabe
   created_at?: string;
   updated_at?: string;
   photo_url?: string;

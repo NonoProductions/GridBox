@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
+import RentalConfirmationModal from "@/components/RentalConfirmationModal";
+import OwnerDashboard from "@/components/OwnerDashboard";
 
 // Legacy Station type for backward compatibility
 type LegacyStation = {
@@ -28,6 +30,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [isPanelExpanded, setIsPanelExpanded] = useState(false);
   const [dragOffset, setDragOffset] = useState(0);
   const [isClosing, setIsClosing] = useState(false);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [showRentalModal, setShowRentalModal] = useState<boolean>(false);
+  const [scannedStation, setScannedStation] = useState<Station | null>(null);
+  const [showOwnerDashboard, setShowOwnerDashboard] = useState<boolean>(false);
   const mapRef = useRef<L.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
@@ -116,21 +122,33 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const highlightStation = async (station: Station) => {
     if (!mapRef.current) return;
     
+    console.log('🎯 highlightStation called for:', station.name);
+    
     try {
       const L = (await import("leaflet")).default;
       const map = mapRef.current;
+      
+      const currentZoom = map.getZoom();
+      const currentCenter = map.getCenter();
+      console.log('📍 Current position:', currentCenter, 'Zoom:', currentZoom);
+      console.log('🎯 Target position:', station.lat, station.lng);
       
       // Remove existing highlight marker if any
       if (highlightMarkerRef.current) {
         map.removeLayer(highlightMarkerRef.current);
       }
       
-      // Create a larger, more prominent highlight marker with pulsing ring
+      // Create a larger, more prominent highlight marker with animated pulsing ring
       const highlightIcon = new L.Icon({
         iconUrl:
           "data:image/svg+xml;charset=UTF-8," +
           encodeURIComponent(
             `<svg xmlns="http://www.w3.org/2000/svg" width="56" height="64" viewBox="0 0 32 40">
+              <!-- Animated pulsing ring -->
+              <circle cx="16" cy="23" r="12" fill="none" stroke="#10b981" stroke-width="2" opacity="0.5">
+                <animate attributeName="r" from="10" to="18" dur="1.5s" repeatCount="indefinite"/>
+                <animate attributeName="opacity" from="0.6" to="0" dur="1.5s" repeatCount="indefinite"/>
+              </circle>
               <!-- Main marker pin body -->
               <path fill="#10b981" stroke="#10b981" stroke-width="1.5" d="M16 38s-10-6.2-10-14.3a10 10 0 1 1 20 0C26 31.8 16 38 16 38z"/>
               <!-- Lightning bolt - centered at x=16, y=24 -->
@@ -145,20 +163,75 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Add highlight marker (in addition to the normal marker)
       const highlightMarker = L.marker([station.lat, station.lng], { 
         icon: highlightIcon,
-        zIndexOffset: 1000 // Make sure it appears above other markers
+        zIndexOffset: 1000, // Make sure it appears above other markers
+        opacity: 0 // Start invisible
       }).addTo(map);
       
       highlightMarkerRef.current = highlightMarker;
+      
+      // Animate marker appearance AFTER both animation stages complete
+      setTimeout(() => {
+        const markerElement = highlightMarker.getElement();
+        if (markerElement) {
+          markerElement.style.transformOrigin = 'bottom center';
+          markerElement.style.animation = 'station-marker-appear 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards';
+          // Make marker visible
+          highlightMarker.setOpacity(1);
+        }
+      }, 1400); // After stage 1 (600ms) + stage 2 start (700ms) + some buffer
       
       // Calculate offset to show station in visible area above the bottom panel
       // We shift the map view downward so the station appears in the upper visible portion
       const latOffset = -0.003; // Negative to shift view down, keeping station visible above panel
       
-      // Set view INSTANTLY ohne Animation für sofortige Anzeige
-      map.setView([station.lat + latOffset, station.lng], 16, { 
-        animate: false, // Keine Animation - sofort springen
-        duration: 0 // Keine Verzögerung
-      });
+      console.log('🚀 Starting MEGA ANIMATION...');
+      
+      // Show animation state
+      setIsAnimating(true);
+      
+      // SUPER VISIBLE ANIMATION - Move away first, then zoom to station
+      const currentPos = map.getCenter();
+      
+      // Step 1: Move map AWAY from target (opposite direction)
+      const awayLat = currentPos.lat + (currentPos.lat - station.lat) * 0.5;
+      const awayLng = currentPos.lng + (currentPos.lng - station.lng) * 0.5;
+      
+      // Zoom out and move away
+      map.setView([awayLat, awayLng], 11, { animate: true, duration: 0.5 });
+      
+      // Step 2: Fly dramatically to the station
+      setTimeout(() => {
+        console.log('🎯 FLYING to station NOW!');
+        map.flyTo([station.lat + latOffset, station.lng], 17, {
+          animate: true,
+          duration: 2.0, // LONGER animation
+          easeLinearity: 0.1
+        });
+      }, 600);
+      
+      // Hide animation indicator after complete
+      setTimeout(() => {
+        setIsAnimating(false);
+      }, 2800);
+      
+      console.log('✅ MEGA animation initiated');
+      
+      // Add temporary pulsing circle for visual feedback - after animations complete
+      setTimeout(() => {
+        const pulseCircle = L.circle([station.lat, station.lng], {
+          radius: 50,
+          color: '#10b981',
+          fillColor: '#10b981',
+          fillOpacity: 0.3,
+          weight: 2,
+          className: 'pulse-circle'
+        }).addTo(map);
+        
+        // Remove pulse circle after animation
+        setTimeout(() => {
+          map.removeLayer(pulseCircle);
+        }, 1000);
+      }, 1600); // Show pulse after marker appears
       
       // Set selected station
       setSelectedStation(station);
@@ -614,6 +687,29 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </div>
       )}
 
+      {/* Animation indicator - HIGHLY VISIBLE */}
+      {isAnimating && (
+        <div className="fixed inset-0 z-[998] pointer-events-none">
+          {/* Pulsing border around screen */}
+          <div className="absolute inset-0 border-8 border-emerald-500 animate-pulse" 
+               style={{ animation: 'pulse 1s ease-in-out infinite' }}></div>
+          
+          {/* Center notification */}
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
+            <div className={`rounded-2xl px-8 py-6 shadow-2xl border-4 border-emerald-500 ${
+              isDarkMode === true 
+                ? 'bg-gray-900 text-white' 
+                : 'bg-white text-slate-900'
+            }`} style={{ animation: 'pulse-select 0.6s ease-in-out infinite' }}>
+              <div className="flex flex-col items-center gap-3">
+                <div className="text-5xl animate-bounce">📍</div>
+                <span className="text-lg font-bold">Fliege zur Station...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Loading indicator for stations */}
       {stationManager.loading && !locationLoading && (
         <div className="fixed top-16 left-1/2 transform -translate-x-1/2 z-[999]">
@@ -971,7 +1067,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
       {/* Station list */}
       {showStationList && userLocation && nearbyStations.length > 0 && (
-        <div className="fixed left-1/2 top-16 z-[999] transform -translate-x-1/2 w-80 max-w-[calc(100vw-2rem)]">
+        <div className="fixed left-1/2 top-16 z-[999] transform -translate-x-1/2 w-80 max-w-[calc(100vw-2rem)] animate-slide-up">
           <div className={`rounded-2xl shadow-xl backdrop-blur-md border ${
             isDarkMode === true
               ? 'bg-gray-800/95 text-white border-gray-600' 
@@ -980,17 +1076,20 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             <div className="p-4">
               <h3 className="text-lg font-semibold mb-3 text-center">Stationen in der Nähe</h3>
               <div className="space-y-3">
-                {nearbyStations.map((station) => {
+                {nearbyStations.map((station, index) => {
                   const distance = calculateDistance(userLocation.lat, userLocation.lng, station.lat, station.lng);
                   return (
                     <button
                       key={station.id}
                       onClick={() => highlightStation(station)}
-                      className={`w-full flex items-center justify-between p-3 rounded-xl transition-all duration-200 hover:scale-[1.02] ${
+                      className={`w-full flex items-center justify-between p-3 rounded-xl transition-all duration-300 transform hover:scale-[1.03] active:scale-95 hover:shadow-lg ${
                         isDarkMode === true
                           ? 'bg-gray-700/50 hover:bg-gray-700/70 active:bg-gray-600/70' 
                           : 'bg-gray-50/50 hover:bg-gray-50/70 active:bg-gray-100/70'
                       }`}
+                      style={{
+                        animation: `fade-in-up 0.4s ease-out ${index * 0.1}s backwards`
+                      }}
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
@@ -1059,35 +1158,58 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <CameraOverlay 
           onClose={() => setScanning(false)}
           onStationScanned={async (stationId: string) => {
-            console.log('📍 QR-Code gescannt:', stationId);
+            console.log('📍 QR-Code/Code gescannt:', stationId);
             
             // Schließe Scanner sofort
             setScanning(false);
             
+            // Prüfe ob es ein 4-stelliger Code ist (z.B. A3B7)
+            const isShortCode = /^[A-Z0-9]{4}$/i.test(stationId);
+            
             // Suche die Station in der Liste
-            let station = stations.find(s => s.id === stationId);
+            let station = isShortCode 
+              ? stations.find(s => s.short_code?.toUpperCase() === stationId.toUpperCase())
+              : stations.find(s => s.id === stationId);
             
             if (station) {
-              // Station gefunden - zeige sie SOFORT an
-              highlightStation(station);
+              // Station gefunden - zeige Ausleih-Bestätigungsmodal
+              setScannedStation(station);
+              setShowRentalModal(true);
               
               // Haptisches Feedback
               if (navigator.vibrate) {
                 navigator.vibrate([200, 100, 200]);
               }
             } else {
-              // Station nicht in der Liste - versuche schnelles Reload
+              // Station nicht in der Liste - suche in Datenbank
               try {
-                const refreshedStations = await stationManager.refreshStations();
-                station = refreshedStations.find(s => s.id === stationId);
+                const { supabase } = await import('@/lib/supabaseClient');
+                let query = supabase.from('stations').select('*').eq('is_active', true);
                 
-                if (station) {
-                  highlightStation(station);
+                if (isShortCode) {
+                  query = query.ilike('short_code', stationId);
+                } else {
+                  query = query.eq('id', stationId);
+                }
+                
+                const { data, error } = await query.single();
+                
+                if (error || !data) {
+                  console.error('Station nicht gefunden:', error);
+                  alert(isShortCode 
+                    ? `Station mit Code "${stationId.toUpperCase()}" nicht gefunden`
+                    : 'Station nicht gefunden'
+                  );
+                  return;
+                }
+                
+                if (data) {
+                  setScannedStation(data);
+                  setShowRentalModal(true);
+                  
                   if (navigator.vibrate) {
                     navigator.vibrate([200, 100, 200]);
                   }
-                } else {
-                  alert('Station nicht gefunden');
                 }
               } catch (err) {
                 console.error('Fehler beim Laden der Station:', err);
@@ -1095,6 +1217,35 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               }
             }
           }}
+        />
+      )}
+      {showRentalModal && scannedStation && (
+        <RentalConfirmationModal
+          station={scannedStation}
+          onClose={() => {
+            setShowRentalModal(false);
+            setScannedStation(null);
+          }}
+          onConfirm={async (userEmail?: string, userName?: string) => {
+            console.log('✅ Ausleihe bestätigt:', { 
+              stationId: scannedStation.id, 
+              stationName: scannedStation.name,
+              userEmail, 
+              userName 
+            });
+            
+            // TODO: Hier die tatsächliche Ausleih-Logik implementieren
+            // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
+            
+            // Erfolgsmeldung
+            alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
+            
+            // Modal schließen und Station auf Karte anzeigen
+            setShowRentalModal(false);
+            highlightStation(scannedStation);
+            setScannedStation(null);
+          }}
+          isDarkMode={isDarkMode === true}
         />
       )}
       <SideMenu 
@@ -1107,7 +1258,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           url.searchParams.set("theme", newTheme);
           window.location.href = url.toString();
         }}
+        onOpenOwnerDashboard={() => {
+          setMenuOpen(false);
+          setShowOwnerDashboard(true);
+        }}
       />
+      {showOwnerDashboard && (
+        <OwnerDashboard
+          isDarkMode={isDarkMode === true}
+          onClose={() => setShowOwnerDashboard(false)}
+        />
+      )}
     </>
   );
 }

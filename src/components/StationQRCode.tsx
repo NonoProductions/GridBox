@@ -6,20 +6,27 @@ import { useRef } from 'react';
 interface StationQRCodeProps {
   stationId: string;
   stationName: string;
+  shortCode?: string;
   size?: number;
   showDownload?: boolean;
 }
 
 export default function StationQRCode({ 
   stationId, 
-  stationName, 
+  stationName,
+  shortCode,
   size = 256,
   showDownload = true 
 }: StationQRCodeProps) {
   const qrRef = useRef<HTMLDivElement>(null);
 
-  // QR-Code Daten im Format: GRIDBOX-STATION-{stationId}
-  const qrValue = `GRIDBOX-STATION-${stationId}`;
+  // QR-Code Daten: URL mit Short-Code (kurz und funktioniert mit Handy-Kamera)
+  // Verwendet automatisch die richtige URL (localhost oder production)
+  const baseUrl = typeof window !== 'undefined' 
+    ? window.location.origin 
+    : 'https://gridbox-app.vercel.app';
+  const code = shortCode || stationId;
+  const qrValue = `${baseUrl}/rent/${code}`;
 
   const downloadQRCode = () => {
     if (!qrRef.current) return;
@@ -77,9 +84,11 @@ export default function StationQRCode({
       
       <div className="text-center">
         <p className="font-semibold text-lg">{stationName}</p>
-        <p className="text-sm text-gray-500 dark:text-gray-400 font-mono">
-          {stationId}
-        </p>
+        {shortCode && (
+          <p className="text-2xl text-emerald-600 dark:text-emerald-400 font-mono font-bold mt-1">
+            {shortCode}
+          </p>
+        )}
       </div>
 
       {showDownload && (

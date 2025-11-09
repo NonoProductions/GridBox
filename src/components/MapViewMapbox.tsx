@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
+import RentalConfirmationModal from "@/components/RentalConfirmationModal";
+import OwnerDashboard from "@/components/OwnerDashboard";
 import mapboxgl from "mapbox-gl";
 
 // Legacy Station type for backward compatibility
@@ -51,6 +53,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [permissionRequested, setPermissionRequested] = useState<boolean>(false);
   const [locationPermissionGranted, setLocationPermissionGranted] = useState<boolean>(false);
   const [showPermissionModal, setShowPermissionModal] = useState<boolean>(false);
+  const [showRentalModal, setShowRentalModal] = useState<boolean>(false);
+  const [scannedStation, setScannedStation] = useState<Station | null>(null);
+  const [showOwnerDashboard, setShowOwnerDashboard] = useState<boolean>(false);
   const [compassPermissionGranted, setCompassPermissionGranted] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
@@ -1923,13 +1928,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           type="button"
           onClick={() => setMenuOpen(true)}
           aria-label="Account & Einstellungen"
-          className={`grid place-items-center h-14 w-14 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
+          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
             isDarkMode === true
               ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
               : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
           }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
           </svg>
@@ -1938,13 +1943,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <a
           href="/hilfe"
           aria-label="Hilfe"
-          className={`grid place-items-center h-14 w-14 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
+          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
             isDarkMode === true
               ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
               : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
           }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <circle cx="12" cy="12" r="10" />
             <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
             <path d="M12 17h.01" />
@@ -1963,20 +1968,20 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               onClick={() => {
                 setScanning(true);
               }}
-              className={`flex items-center gap-3 px-8 py-4 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+              className={`flex items-center gap-3 px-6 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
                 isDarkMode === true
                   ? 'bg-black/30 text-white border border-white/30 hover:bg-black/40' 
                   : 'bg-white/40 text-slate-900 border border-slate-400/40 hover:bg-white/50'
               }`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 7V5a2 2 0 0 1 2-2h2" />
                 <path d="M17 3h2a2 2 0 0 1 2 2v2" />
                 <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
                 <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
                 <rect x="7" y="7" width="10" height="10" rx="2" />
               </svg>
-              <span className="text-base font-semibold">QR-Code Scannen</span>
+              <span className="text-sm font-semibold">QR-Code Scannen</span>
             </button>
           </div>
 
@@ -1985,7 +1990,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             type="button"
             onClick={centerOnStationAndFollow}
             aria-label="Auf Station zentrieren und Position verfolgen"
-            className={`fixed bottom-72 right-4 z-[1001] flex items-center justify-center gap-2 px-6 py-4 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg animate-slide-up ${
+            className={`fixed bottom-72 right-4 z-[1001] flex items-center justify-center gap-2 px-5 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg animate-slide-up ${
               isStationFollowingActive 
                 ? 'bg-emerald-600 text-white border-2 border-emerald-400 hover:bg-emerald-700 animate-pulse' 
                 : isDarkMode === true
@@ -2323,7 +2328,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }`}
         >
           <div className={`w-2 h-2 rounded-full ${nearbyStations.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`}></div>
-          <span className="text-base font-semibold whitespace-nowrap">
+          <span className="text-sm font-semibold whitespace-nowrap">
             {nearbyStations.length} Station{nearbyStations.length !== 1 ? 'en' : ''} in der Nähe
           </span>
           {/* Chevron Icon to indicate it's clickable */}
@@ -2407,7 +2412,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 ? "Zentriert (klicken für 3D-Modus)"
                 : "Meine Position zentrieren"
           }
-          className={`fixed bottom-28 right-4 z-[1000] grid place-items-center h-14 w-14 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+          className={`fixed bottom-28 right-4 z-[1000] grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
             isFollowingLocation 
               ? 'bg-emerald-600 text-white border-2 border-emerald-400 hover:bg-emerald-700 animate-pulse' // Grüner Hintergrund + Puls-Animation im Following-Modus
               : isDarkMode === true
@@ -2415,7 +2420,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30'
           }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
             <circle cx="12" cy="12" r="4" fill={isFollowingLocation ? "currentColor" : "none"} />
             {isFollowingLocation && (
@@ -2432,16 +2437,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           onClick={() => {
             setScanning(true);
           }}
-          className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-8 h-16 shadow-lg active:scale-95 border border-emerald-500"
+          className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-12 shadow-lg active:scale-95 border border-emerald-500"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M3 7V5a2 2 0 0 1 2-2h2" />
             <path d="M17 3h2a2 2 0 0 1 2 2v2" />
             <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
             <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
             <rect x="7" y="7" width="10" height="10" rx="2" />
           </svg>
-          <span className="text-lg font-semibold tracking-wide">Scannen</span>
+          <span className="text-base font-semibold tracking-wide">Scannen</span>
         </button>
       )}
       
@@ -2620,35 +2625,58 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <CameraOverlay 
           onClose={() => setScanning(false)}
           onStationScanned={async (stationId: string) => {
-            console.log('📍 QR-Code gescannt:', stationId);
+            console.log('📍 QR-Code/Code gescannt:', stationId);
             
             // Schließe Scanner sofort
             setScanning(false);
             
+            // Prüfe ob es ein 4-stelliger Code ist (z.B. A3B7)
+            const isShortCode = /^[A-Z0-9]{4}$/i.test(stationId);
+            
             // Suche die Station in der Liste
-            let station = stations.find(s => s.id === stationId);
+            let station = isShortCode 
+              ? stations.find(s => s.short_code?.toUpperCase() === stationId.toUpperCase())
+              : stations.find(s => s.id === stationId);
             
             if (station) {
-              // Station gefunden - zeige sie SOFORT an
-              highlightStation(station);
+              // Station gefunden - zeige Ausleih-Bestätigungsmodal
+              setScannedStation(station);
+              setShowRentalModal(true);
               
               // Haptisches Feedback
               if (navigator.vibrate) {
                 navigator.vibrate([200, 100, 200]);
               }
             } else {
-              // Station nicht in der Liste - versuche schnelles Reload
+              // Station nicht in der Liste - suche in Datenbank
               try {
-                const refreshedStations = await stationManager.refreshStations();
-                station = refreshedStations.find(s => s.id === stationId);
+                const { supabase } = await import('@/lib/supabaseClient');
+                let query = supabase.from('stations').select('*').eq('is_active', true);
                 
-                if (station) {
-                  highlightStation(station);
+                if (isShortCode) {
+                  query = query.ilike('short_code', stationId);
+                } else {
+                  query = query.eq('id', stationId);
+                }
+                
+                const { data, error } = await query.single();
+                
+                if (error || !data) {
+                  console.error('Station nicht gefunden:', error);
+                  alert(isShortCode 
+                    ? `Station mit Code "${stationId.toUpperCase()}" nicht gefunden`
+                    : 'Station nicht gefunden'
+                  );
+                  return;
+                }
+                
+                if (data) {
+                  setScannedStation(data);
+                  setShowRentalModal(true);
+                  
                   if (navigator.vibrate) {
                     navigator.vibrate([200, 100, 200]);
                   }
-                } else {
-                  alert('Station nicht gefunden');
                 }
               } catch (err) {
                 console.error('Fehler beim Laden der Station:', err);
@@ -2656,6 +2684,35 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               }
             }
           }}
+        />
+      )}
+      {showRentalModal && scannedStation && (
+        <RentalConfirmationModal
+          station={scannedStation}
+          onClose={() => {
+            setShowRentalModal(false);
+            setScannedStation(null);
+          }}
+          onConfirm={async (userEmail?: string, userName?: string) => {
+            console.log('✅ Ausleihe bestätigt:', { 
+              stationId: scannedStation.id, 
+              stationName: scannedStation.name,
+              userEmail, 
+              userName 
+            });
+            
+            // TODO: Hier die tatsächliche Ausleih-Logik implementieren
+            // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
+            
+            // Erfolgsmeldung
+            alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
+            
+            // Modal schließen und Station auf Karte anzeigen
+            setShowRentalModal(false);
+            highlightStation(scannedStation);
+            setScannedStation(null);
+          }}
+          isDarkMode={isDarkMode === true}
         />
       )}
       <SideMenu 
@@ -2668,7 +2725,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           url.searchParams.set("theme", newTheme);
           window.location.href = url.toString();
         }}
+        onOpenOwnerDashboard={() => {
+          setMenuOpen(false);
+          setShowOwnerDashboard(true);
+        }}
       />
+      {showOwnerDashboard && (
+        <OwnerDashboard
+          isDarkMode={isDarkMode === true}
+          onClose={() => setShowOwnerDashboard(false)}
+        />
+      )}
     </>
   );
 }

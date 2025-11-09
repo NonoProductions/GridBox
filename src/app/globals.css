@@ -44,3 +44,100 @@
 .animate-scan {
   animation: scan 2s linear infinite;
 }
+
+/* Station Selection Animation */
+@keyframes pulse-select {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes station-selected {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Map Marker Animation - Smooth bounce effect */
+@keyframes station-marker-appear {
+  0% {
+    transform: scale(0) translateY(-40px);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.3) translateY(5px);
+    opacity: 1;
+  }
+  65% {
+    transform: scale(0.85) translateY(0);
+  }
+  80% {
+    transform: scale(1.08) translateY(0);
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Leaflet marker specific animation */
+.leaflet-marker-icon {
+  transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+}
+
+/* Pulsing effect for selected marker */
+@keyframes marker-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Pulsing circle animation for station selection */
+.pulse-circle {
+  animation: pulse-circle-expand 1s ease-out forwards !important;
+}
+
+@keyframes pulse-circle-expand {
+  0% {
+    transform: scale(0);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+
+/* Fade in up animation for staggered list items */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

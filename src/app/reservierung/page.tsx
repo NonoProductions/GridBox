@@ -33,6 +33,7 @@ function ReservierungContent() {
   });
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   
   // Get theme from URL parameter, default to dark mode
   const isDarkMode = searchParams.get("theme") === "light" ? false : true;
@@ -104,8 +105,15 @@ function ReservierungContent() {
   };
 
   const handleStationSelect = (station: Station) => {
-    setReservationData(prev => ({ ...prev, station }));
-    setCurrentStep(2);
+    // Animation: Markiere die ausgewählte Station
+    setSelectedStationId(station.id);
+    
+    // Warte kurz für die Animation, dann gehe zum nächsten Schritt
+    setTimeout(() => {
+      setReservationData(prev => ({ ...prev, station }));
+      setCurrentStep(2);
+      setSelectedStationId(null);
+    }, 400);
   };
 
   const handleDateTimeSelect = () => {
@@ -245,17 +253,26 @@ function ReservierungContent() {
                 <div
                   key={station.id}
                   onClick={() => handleStationSelect(station)}
-                  className={`p-4 rounded-xl border transition-all cursor-pointer ${
-                    isDarkMode
-                      ? 'border-white/20 bg-white/5 hover:bg-white/10'
-                      : 'border-slate-200 bg-white hover:bg-slate-50'
+                  className={`p-4 rounded-xl border transition-all duration-300 cursor-pointer transform ${
+                    selectedStationId === station.id
+                      ? 'scale-95 ring-4 ring-emerald-500/50 border-emerald-500 bg-emerald-500/10'
+                      : isDarkMode
+                        ? 'border-white/20 bg-white/5 hover:bg-white/10 hover:scale-[1.02] hover:shadow-lg'
+                        : 'border-slate-200 bg-white hover:bg-slate-50 hover:scale-[1.02] hover:shadow-lg'
                   }`}
+                  style={{
+                    animation: selectedStationId === station.id ? 'pulse-select 0.4s ease-in-out' : undefined
+                  }}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
-                        <div className="grid place-items-center h-10 w-10 rounded-full bg-emerald-100">
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
+                        <div className={`grid place-items-center h-10 w-10 rounded-full bg-emerald-100 transition-all duration-300 ${
+                          selectedStationId === station.id ? 'scale-110 bg-emerald-200' : ''
+                        }`}>
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`text-emerald-600 transition-all duration-300 ${
+                            selectedStationId === station.id ? 'scale-110' : ''
+                          }`}>
                             <path d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/>
                             <path d="M13 11h3l-4 6v-4H9l4-6v4z" fill="currentColor"/>
                           </svg>

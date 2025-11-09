@@ -165,6 +165,7 @@ export default function QRTestPage() {
                   <StationQRCode
                     stationId={selectedStation.id}
                     stationName={selectedStation.name}
+                    shortCode={selectedStation.short_code}
                     size={256}
                     showDownload={true}
                   />
@@ -187,10 +188,15 @@ export default function QRTestPage() {
           </ol>
           <div className="mt-4 p-3 bg-blue-100 dark:bg-blue-900/40 rounded-lg">
             <p className="text-sm text-blue-900 dark:text-blue-100">
-              <strong>Format:</strong> QR-Codes enthalten die Station-ID im Format 
-              <code className="mx-1 px-2 py-1 bg-blue-200 dark:bg-blue-800 rounded">
-                GRIDBOX-STATION-{'{id}'}
-              </code>
+              <strong>Format:</strong> QR-Codes enthalten eine kurze URL mit dem 4-stelligen Code:
+            </p>
+            <code className="block mx-1 px-2 py-1 bg-blue-200 dark:bg-blue-800 rounded font-mono text-xs mt-2">
+              https://gridbox-app.vercel.app/rent/A3B7
+            </code>
+            <p className="text-xs text-blue-800 dark:text-blue-200 mt-2">
+              ✓ Funktioniert mit Handy-Kamera<br/>
+              ✓ Öffnet direkt die Ausleih-Bestätigung<br/>
+              ✓ Code kann auch manuell eingegeben werden
             </p>
           </div>
         </section>
