@@ -64,32 +64,17 @@ export default function RentalConfirmationModal({
   }, []);
 
   const handleConfirm = async () => {
+    // Wenn nicht angemeldet, zur Login-Seite weiterleiten
+    if (!isAuthenticated) {
+      const currentUrl = window.location.pathname;
+      window.location.href = `/login?returnUrl=${encodeURIComponent(currentUrl)}`;
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
-      // Validierung für nicht angemeldete Nutzer
-      if (!isAuthenticated) {
-        if (!email || !name) {
-          setError("Bitte geben Sie Ihren Namen und E-Mail-Adresse ein.");
-          setLoading(false);
-          return;
-        }
-
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-          setError("Bitte geben Sie eine gültige E-Mail-Adresse ein.");
-          setLoading(false);
-          return;
-        }
-
-        if (name.trim().length < 2) {
-          setError("Bitte geben Sie einen gültigen Namen ein.");
-          setLoading(false);
-          return;
-        }
-      }
-
       // Prüfe Verfügbarkeit
       if ((station.available_units ?? 0) <= 0) {
         setError("Leider sind momentan keine Powerbanks verfügbar.");
@@ -185,7 +170,7 @@ export default function RentalConfirmationModal({
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto px-5 pb-6">
-          {/* Auth Status & Form */}
+          {/* Auth Status */}
           {isAuthenticated ? (
             <div className={`rounded-lg p-4 mb-4 ${
               isDarkMode ? 'bg-gray-700/30' : 'bg-gray-50'
@@ -206,42 +191,21 @@ export default function RentalConfirmationModal({
               </div>
             </div>
           ) : (
-            <div className="space-y-4 mb-4">
-              <div>
-                <label htmlFor="name" className="block text-sm font-medium mb-2">
-                  Name
-                </label>
-                <input
-                  id="name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Ihr vollständiger Name"
-                  className={`w-full px-4 py-3 rounded-lg border ${
-                    isDarkMode 
-                      ? 'bg-gray-700/50 border-gray-600 text-white placeholder-gray-500' 
-                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all`}
-                  required
-                />
-              </div>
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium mb-2">
-                  E-Mail-Adresse
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="ihre@email.de"
-                  className={`w-full px-4 py-3 rounded-lg border ${
-                    isDarkMode 
-                      ? 'bg-gray-700/50 border-gray-600 text-white placeholder-gray-500' 
-                      : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all`}
-                  required
-                />
+            <div className={`rounded-lg p-4 mb-4 border-2 border-dashed ${
+              isDarkMode ? 'bg-emerald-900/20 border-emerald-700/50' : 'bg-emerald-50 border-emerald-300'
+            }`}>
+              <div className="flex items-start gap-3">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                </svg>
+                <div>
+                  <p className="text-sm font-medium mb-1">
+                    Anmeldung erforderlich
+                  </p>
+                  <p className="text-xs opacity-70">
+                    Bitte melden Sie sich an, um eine Powerbank auszuleihen
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -270,6 +234,15 @@ export default function RentalConfirmationModal({
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
                 <span className="text-base font-semibold tracking-wide">Wird bestätigt...</span>
+              </>
+            ) : !isAuthenticated ? (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                  <polyline points="10 17 15 12 10 7"></polyline>
+                  <line x1="15" y1="12" x2="3" y2="12"></line>
+                </svg>
+                <span className="text-base font-semibold tracking-wide">Anmelden & Ausleihen</span>
               </>
             ) : (
               <>

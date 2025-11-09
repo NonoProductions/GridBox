@@ -4,7 +4,15 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding"]);
+const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding", "/login"]);
+
+// Check if route is public or starts with a public path
+const isPublicRoute = (path: string): boolean => {
+  if (PUBLIC_ROUTES.has(path)) return true;
+  // Allow all /rent/* routes
+  if (path.startsWith("/rent/")) return true;
+  return false;
+};
 
 export default function AuthGate() {
   const pathname = usePathname();
@@ -50,11 +58,11 @@ export default function AuthGate() {
   // Redirect nur wenn nötig und Session geprüft wurde
   useEffect(() => {
     if (!pathname || !hasChecked || isAuthenticated === null) return;
-    if (PUBLIC_ROUTES.has(pathname)) return;
+    if (isPublicRoute(pathname)) return;
 
     // Nur redirecten wenn definitiv nicht authentifiziert
     if (!isAuthenticated) {
-      router.replace("/");
+      router.replace("/login");
     }
   }, [pathname, router, hasChecked, isAuthenticated]);
 
