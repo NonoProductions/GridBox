@@ -272,31 +272,36 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     };
     
     // Methode 1: Versuche kontinuierliches Scanning (bevorzugt)
-    (async () => {
-      try {
-        console.log('Using direct video scanning method');
-        const controls = await codeReader.decodeFromVideoDevice(
-          deviceId,
-          videoRef.current!,
-          handleDecode
-        );
-        
-        scanControlRef.current = controls;
-        
-        // Falls nach 2 Sekunden kein Scan funktioniert, wechsle zu Canvas-Fallback
-        // (nur wenn noch kein erfolgreicher Scan stattgefunden hat)
-        fallbackTimeoutRef.current = setTimeout(() => {
-          if (!hasScannedRef.current && !useCanvasFallback) {
-            console.log('⚠️ Direct video scan not detecting codes, switching to canvas fallback');
-            setUseCanvasFallback(true);
-          }
-        }, 2000);
-        
-      } catch (err) {
-        console.error('Error starting direct video scan:', err);
-        setUseCanvasFallback(true);
-      }
-    })();
+    try {
+      console.log('Using direct video scanning method');
+      codeReader.decodeFromVideoDevice(
+        deviceId,
+        videoRef.current!,
+        handleDecode
+      ).catch((err) => {
+        console.error('Error in video scanning:', err);
+      });
+      
+      // Speichere eine Referenz zum Stoppen via reset()
+      scanControlRef.current = {
+        stop: () => {
+          codeReader.reset();
+        }
+      };
+      
+      // Falls nach 2 Sekunden kein Scan funktioniert, wechsle zu Canvas-Fallback
+      // (nur wenn noch kein erfolgreicher Scan stattgefunden hat)
+      fallbackTimeoutRef.current = setTimeout(() => {
+        if (!hasScannedRef.current && !useCanvasFallback) {
+          console.log('⚠️ Direct video scan not detecting codes, switching to canvas fallback');
+          setUseCanvasFallback(true);
+        }
+      }, 2000);
+      
+    } catch (err) {
+      console.error('Error starting direct video scan:', err);
+      setUseCanvasFallback(true);
+    }
 
     return () => {
       console.log('Stopping QR code scanning...');
