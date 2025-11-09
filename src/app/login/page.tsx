@@ -14,6 +14,13 @@ function LoginContent() {
   // Get return URL from query params
   const returnUrl = searchParams.get('returnUrl') || '/app';
 
+  // Save returnUrl to localStorage so auth callback can use it
+  useEffect(() => {
+    if (returnUrl && returnUrl !== '/app') {
+      localStorage.setItem('auth_return_url', returnUrl);
+    }
+  }, [returnUrl]);
+
   useEffect(() => {
     const checkSession = async () => {
       try {
@@ -111,6 +118,23 @@ function LoginContent() {
 
   return (
     <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-50 via-slate-50 to-emerald-50 dark:from-gray-900 dark:via-black dark:to-gray-900 overflow-auto py-8">
+      {/* Back button */}
+      <div className="absolute top-4 left-4 z-20">
+        <button
+          type="button"
+          onClick={() => {
+            const theme = searchParams.get("theme");
+            router.push(`/${theme ? `?theme=${theme}` : ''}`);
+          }}
+          aria-label="Zurück"
+          className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <polyline points="15,18 9,12 15,6" />
+          </svg>
+        </button>
+      </div>
+
       {/* Animated background elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl animate-pulse"></div>

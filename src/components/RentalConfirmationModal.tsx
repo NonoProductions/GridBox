@@ -66,7 +66,7 @@ export default function RentalConfirmationModal({
   const handleConfirm = async () => {
     // Wenn nicht angemeldet, zur Login-Seite weiterleiten
     if (!isAuthenticated) {
-      const currentUrl = window.location.pathname;
+      const currentUrl = window.location.pathname + window.location.search;
       window.location.href = `/login?returnUrl=${encodeURIComponent(currentUrl)}`;
       return;
     }

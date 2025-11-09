@@ -38,7 +38,15 @@ export default function OnboardingPage() {
       if (!data.user) throw new Error("Nicht eingeloggt.");
       const { error: updateError } = await supabase.auth.updateUser({ data: { full_name: trimmed } });
       if (updateError) throw updateError;
-      router.replace("/app");
+      
+      // Check if there's a return URL from before login
+      const returnUrl = localStorage.getItem('auth_return_url');
+      if (returnUrl) {
+        localStorage.removeItem('auth_return_url');
+        router.replace(returnUrl);
+      } else {
+        router.replace("/app");
+      }
     } catch (err: unknown) {
       setError((err as Error)?.message ?? "Konnte den Namen nicht speichern.");
     } finally {
