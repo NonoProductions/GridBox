@@ -11,7 +11,6 @@ interface CameraOverlayProps {
 export default function CameraOverlay({ onClose, onStationScanned }: CameraOverlayProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wakeLockRef = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -25,12 +24,8 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
   const [lastScannedCode, setLastScannedCode] = useState<string>("");
   const [lastScanTime, setLastScanTime] = useState<number>(0);
   const [scanSuccess, setScanSuccess] = useState(false);
-  const [useCanvasFallback, setUseCanvasFallback] = useState(false);
   const qrCodeReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const scanControlRef = useRef<{ stop: () => void } | null>(null);
-  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hasScannedRef = useRef(false);
   const inputRefs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
@@ -255,7 +250,6 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         const now = Date.now();
         
         console.log('🔍 QR Code detected:', scannedText);
-        hasScannedRef.current = true;
         
         // Verhindere mehrfaches Scannen desselben Codes innerhalb von 1 Sekunde
         if (scannedText !== lastScannedCode || now - lastScanTime > 1000) {
@@ -295,9 +289,9 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
       }
     };
     
-    // Methode 1: Versuche kontinuierliches Scanning (bevorzugt)
+    // Starte kontinuierliches Video-Scanning
     try {
-      console.log('Using direct video scanning method');
+      console.log('🚀 Starting direct video scanning');
       codeReader.decodeFromVideoDevice(
         deviceId,
         videoRef.current!,
@@ -313,18 +307,8 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         }
       };
       
-      // Falls nach 2 Sekunden kein Scan funktioniert, wechsle zu Canvas-Fallback
-      // (nur wenn noch kein erfolgreicher Scan stattgefunden hat)
-      fallbackTimeoutRef.current = setTimeout(() => {
-        if (!hasScannedRef.current && !useCanvasFallback) {
-          console.log('⚠️ Direct video scan not detecting codes, switching to canvas fallback');
-          setUseCanvasFallback(true);
-        }
-      }, 2000);
-      
     } catch (err) {
-      console.error('Error starting direct video scan:', err);
-      setUseCanvasFallback(true);
+      console.error('Error starting video scan:', err);
     }
 
     return () => {
@@ -333,108 +317,9 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         scanControlRef.current.stop();
         scanControlRef.current = null;
       }
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-        scanIntervalRef.current = null;
-      }
-      if (fallbackTimeoutRef.current) {
-        clearTimeout(fallbackTimeoutRef.current);
-        fallbackTimeoutRef.current = null;
-      }
       codeReader.reset();
     };
-  }, [scanningActive, onStationScanned, lastScannedCode, lastScanTime, useCanvasFallback]);
-
-  // Canvas-Fallback für Geräte, wo direkte Video-Decodierung nicht funktioniert
-  // Dieser Modus läuft ZUSÄTZLICH zum direkten Video-Scanning für höhere Erfolgsrate
-  useEffect(() => {
-    if (!useCanvasFallback || !scanningActive || !videoRef.current) return;
-
-    console.log('🔄 Starting canvas-based QR code scanning (fallback method)...');
-    
-    const codeReader = new BrowserQRCodeReader();
-    const video = videoRef.current;
-    
-    // Erstelle ein verstecktes Canvas für Frame-Captures
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    canvasRef.current = canvas;
-    
-    if (!context) {
-      console.error('Could not get canvas context');
-      return;
-    }
-
-    // Scan-Funktion die regelmäßig ein Frame vom Video nimmt und analysiert
-    const scanFrame = async () => {
-      if (!video.videoWidth || !video.videoHeight) return;
-      
-      // Setze Canvas-Größe auf Video-Größe
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      
-      // Zeichne aktuelles Video-Frame auf Canvas
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-      
-      try {
-        // Versuche QR-Code vom Canvas zu lesen
-        // Verwende decodeFromImage mit dem Canvas-Element
-        const result = await codeReader.decodeFromImage(canvas as any);
-        
-        if (result) {
-          const scannedText = result.getText();
-          const now = Date.now();
-          
-          console.log('🔍 QR Code detected (canvas method):', scannedText);
-          hasScannedRef.current = true;
-          
-          // Verhindere mehrfaches Scannen desselben Codes
-          if (scannedText !== lastScannedCode || now - lastScanTime > 1000) {
-            console.log('✅ QR Code erfolgreich gescannt (canvas):', scannedText);
-            
-            setLastScannedCode(scannedText);
-            setLastScanTime(now);
-            
-            // Visueller Erfolgsindikator
-            setScanSuccess(true);
-            setTimeout(() => setScanSuccess(false), 1000);
-            
-            // Station-ID extrahieren
-            let stationId = scannedText;
-            if (scannedText.startsWith('GRIDBOX-STATION-')) {
-              stationId = scannedText.replace('GRIDBOX-STATION-', '');
-            }
-            
-            console.log('📍 Extracted Station ID:', stationId);
-            
-            if (onStationScanned) {
-              onStationScanned(stationId);
-            }
-            
-            if (navigator.vibrate) {
-              navigator.vibrate([100, 50, 100]);
-            }
-          }
-        }
-      } catch (err: any) {
-        // Ignoriere NotFoundException (kein QR-Code im Frame)
-        if (!err?.message?.includes('NotFoundException')) {
-          console.debug('Canvas scan error:', err?.message);
-        }
-      }
-    };
-
-    // Scanne alle 150ms (~6-7x pro Sekunde) für schnellere Erkennung
-    scanIntervalRef.current = setInterval(scanFrame, 150);
-
-    return () => {
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-        scanIntervalRef.current = null;
-      }
-      codeReader.reset();
-    };
-  }, [useCanvasFallback, scanningActive, onStationScanned, lastScannedCode, lastScanTime]);
+  }, [scanningActive, onStationScanned, lastScannedCode, lastScanTime]);
 
   // Taschenlampe ein/ausschalten
   const toggleTorch = async () => {
@@ -626,24 +511,17 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
-        <div className="flex flex-col items-center gap-1">
-          <div className="flex items-center gap-2">
-            {scanningActive && (
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
-                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
-                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
-              </div>
-            )}
-            <span className="text-base md:text-lg font-semibold tracking-wide text-white drop-shadow-lg">
-              {scanningActive ? 'Scanne QR-Code...' : 'Scanne, um zu Laden'}
-            </span>
-          </div>
-          {useCanvasFallback && scanningActive && (
-            <span className="text-xs text-emerald-300/80 drop-shadow">
-              Fallback-Modus aktiv
-            </span>
+        <div className="flex items-center gap-2">
+          {scanningActive && (
+            <div className="flex space-x-1">
+              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
+              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
+            </div>
           )}
+          <span className="text-base md:text-lg font-semibold tracking-wide text-white drop-shadow-lg">
+            {scanningActive ? 'Scanne QR-Code...' : 'Scanne, um zu Laden'}
+          </span>
         </div>
       </div>
       <div className="absolute inset-0 pointer-events-none">
