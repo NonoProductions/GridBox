@@ -11,6 +11,7 @@ interface CameraOverlayProps {
 export default function CameraOverlay({ onClose, onStationScanned }: CameraOverlayProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const [boxSize, setBoxSize] = useState<number>(0);
@@ -23,8 +24,12 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
   const [lastScannedCode, setLastScannedCode] = useState<string>("");
   const [lastScanTime, setLastScanTime] = useState<number>(0);
   const [scanSuccess, setScanSuccess] = useState(false);
+  const [useCanvasFallback, setUseCanvasFallback] = useState(false);
   const qrCodeReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const scanControlRef = useRef<{ stop: () => void } | null>(null);
+  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasScannedRef = useRef(false);
   const inputRefs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
@@ -43,21 +48,19 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         }
 
         // Erweiterte Kamera-Constraints für bessere mobile Kompatibilität und schnelleres Scannen
-        const constraints = {
+        const constraints: MediaStreamConstraints = {
           video: {
             facingMode: { ideal: "environment" }, // Rückkamera bevorzugen, aber nicht erzwingen
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            // Autofokus für schärfere QR-Code-Erkennung
-            focusMode: { ideal: "continuous" } as any,
-            // Optimierte Einstellungen für QR-Code-Scanning
+            // Hohe Auflösung für bessere QR-Code-Erkennung, aber flexibel für Kompatibilität
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 },
             aspectRatio: { ideal: 16/9 },
-            frameRate: { ideal: 30, min: 15 }
+            frameRate: { ideal: 30, min: 10, max: 60 },
           },
           audio: false
         };
 
-        console.log('Requesting camera access...');
+        console.log('📱 Requesting camera access...');
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         
         if (!mounted) {
@@ -68,26 +71,47 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         
         streamRef.current = stream;
         
-        // Prüfe ob Taschenlampe unterstützt wird und aktiviere Autofokus
+        // Prüfe Kamera-Capabilities und aktiviere erweiterte Funktionen
         const track = stream.getVideoTracks()[0];
-        const capabilities = track.getCapabilities?.() as { torch?: boolean; focusMode?: string[] } | undefined;
+        const capabilities = track.getCapabilities?.() as any;
         
         if (capabilities) {
+          console.log('📷 Camera capabilities:', capabilities);
+          
           // Aktiviere Taschenlampe wenn unterstützt
           if ('torch' in capabilities) {
             setTorchSupported(true);
             console.log('✅ Torch/Flashlight is supported');
           }
           
-          // Aktiviere Autofokus für bessere QR-Code-Erkennung
+          // Versuche erweiterte Constraints anzuwenden für bessere QR-Code-Erkennung
+          const constraintsToApply: any = { advanced: [{}] };
+          let hasAdvancedConstraints = false;
+          
           if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+            constraintsToApply.advanced[0].focusMode = 'continuous';
+            hasAdvancedConstraints = true;
+            console.log('🎯 Continuous autofocus available');
+          }
+          
+          if (capabilities.exposureMode && capabilities.exposureMode.includes('continuous')) {
+            constraintsToApply.advanced[0].exposureMode = 'continuous';
+            hasAdvancedConstraints = true;
+            console.log('☀️ Continuous exposure available');
+          }
+          
+          if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('continuous')) {
+            constraintsToApply.advanced[0].whiteBalanceMode = 'continuous';
+            hasAdvancedConstraints = true;
+            console.log('🌈 Continuous white balance available');
+          }
+          
+          if (hasAdvancedConstraints) {
             try {
-              await track.applyConstraints({
-                advanced: [{ focusMode: 'continuous' } as any]
-              });
-              console.log('✅ Continuous autofocus enabled');
-            } catch (focusError) {
-              console.log('ℹ️ Could not enable continuous autofocus:', focusError);
+              await track.applyConstraints(constraintsToApply);
+              console.log('✅ Advanced camera constraints applied successfully');
+            } catch (constraintError) {
+              console.log('ℹ️ Could not apply all advanced constraints:', constraintError);
             }
           }
         }
@@ -172,9 +196,21 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     };
   }, []);
 
-  // QR-Code Scanning - Optimierte kontinuierliche Scan-Methode
+  // QR-Code Scanning - Optimierte kontinuierliche Scan-Methode mit Canvas-Fallback
   useEffect(() => {
     if (!scanningActive || !videoRef.current || !streamRef.current) return;
+
+    const video = videoRef.current;
+    
+    // Warte bis Video bereit ist
+    if (video.readyState < 2) {
+      console.log('⏳ Waiting for video to be ready...');
+      const onMetadataLoaded = () => {
+        console.log('✅ Video metadata loaded, ready to scan');
+      };
+      video.addEventListener('loadeddata', onMetadataLoaded, { once: true });
+      return;
+    }
 
     const codeReader = new BrowserQRCodeReader();
     qrCodeReaderRef.current = codeReader;
@@ -183,20 +219,146 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     const videoTrack = streamRef.current.getVideoTracks()[0];
     const deviceId = videoTrack.getSettings().deviceId;
 
-    console.log('Starting continuous QR code scanning...');
+    console.log('🚀 Starting continuous QR code scanning...');
+    console.log('📹 Video ready state:', video.readyState);
+    console.log('📐 Video dimensions:', video.videoWidth, 'x', video.videoHeight);
+    console.log('🎥 Video track settings:', videoTrack.getSettings());
     
-    // Verwende die kontinuierliche Scan-Methode - viel effizienter und zuverlässiger!
-    const controls = codeReader.decodeFromVideoDevice(
-      deviceId,
-      videoRef.current,
-      (result, error) => {
+    // Gemeinsame Callback-Funktion für QR-Code-Erkennung
+    const handleDecode = (result: any, error: any) => {
+      if (result) {
+        const scannedText = result.getText();
+        const now = Date.now();
+        
+        console.log('🔍 QR Code detected:', scannedText);
+        hasScannedRef.current = true;
+        
+        // Verhindere mehrfaches Scannen desselben Codes innerhalb von 1 Sekunde
+        if (scannedText !== lastScannedCode || now - lastScanTime > 1000) {
+          console.log('✅ QR Code erfolgreich gescannt:', scannedText);
+          
+          setLastScannedCode(scannedText);
+          setLastScanTime(now);
+          
+          // Visueller Erfolgsindikator
+          setScanSuccess(true);
+          setTimeout(() => setScanSuccess(false), 1000);
+          
+          // Versuche Station-ID zu extrahieren
+          // Format: "GRIDBOX-STATION-{stationId}" oder direkt die Station-ID
+          let stationId = scannedText;
+          if (scannedText.startsWith('GRIDBOX-STATION-')) {
+            stationId = scannedText.replace('GRIDBOX-STATION-', '');
+          }
+          
+          console.log('📍 Extracted Station ID:', stationId);
+          
+          // Callback mit Station-ID
+          if (onStationScanned) {
+            onStationScanned(stationId);
+          }
+          
+          // Haptisches Feedback für erfolgreichen Scan
+          if (navigator.vibrate) {
+            navigator.vibrate([100, 50, 100]); // Doppel-Vibration
+          }
+        }
+      }
+      
+      // Log nur echte Fehler, nicht "NotFoundException" (kein QR-Code im Bild)
+      if (error && !error.message?.includes('NotFoundException')) {
+        console.debug('QR scan attempt:', error.message);
+      }
+    };
+    
+    // Methode 1: Versuche kontinuierliches Scanning (bevorzugt)
+    try {
+      console.log('Using direct video scanning method');
+      const controls = codeReader.decodeFromVideoDevice(
+        deviceId,
+        videoRef.current,
+        handleDecode
+      );
+      
+      scanControlRef.current = controls;
+      
+      // Falls nach 2 Sekunden kein Scan funktioniert, wechsle zu Canvas-Fallback
+      // (nur wenn noch kein erfolgreicher Scan stattgefunden hat)
+      fallbackTimeoutRef.current = setTimeout(() => {
+        if (!hasScannedRef.current && !useCanvasFallback) {
+          console.log('⚠️ Direct video scan not detecting codes, switching to canvas fallback');
+          setUseCanvasFallback(true);
+        }
+      }, 2000);
+      
+    } catch (err) {
+      console.error('Error starting direct video scan:', err);
+      setUseCanvasFallback(true);
+    }
+
+    return () => {
+      console.log('Stopping QR code scanning...');
+      if (scanControlRef.current) {
+        scanControlRef.current.stop();
+        scanControlRef.current = null;
+      }
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current);
+        fallbackTimeoutRef.current = null;
+      }
+      codeReader.reset();
+    };
+  }, [scanningActive, onStationScanned, lastScannedCode, lastScanTime, useCanvasFallback]);
+
+  // Canvas-Fallback für Geräte, wo direkte Video-Decodierung nicht funktioniert
+  // Dieser Modus läuft ZUSÄTZLICH zum direkten Video-Scanning für höhere Erfolgsrate
+  useEffect(() => {
+    if (!useCanvasFallback || !scanningActive || !videoRef.current) return;
+
+    console.log('🔄 Starting canvas-based QR code scanning (fallback method)...');
+    
+    const codeReader = new BrowserQRCodeReader();
+    const video = videoRef.current;
+    
+    // Erstelle ein verstecktes Canvas für Frame-Captures
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvasRef.current = canvas;
+    
+    if (!context) {
+      console.error('Could not get canvas context');
+      return;
+    }
+
+    // Scan-Funktion die regelmäßig ein Frame vom Video nimmt und analysiert
+    const scanFrame = async () => {
+      if (!video.videoWidth || !video.videoHeight) return;
+      
+      // Setze Canvas-Größe auf Video-Größe
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      // Zeichne aktuelles Video-Frame auf Canvas
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      try {
+        // Versuche QR-Code vom Canvas zu lesen
+        const result = await codeReader.decodeFromCanvas(canvas);
+        
         if (result) {
           const scannedText = result.getText();
           const now = Date.now();
           
-          // Verhindere mehrfaches Scannen desselben Codes innerhalb von 1 Sekunde
+          console.log('🔍 QR Code detected (canvas method):', scannedText);
+          hasScannedRef.current = true;
+          
+          // Verhindere mehrfaches Scannen desselben Codes
           if (scannedText !== lastScannedCode || now - lastScanTime > 1000) {
-            console.log('✅ QR Code erfolgreich gescannt:', scannedText);
+            console.log('✅ QR Code erfolgreich gescannt (canvas):', scannedText);
             
             setLastScannedCode(scannedText);
             setLastScanTime(now);
@@ -205,44 +367,42 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
             setScanSuccess(true);
             setTimeout(() => setScanSuccess(false), 1000);
             
-            // Versuche Station-ID zu extrahieren
-            // Format: "GRIDBOX-STATION-{stationId}" oder direkt die Station-ID
+            // Station-ID extrahieren
             let stationId = scannedText;
             if (scannedText.startsWith('GRIDBOX-STATION-')) {
               stationId = scannedText.replace('GRIDBOX-STATION-', '');
             }
             
-            // Callback mit Station-ID
+            console.log('📍 Extracted Station ID:', stationId);
+            
             if (onStationScanned) {
               onStationScanned(stationId);
             }
             
-            // Haptisches Feedback für erfolgreichen Scan
             if (navigator.vibrate) {
-              navigator.vibrate([100, 50, 100]); // Doppel-Vibration
+              navigator.vibrate([100, 50, 100]);
             }
           }
         }
-        
-        // Ignoriere Scan-Fehler (kein QR-Code im Bild)
-        // Dies ist normal und sollte nicht geloggt werden
-        if (error && !error.message.includes('NotFoundException')) {
-          console.debug('QR scan attempt:', error.message);
+      } catch (err: any) {
+        // Ignoriere NotFoundException (kein QR-Code im Frame)
+        if (!err?.message?.includes('NotFoundException')) {
+          console.debug('Canvas scan error:', err?.message);
         }
       }
-    );
-    
-    scanControlRef.current = controls;
+    };
+
+    // Scanne alle 150ms (~6-7x pro Sekunde) für schnellere Erkennung
+    scanIntervalRef.current = setInterval(scanFrame, 150);
 
     return () => {
-      console.log('Stopping QR code scanning...');
-      if (scanControlRef.current) {
-        scanControlRef.current.stop();
-        scanControlRef.current = null;
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+        scanIntervalRef.current = null;
       }
       codeReader.reset();
     };
-  }, [scanningActive]);
+  }, [useCanvasFallback, scanningActive, onStationScanned, lastScannedCode, lastScanTime]);
 
   // Taschenlampe ein/ausschalten
   const toggleTorch = async () => {
@@ -444,17 +604,24 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
-        <div className="flex items-center gap-2">
-          {scanningActive && (
-            <div className="flex space-x-1">
-              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
-              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
-              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
-            </div>
+        <div className="flex flex-col items-center gap-1">
+          <div className="flex items-center gap-2">
+            {scanningActive && (
+              <div className="flex space-x-1">
+                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
+                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }}></div>
+              </div>
+            )}
+            <span className="text-base md:text-lg font-semibold tracking-wide text-white drop-shadow-lg">
+              {scanningActive ? 'Scanne QR-Code...' : 'Scanne, um zu Laden'}
+            </span>
+          </div>
+          {useCanvasFallback && scanningActive && (
+            <span className="text-xs text-emerald-300/80 drop-shadow">
+              Fallback-Modus aktiv
+            </span>
           )}
-          <span className="text-base md:text-lg font-semibold tracking-wide text-white drop-shadow-lg">
-            {scanningActive ? 'Scanne QR-Code...' : 'Scanne, um zu Laden'}
-          </span>
         </div>
       </div>
       <div className="absolute inset-0 pointer-events-none">

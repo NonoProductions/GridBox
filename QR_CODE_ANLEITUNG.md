@@ -65,14 +65,24 @@ GRIDBOX-STATION-123e4567-e89b-12d3-a456-426614174000
 ### Komponenten
 
 **1. CameraOverlay (`src/components/CameraOverlay.tsx`)**
-- Kamera-Zugriff mit optimierten Einstellungen (Full HD, 30 FPS)
-- **Kontinuierliches QR-Code Scanning** mit @zxing/library (verbesserte Zuverlässigkeit)
-- **Autofokus** für schärfere QR-Code-Erkennung
+- **Adaptive Kamera-Einstellungen** mit flexiblen Constraints (640x480 bis 1920x1080, 10-60 FPS)
+- **Intelligente Dual-Mode QR-Code Scanning** mit @zxing/library:
+  - Primärer Modus: Direktes kontinuierliches Video-Scanning (sofortige Erkennung)
+  - Sekundärer Modus: Canvas-basiertes Frame-by-Frame Scanning (~6-7x/Sekunde)
+  - Beide Modi laufen parallel für maximale Zuverlässigkeit
+- **Automatische Fallback-Aktivierung**: Nach 2 Sekunden ohne Erkennung wird zusätzlicher Canvas-Modus aktiviert
+- **Erweiterte Kamera-Optimierung**: 
+  - Continuous Autofokus für schärfere QR-Code-Erkennung
+  - Continuous Exposure für bessere Belichtung
+  - Continuous White Balance für konstante Farben
+- **Video-Ready-Check**: Scanner startet erst wenn Video vollständig geladen
 - **Echtzeit-Scan-Animation** mit visueller Scan-Linie
 - **Sofort-Feedback** bei erfolgreichem Scan (grüner Rahmen + Checkmark)
-- Manuelle Code-Eingabe als Fallback
+- **Visueller Fallback-Indikator** zeigt aktive Scan-Methode an
+- Manuelle Code-Eingabe als Fallback (4-stelliger Code)
 - Taschenlampen-Funktion (auf unterstützten Geräten)
 - Haptisches Feedback (Doppel-Vibration bei Erfolg)
+- Umfassende Fehlerbehandlung und detailliertes Logging
 
 **2. StationQRCode (`src/components/StationQRCode.tsx`)**
 - QR-Code Generierung mit qrcode.react
@@ -160,7 +170,10 @@ Die QR-Code Scanner-Funktionalität wurde in folgende Komponenten integriert:
 1. Taschenlampe einschalten (Button in der Scanner-Ansicht)
 2. Abstand zum QR-Code variieren (10-30cm)
 3. Kamera-Linse reinigen
-4. Manuelle Code-Eingabe verwenden (Tastatur-Button)
+4. **Automatischer Fallback-Modus**: Nach 2 Sekunden ohne Erkennung wechselt der Scanner automatisch zu einem alternativen Scan-Modus
+5. Manuelle Code-Eingabe verwenden (Tastatur-Button)
+
+**Hinweis**: Wenn "Fallback-Modus aktiv" angezeigt wird, verwendet die App eine alternative Scan-Methode für bessere Kompatibilität
 
 ### Station wird nicht gefunden
 
@@ -248,7 +261,20 @@ Bei Fragen oder Problemen:
 
 ## Changelog
 
-### Version 1.1.0 (Aktuell) - Performance & Zuverlässigkeits-Update
+### Version 1.2.0 (Aktuell) - Robustheit & Kompatibilitäts-Update
+- ✅ **Automatischer Dual-Mode Scanning**: Canvas-basierte Scan-Methode läuft parallel zum direkten Video-Scan für maximale Zuverlässigkeit
+- ✅ **Verbesserte Kamera-Constraints**: Flexible min/max-Werte für bessere Geräte-Kompatibilität (640x480 bis 1920x1080)
+- ✅ **Erweiterte Frame-Rate-Unterstützung**: 10-60 FPS für verschiedene Geräte
+- ✅ **Schnellere Fallback-Aktivierung**: Automatischer Wechsel zum zusätzlichen Canvas-Modus nach nur 2 Sekunden
+- ✅ **Höhere Scan-Frequenz**: Canvas-Modus scannt ~6-7x pro Sekunde (alle 150ms) für schnellere Erkennung
+- ✅ **Erweiterte Kamera-Features**: Automatische Aktivierung von Continuous Autofokus, Belichtung und Weißabgleich wo verfügbar
+- ✅ **Video-Ready-Check**: Scanner wartet bis Video vollständig geladen ist vor dem Start
+- ✅ **Verbessertes Logging**: Detaillierte Konsolen-Ausgaben mit Emojis für einfacheres Debugging
+- ✅ **Visueller Fallback-Indikator**: Anzeige "Fallback-Modus aktiv" wenn alternative Scan-Methode verwendet wird
+- ✅ **Optimierte Cleanup-Funktionen**: Besseres Management von Timeouts und Intervals
+- ✅ **Korrigierte useEffect-Dependencies**: Verhindert verpasste Re-Renders und verbessert Zuverlässigkeit
+
+### Version 1.1.0 - Performance & Zuverlässigkeits-Update
 - ✅ **Kontinuierliches Scanning**: Umstellung auf `decodeFromVideoDevice` für instant QR-Erkennung
 - ✅ **Autofokus**: Automatischer Fokus für schärfere QR-Code-Erkennung
 - ✅ **Optimierte Kamera-Einstellungen**: Full HD (1920x1080), 30 FPS für beste Erkennungsqualität
