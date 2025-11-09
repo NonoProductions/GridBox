@@ -12,6 +12,7 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const wakeLockRef = useRef<any>(null);
   const [error, setError] = useState<string | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const [boxSize, setBoxSize] = useState<number>(0);
@@ -36,6 +37,29 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
   ];
+
+  // Wake Lock: Verhindere, dass der Bildschirm dunkel wird während des Scannens
+  useEffect(() => {
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+          console.log('✅ Wake Lock aktiviert - Bildschirm bleibt an');
+        }
+      } catch (err) {
+        console.log('ℹ️ Wake Lock nicht verfügbar:', err);
+      }
+    };
+
+    requestWakeLock();
+
+    return () => {
+      if (wakeLockRef.current) {
+        wakeLockRef.current.release();
+        console.log('🔒 Wake Lock deaktiviert');
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -582,16 +606,6 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
                   </svg>
                 </div>
               </div>
-            )}
-            
-            {/* Animierte Scan-Linie */}
-            {scanningActive && !scanSuccess && (
-              <div 
-                className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-scan"
-                style={{
-                  boxShadow: '0 0 10px rgba(16,185,129,0.8)',
-                }}
-              />
             )}
           </div>
         </div>
