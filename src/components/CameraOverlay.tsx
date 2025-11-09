@@ -272,29 +272,31 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     };
     
     // Methode 1: Versuche kontinuierliches Scanning (bevorzugt)
-    try {
-      console.log('Using direct video scanning method');
-      const controls = codeReader.decodeFromVideoDevice(
-        deviceId,
-        videoRef.current,
-        handleDecode
-      );
-      
-      scanControlRef.current = controls;
-      
-      // Falls nach 2 Sekunden kein Scan funktioniert, wechsle zu Canvas-Fallback
-      // (nur wenn noch kein erfolgreicher Scan stattgefunden hat)
-      fallbackTimeoutRef.current = setTimeout(() => {
-        if (!hasScannedRef.current && !useCanvasFallback) {
-          console.log('⚠️ Direct video scan not detecting codes, switching to canvas fallback');
-          setUseCanvasFallback(true);
-        }
-      }, 2000);
-      
-    } catch (err) {
-      console.error('Error starting direct video scan:', err);
-      setUseCanvasFallback(true);
-    }
+    (async () => {
+      try {
+        console.log('Using direct video scanning method');
+        const controls = await codeReader.decodeFromVideoDevice(
+          deviceId,
+          videoRef.current!,
+          handleDecode
+        );
+        
+        scanControlRef.current = controls;
+        
+        // Falls nach 2 Sekunden kein Scan funktioniert, wechsle zu Canvas-Fallback
+        // (nur wenn noch kein erfolgreicher Scan stattgefunden hat)
+        fallbackTimeoutRef.current = setTimeout(() => {
+          if (!hasScannedRef.current && !useCanvasFallback) {
+            console.log('⚠️ Direct video scan not detecting codes, switching to canvas fallback');
+            setUseCanvasFallback(true);
+          }
+        }, 2000);
+        
+      } catch (err) {
+        console.error('Error starting direct video scan:', err);
+        setUseCanvasFallback(true);
+      }
+    })();
 
     return () => {
       console.log('Stopping QR code scanning...');
