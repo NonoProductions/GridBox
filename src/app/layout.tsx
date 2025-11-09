@@ -20,8 +20,9 @@ export const metadata = {
 export const viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  maximumScale: 5, // Erhöht für bessere Zugänglichkeit
+  minimumScale: 1,
+  userScalable: true, // Erlaubt Zoomen für bessere Zugänglichkeit
   viewportFit: 'cover',
   themeColor: '#10b981',
 };
