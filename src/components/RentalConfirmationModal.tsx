@@ -125,33 +125,26 @@ export default function RentalConfirmationModal({
         backgroundColor: isDarkMode ? '#282828' : 'white'
       }}
     >
-      <div className="flex flex-col h-full">
-        {/* Station Foto */}
-        <div className="w-full h-64 flex-shrink-0 relative">
-          {station.photo_url ? (
+      <div className="flex flex-col h-full relative">
+        {/* Station Foto - transparent im Hintergrund */}
+        {station.photo_url && (
+          <div className="absolute inset-x-0 top-0 h-96 overflow-hidden">
             <img 
               src={station.photo_url} 
               alt={station.name}
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover opacity-20"
+              style={{
+                maskImage: 'linear-gradient(to bottom, black 0%, transparent 100%)',
+                WebkitMaskImage: 'linear-gradient(to bottom, black 0%, transparent 100%)'
+              }}
             />
-          ) : (
-            <div className={`w-full h-full flex items-center justify-center ${
-              isDarkMode ? 'bg-gray-800' : 'bg-gray-200'
-            }`}>
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-30">
-                <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
-              </svg>
-            </div>
-          )}
-          
-          {/* Station Name Overlay */}
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-5">
-            <h3 className="text-xl font-bold text-white">{station.name}</h3>
           </div>
-        </div>
+        )}
 
-        {/* Station Info */}
-        <div className={`px-5 pt-6 pb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+        {/* Content - über dem Foto */}
+        <div className={`relative z-10 px-5 pt-6 pb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+          {/* Station Name */}
+          <h3 className="text-2xl font-bold mb-6">{station.name}</h3>
 
           <div className="space-y-3">
             {/* Verfügbare Powerbanks */}
