@@ -12,6 +12,7 @@ interface Station {
   available_units?: number;
   total_units?: number;
   description?: string;
+  photo_url?: string;
 }
 
 interface RentalConfirmationModalProps {
@@ -125,25 +126,33 @@ export default function RentalConfirmationModal({
       }}
     >
       <div className="flex flex-col h-full">
-        {/* Station Info Header - wie im Panel */}
+        {/* Station Foto */}
+        <div className="w-full h-64 flex-shrink-0 relative">
+          {station.photo_url ? (
+            <img 
+              src={station.photo_url} 
+              alt={station.name}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className={`w-full h-full flex items-center justify-center ${
+              isDarkMode ? 'bg-gray-800' : 'bg-gray-200'
+            }`}>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-30">
+                <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+              </svg>
+            </div>
+          )}
+          
+          {/* Station Name Overlay */}
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-5">
+            <h3 className="text-xl font-bold text-white">{station.name}</h3>
+          </div>
+        </div>
+
+        {/* Station Info */}
         <div className={`px-5 pt-6 pb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-          {/* Close Button */}
-          <button
-            onClick={onClose}
-            className={`mb-4 p-2 rounded-full transition-colors ${
-              isDarkMode ? 'hover:bg-gray-700/50' : 'hover:bg-gray-100'
-            }`}
-            aria-label="Zurück"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M19 12H5M12 19l-7-7 7-7"/>
-            </svg>
-          </button>
 
-          {/* Station Name */}
-          <h3 className="text-base font-semibold mb-4">{station.name}</h3>
-
-          {/* Info Section */}
           <div className="space-y-3">
             {/* Verfügbare Powerbanks */}
             <div className="flex items-center">
