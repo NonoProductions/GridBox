@@ -90,48 +90,15 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         
         streamRef.current = stream;
         
-        // Prüfe Kamera-Capabilities und aktiviere erweiterte Funktionen
+        // Prüfe Kamera-Capabilities (ohne Zoom-triggernde Änderungen)
         const track = stream.getVideoTracks()[0];
         const capabilities = track.getCapabilities?.() as any;
         
         if (capabilities) {
-          console.log('📷 Camera capabilities:', capabilities);
-          
-          // Aktiviere Taschenlampe wenn unterstützt
+          // Nur prüfen ob Taschenlampe verfügbar ist - keine Constraint-Änderungen
           if ('torch' in capabilities) {
             setTorchSupported(true);
-            console.log('✅ Torch/Flashlight is supported');
-          }
-          
-          // Versuche erweiterte Constraints anzuwenden für bessere QR-Code-Erkennung
-          const constraintsToApply: any = { advanced: [{}] };
-          let hasAdvancedConstraints = false;
-          
-          if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
-            constraintsToApply.advanced[0].focusMode = 'continuous';
-            hasAdvancedConstraints = true;
-            console.log('🎯 Continuous autofocus available');
-          }
-          
-          if (capabilities.exposureMode && capabilities.exposureMode.includes('continuous')) {
-            constraintsToApply.advanced[0].exposureMode = 'continuous';
-            hasAdvancedConstraints = true;
-            console.log('☀️ Continuous exposure available');
-          }
-          
-          if (capabilities.whiteBalanceMode && capabilities.whiteBalanceMode.includes('continuous')) {
-            constraintsToApply.advanced[0].whiteBalanceMode = 'continuous';
-            hasAdvancedConstraints = true;
-            console.log('🌈 Continuous white balance available');
-          }
-          
-          if (hasAdvancedConstraints) {
-            try {
-              await track.applyConstraints(constraintsToApply);
-              console.log('✅ Advanced camera constraints applied successfully');
-            } catch (constraintError) {
-              console.log('ℹ️ Could not apply all advanced constraints:', constraintError);
-            }
+            console.log('✅ Torch support detected');
           }
         }
         

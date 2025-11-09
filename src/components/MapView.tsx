@@ -154,15 +154,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // We shift the map view downward so the station appears in the upper visible portion
       const latOffset = -0.003; // Negative to shift view down, keeping station visible above panel
       
-      // Set view with offset so station appears in visible top portion
-      map.setView([station.lat + latOffset, station.lng], 16, { animate: true });
+      // Set view INSTANTLY ohne Animation für sofortige Anzeige
+      map.setView([station.lat + latOffset, station.lng], 16, { 
+        animate: false, // Keine Animation - sofort springen
+        duration: 0 // Keine Verzögerung
+      });
       
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
       setIsPanelExpanded(false); // Reset expansion state when selecting new station
       
-      console.log('Station highlighted:', station.name);
+      console.log('✅ Station sofort angezeigt:', station.name);
     } catch (error) {
       console.error('Error highlighting station:', error);
     }
@@ -1056,41 +1059,39 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <CameraOverlay 
           onClose={() => setScanning(false)}
           onStationScanned={async (stationId: string) => {
-            console.log('Station gescannt via QR-Code:', stationId);
+            console.log('📍 QR-Code gescannt:', stationId);
+            
+            // Schließe Scanner sofort
             setScanning(false);
             
             // Suche die Station in der Liste
             let station = stations.find(s => s.id === stationId);
             
             if (station) {
-              // Station gefunden - wähle sie aus
+              // Station gefunden - zeige sie SOFORT an
               highlightStation(station);
               
-              // Optional: Zeige Bestätigung
+              // Haptisches Feedback
               if (navigator.vibrate) {
-                navigator.vibrate([200, 100, 200]); // Doppeltes Vibrieren
+                navigator.vibrate([200, 100, 200]);
               }
             } else {
-              // Station nicht in der Liste - versuche Stationen neu zu laden
+              // Station nicht in der Liste - versuche schnelles Reload
               try {
                 const refreshedStations = await stationManager.refreshStations();
-                
-                // Suche erneut nach der Station
                 station = refreshedStations.find(s => s.id === stationId);
                 
                 if (station) {
                   highlightStation(station);
-                  
-                  // Vibriere bei Erfolg
                   if (navigator.vibrate) {
                     navigator.vibrate([200, 100, 200]);
                   }
                 } else {
-                  alert('Station nicht gefunden oder nicht aktiv');
+                  alert('Station nicht gefunden');
                 }
               } catch (err) {
                 console.error('Fehler beim Laden der Station:', err);
-                alert('Fehler beim Laden der Station');
+                alert('Station konnte nicht geladen werden');
               }
             }
           }}
