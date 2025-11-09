@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding", "/login"]);
+const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding", "/login", "/hilfe"]);
 
 // Check if route is public or starts with a public path
 const isPublicRoute = (path: string): boolean => {
