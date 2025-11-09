@@ -1923,13 +1923,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           type="button"
           onClick={() => setMenuOpen(true)}
           aria-label="Account & Einstellungen"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
+          className={`grid place-items-center h-14 w-14 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
             isDarkMode === true
               ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
               : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
           }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
           </svg>
@@ -1938,13 +1938,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <a
           href="/hilfe"
           aria-label="Hilfe"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
+          className={`grid place-items-center h-14 w-14 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
             isDarkMode === true
               ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
               : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
           }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <circle cx="12" cy="12" r="10" />
             <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
             <path d="M12 17h.01" />
@@ -1963,20 +1963,20 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               onClick={() => {
                 setScanning(true);
               }}
-              className={`flex items-center gap-3 px-6 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+              className={`flex items-center gap-3 px-8 py-4 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
                 isDarkMode === true
                   ? 'bg-black/30 text-white border border-white/30 hover:bg-black/40' 
                   : 'bg-white/40 text-slate-900 border border-slate-400/40 hover:bg-white/50'
               }`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 7V5a2 2 0 0 1 2-2h2" />
                 <path d="M17 3h2a2 2 0 0 1 2 2v2" />
                 <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
                 <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
                 <rect x="7" y="7" width="10" height="10" rx="2" />
               </svg>
-              <span className="text-sm font-semibold">QR-Code Scannen</span>
+              <span className="text-base font-semibold">QR-Code Scannen</span>
             </button>
           </div>
 
@@ -1985,7 +1985,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             type="button"
             onClick={centerOnStationAndFollow}
             aria-label="Auf Station zentrieren und Position verfolgen"
-            className={`fixed bottom-72 right-4 z-[1001] flex items-center justify-center gap-2 px-4 py-3 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg animate-slide-up ${
+            className={`fixed bottom-72 right-4 z-[1001] flex items-center justify-center gap-2 px-6 py-4 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg animate-slide-up ${
               isStationFollowingActive 
                 ? 'bg-emerald-600 text-white border-2 border-emerald-400 hover:bg-emerald-700 animate-pulse' 
                 : isDarkMode === true
@@ -2323,7 +2323,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }`}
         >
           <div className={`w-2 h-2 rounded-full ${nearbyStations.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-gray-400'}`}></div>
-          <span className="text-sm font-semibold whitespace-nowrap">
+          <span className="text-base font-semibold whitespace-nowrap">
             {nearbyStations.length} Station{nearbyStations.length !== 1 ? 'en' : ''} in der Nähe
           </span>
           {/* Chevron Icon to indicate it's clickable */}
@@ -2407,7 +2407,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 ? "Zentriert (klicken für 3D-Modus)"
                 : "Meine Position zentrieren"
           }
-          className={`fixed bottom-28 right-4 z-[1000] grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
+          className={`fixed bottom-28 right-4 z-[1000] grid place-items-center h-14 w-14 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
             isFollowingLocation 
               ? 'bg-emerald-600 text-white border-2 border-emerald-400 hover:bg-emerald-700 animate-pulse' // Grüner Hintergrund + Puls-Animation im Following-Modus
               : isDarkMode === true
@@ -2415,7 +2415,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30'
           }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M12 2v2M12 20v2M2 12h2M20 12h2" />
             <circle cx="12" cy="12" r="4" fill={isFollowingLocation ? "currentColor" : "none"} />
             {isFollowingLocation && (
@@ -2432,16 +2432,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           onClick={() => {
             setScanning(true);
           }}
-          className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-14 shadow-lg active:scale-95 border border-emerald-500"
+          className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-8 h-16 shadow-lg active:scale-95 border border-emerald-500"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M3 7V5a2 2 0 0 1 2-2h2" />
             <path d="M17 3h2a2 2 0 0 1 2 2v2" />
             <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
             <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
             <rect x="7" y="7" width="10" height="10" rx="2" />
           </svg>
-          <span className="text-base font-semibold tracking-wide">Scannen</span>
+          <span className="text-lg font-semibold tracking-wide">Scannen</span>
         </button>
       )}
       
