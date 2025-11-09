@@ -44,8 +44,12 @@ function RentPageContent() {
       }
 
       try {
+        // Debug: Log die empfangene Station-ID
+        console.log('🔍 Station-ID empfangen:', stationId);
+        
         // Prüfe ob es ein 4-stelliger Short-Code ist
         const isShortCode = /^[A-Z0-9]{4}$/i.test(stationId);
+        console.log('📝 Ist Short-Code?', isShortCode);
         
         let query = supabase
           .from('stations')
@@ -54,24 +58,39 @@ function RentPageContent() {
         
         // Suche nach Short-Code oder UUID
         if (isShortCode) {
+          console.log('🔎 Suche nach Short-Code:', stationId);
           query = query.ilike('short_code', stationId);
         } else {
+          console.log('🔎 Suche nach UUID:', stationId);
           query = query.eq('id', stationId);
         }
         
         const { data, error: fetchError } = await query.single();
 
         if (fetchError) {
-          console.error('Fehler beim Laden der Station:', fetchError);
-          setError('Station nicht gefunden oder nicht aktiv');
+          console.error('❌ Fehler beim Laden der Station:', fetchError);
+          console.error('❌ Fehler-Details:', {
+            message: fetchError.message,
+            details: fetchError.details,
+            hint: fetchError.hint,
+            code: fetchError.code
+          });
+          
+          // Bessere Fehlermeldung basierend auf dem Fehlertyp
+          if (fetchError.code === 'PGRST116') {
+            setError(`Station mit ${isShortCode ? 'Code' : 'ID'} "${stationId}" nicht gefunden oder nicht aktiv`);
+          } else {
+            setError(`Station konnte nicht geladen werden: ${fetchError.message}`);
+          }
           setLoading(false);
           return;
         }
 
+        console.log('✅ Station gefunden:', data);
         setStation(data);
       } catch (err) {
-        console.error('Fehler:', err);
-        setError('Ein Fehler ist aufgetreten');
+        console.error('❌ Unerwarteter Fehler:', err);
+        setError('Ein unerwarteter Fehler ist aufgetreten');
       } finally {
         setLoading(false);
       }

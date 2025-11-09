@@ -237,7 +237,8 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
           
           // Format 1: URL mit /rent/
           if (scannedText.includes('/rent/')) {
-            const match = scannedText.match(/\/rent\/([a-f0-9-]+)/i);
+            // Matcht UUIDs (mit Bindestrichen) UND Short-Codes (alphanumerisch)
+            const match = scannedText.match(/\/rent\/([A-Za-z0-9-]+)/i);
             if (match) {
               stationId = match[1];
             }
