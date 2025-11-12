@@ -49,7 +49,8 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define LED_PIN 2           // Eingebaute LED (wird bei Ausgabe aktiviert)
 #define STATUS_LED_PIN 23   // Externe Status-LED (optional)
 
-// Ausgabe-LED Konfiguration
+// LED Konfiguration
+#define ENABLE_STATUS_BLINK false    // false = Kein Status-Blinken (nur bei Ausgabe), true = Normales Blinken
 #define DISPENSE_LED_DURATION 5000   // LED leuchtet 5 Sekunden bei Ausgabe
 #define DISPENSE_POLL_INTERVAL 2000  // Prüfe alle 2 Sekunden auf Ausgabe-Anfrage
 
@@ -73,9 +74,21 @@ void setup() {
   Serial.begin(115200);
   delay(2000);  // Längere Wartezeit für Serielle Verbindung
   
-  Serial.println("\n\n=================================");
-  Serial.println("Gridbox ESP32 Station Controller");
-  Serial.println("=================================\n");
+  Serial.println("\n\n╔═════════════════════════════════════════╗");
+  Serial.println("║  Gridbox ESP32 Station Controller  ║");
+  Serial.println("╚═════════════════════════════════════════╝");
+  Serial.println();
+  
+  // LED-Konfiguration anzeigen
+  Serial.println("LED-Konfiguration:");
+  Serial.println("  Pin: " + String(LED_PIN));
+  #if ENABLE_STATUS_BLINK
+    Serial.println("  Status-Blinken: EIN (alle 1s)");
+  #else
+    Serial.println("  Status-Blinken: AUS (nur bei Ausgabe)");
+  #endif
+  Serial.println("  Ausgabe-Dauer: " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
+  Serial.println();
   
   // Pins konfigurieren
   pinMode(LED_PIN, OUTPUT);
@@ -140,21 +153,43 @@ void loop() {
       // Schnelles Blinken (200ms an, 200ms aus)
       bool ledState = (millis() / 200) % 2;
       digitalWrite(LED_PIN, ledState);
+      
+      // Debug alle 2 Sekunden
+      static unsigned long lastDispenseDebug = 0;
+      if (millis() - lastDispenseDebug > 2000) {
+        Serial.println("💡 LED blinkt... (noch " + String((DISPENSE_LED_DURATION - elapsed)/1000) + " Sekunden)");
+        lastDispenseDebug = millis();
+      }
     } else {
       // Zeit abgelaufen, LED ausschalten und Flag zurücksetzen
       digitalWrite(LED_PIN, LOW);
       dispenseLEDActive = false;
       Serial.println("✓ Ausgabe-LED deaktiviert nach " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
+      Serial.println("→ LED ist jetzt AUS");
     }
   } else {
-    // Normales Status-Blinken (kurz, nur wenn keine Ausgabe aktiv)
-    static unsigned long lastBlink = 0;
-    if (millis() - lastBlink > 1000) {
-      digitalWrite(LED_PIN, HIGH);
-      delay(50);
+    // Normales Status-Blinken (nur wenn aktiviert)
+    #if ENABLE_STATUS_BLINK
+      static unsigned long lastBlink = 0;
+      static bool blinkDebugShown = false;
+      
+      if (millis() - lastBlink > 1000) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(50);
+        digitalWrite(LED_PIN, LOW);
+        lastBlink = millis();
+        
+        // Debug nur einmal anzeigen
+        if (!blinkDebugShown) {
+          Serial.println("ℹ️ Status-LED: Normales Blinken (alle 1s)");
+          Serial.println("   Hinweis: Deaktiviere mit ENABLE_STATUS_BLINK = false");
+          blinkDebugShown = true;
+        }
+      }
+    #else
+      // Kein Status-Blinken - LED bleibt aus
       digitalWrite(LED_PIN, LOW);
-      lastBlink = millis();
-    }
+    #endif
   }
   
   // === PRÜFE AUF AUSGABE-ANFRAGE ===
@@ -401,11 +436,19 @@ void checkDispenseRequest() {
 }
 
 void activateDispenseLED() {
-  Serial.println("\n💡 LED-Ausgabe aktiviert!");
-  Serial.println("LED blinkt für " + String(DISPENSE_LED_DURATION / 1000) + " Sekunden...");
+  Serial.println("\n💡 LED-AUSGABE AKTIVIERT!");
+  Serial.println("╔══════════════════════════════════════╗");
+  Serial.println("║  LED blinkt für " + String(DISPENSE_LED_DURATION / 1000) + " Sekunden      ║");
+  Serial.println("║  Pin: " + String(LED_PIN) + "                            ║");
+  Serial.println("║  Modus: Schnelles Blinken (200ms)   ║");
+  Serial.println("╚══════════════════════════════════════╝");
   
   dispenseLEDActive = true;
   dispenseLEDStartTime = millis();
+  
+  // Erster Blink sofort
+  digitalWrite(LED_PIN, HIGH);
+  Serial.println("→ LED AN (Start)");
   
   // Optionales Signal (z.B. Piezo-Buzzer, Servo-Motor, etc.)
   // TODO: Hier kannst du zusätzliche Hardware ansteuern:
