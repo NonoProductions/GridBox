@@ -2726,18 +2726,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               // Erfolgsmeldung
               alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!\n\n💡 Die LED an der Station blinkt jetzt für 5 Sekunden.${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
               
-              // Stationen neu laden, um aktualisierten Status zu zeigen
-              if (onStationsUpdate) {
-                // Trigger reload
-                const { data: updatedStations } = await supabase
-                  .from('stations')
-                  .select('*')
-                  .eq('is_active', true);
-                
-                if (updatedStations) {
-                  onStationsUpdate(updatedStations);
-                }
-              }
+              // Stationen werden automatisch durch StationManager aktualisiert
               
             } catch (error) {
               console.error('Fehler bei der Ausleihe:', error);
