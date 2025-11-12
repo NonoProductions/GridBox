@@ -16,34 +16,9 @@ const char* STATION_SHORT_CODE = "88SH";       // ← Dein 4-stelliger Station C
 const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID deiner Station (nur wenn USE_SHORT_CODE = false)
 
 // ===== SENSOR KONFIGURATION =====
-// Wähle deine Sensor-Methode (nur EINE auf true setzen):
-#define USE_IR_SENSORS true       // Infrarot-Sensoren für jeden Slot
-#define USE_HALL_SENSORS false    // Hall-Effekt-Sensoren (Magnet)
-#define USE_TOUCH_SENSORS false   // Kapazitive Touch-Sensoren
-#define USE_WEIGHT_SENSOR false   // Gewichtssensor (HX711)
-
-// Anzahl der Powerbank-Slots in dieser Station
-#define TOTAL_SLOTS 8
-
-// Pin-Konfiguration für Sensoren (je nach Methode)
-#if USE_IR_SENSORS
-  // IR-Sensor Pins (einer pro Slot)
-  const int sensorPins[TOTAL_SLOTS] = {25, 26, 27, 32, 33, 34, 35, 36};
-  #define SENSOR_ACTIVE HIGH  // HIGH = Powerbank vorhanden, LOW = leer
-#elif USE_HALL_SENSORS
-  // Hall-Sensor Pins
-  const int sensorPins[TOTAL_SLOTS] = {25, 26, 27, 32, 33, 34, 35, 36};
-  #define SENSOR_ACTIVE LOW   // LOW = Magnet erkannt (Powerbank da)
-#elif USE_TOUCH_SENSORS
-  // Touch-Sensor Pins (ESP32 Touch0-Touch9)
-  const int touchPins[TOTAL_SLOTS] = {T0, T1, T2, T3, T4, T5, T6, T7};
-  #define TOUCH_THRESHOLD 40  // Wert unter dem = berührt/belegt
-#elif USE_WEIGHT_SENSOR
-  #define LOADCELL_DOUT_PIN 4
-  #define LOADCELL_SCK_PIN 5
-  #define POWERBANK_WEIGHT 150.0  // Gewicht pro Powerbank in Gramm
-  // HX711 scale; // Wird unten initialisiert
-#endif
+// SENSOREN DEAKTIVIERT - Nicht benötigt
+#define USE_SENSORS false         // Alle Sensoren deaktiviert
+#define TOTAL_SLOTS 8            // Anzahl Slots (für Zukunft)
 
 // LED Pins
 #define LED_PIN 2           // Eingebaute LED (wird bei Ausgabe aktiviert)
@@ -64,7 +39,6 @@ unsigned long lastUpdate = 0;
 unsigned long lastDispenseCheck = 0;
 unsigned long lastDispenseTime = 0;
 int currentAvailableUnits = 0;
-int lastReportedUnits = -1;
 bool isConnected = false;
 bool dispenseLEDActive = false;
 unsigned long dispenseLEDStartTime = 0;
@@ -90,33 +64,34 @@ void setup() {
   Serial.println("  Ausgabe-Dauer: " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
   Serial.println();
   
-  // Pins konfigurieren
-  pinMode(LED_PIN, OUTPUT);
-  pinMode(STATUS_LED_PIN, OUTPUT);
+  // Pins konfigurieren - SICHER initialisieren
+  Serial.println("→ Initialisiere Pins...");
   
-  // Sensor-Pins initialisieren
-  #if USE_IR_SENSORS || USE_HALL_SENSORS
-    for (int i = 0; i < TOTAL_SLOTS; i++) {
-      pinMode(sensorPins[i], INPUT);
-      Serial.println("Sensor Pin " + String(sensorPins[i]) + " initialisiert");
-    }
-  #elif USE_TOUCH_SENSORS
-    // Touch-Pins brauchen keine pinMode-Konfiguration
-    Serial.println("Touch-Sensoren initialisiert (T0-T" + String(TOTAL_SLOTS-1) + ")");
-  #elif USE_WEIGHT_SENSOR
-    // HX711 Gewichtssensor initialisieren (benötigt HX711 Bibliothek)
-    // scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-    // scale.set_scale(2280.f);  // Kalibrierungsfaktor
-    // scale.tare();
-    Serial.println("Gewichtssensor initialisiert");
-  #endif
+  // Nur LED_PIN am Anfang (sicher!)
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  Serial.println("✓ LED Pin " + String(LED_PIN) + " OK");
+  delay(100);
+  
+  // Status-LED nur wenn nicht problematischer Pin
+  if (STATUS_LED_PIN != 23) {  // Pin 23 kann problematisch sein
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, LOW);
+    Serial.println("✓ Status LED Pin " + String(STATUS_LED_PIN) + " OK");
+  } else {
+    Serial.println("⚠️ Pin 23 übersprungen (kann problematisch sein)");
+  }
+  delay(100);
   
   // LED-Test
+  Serial.println("→ LED Test...");
   digitalWrite(LED_PIN, HIGH);
-  digitalWrite(STATUS_LED_PIN, HIGH);
   delay(500);
   digitalWrite(LED_PIN, LOW);
-  digitalWrite(STATUS_LED_PIN, LOW);
+  Serial.println("✓ LED Test erfolgreich");
+  
+  // Sensoren deaktiviert - Nicht benötigt
+  Serial.println("ℹ️ Sensoren: DEAKTIVIERT (nicht benötigt)");
   
   // WLAN verbinden
   connectWiFi();
@@ -198,26 +173,13 @@ void loop() {
     lastDispenseCheck = millis();
   }
   
-  // Lese Sensoren und zähle verfügbare Powerbanks
-  int detectedUnits = countAvailableUnits();
+  // SENSOREN DEAKTIVIERT - Keine automatischen Updates
+  // Die Anzahl wird nur durch die Web-App geändert (bei Ausleihe)
   
-  // Wenn sich die Anzahl geändert hat, sofort updaten
-  if (detectedUnits != lastReportedUnits) {
-    Serial.println("\n--- Änderung erkannt! ---");
-    Serial.print("Vorher: ");
-    Serial.print(lastReportedUnits);
-    Serial.print(" → Jetzt: ");
-    Serial.println(detectedUnits);
-    
-    updateAvailableUnits(detectedUnits);
-    lastReportedUnits = detectedUnits;
-  }
-  
-  // Regelmäßiger Update alle UPDATE_INTERVAL Millisekunden
+  // Regelmäßiger Status-Check alle UPDATE_INTERVAL Millisekunden
   if (millis() - lastUpdate > UPDATE_INTERVAL) {
-    Serial.println("\n--- Regelmäßiger Status-Update ---");
+    Serial.println("\n--- Status-Check (ohne Sensor-Update) ---");
     getStationData();
-    updateAvailableUnits(detectedUnits);
     lastUpdate = millis();
   }
   
@@ -507,100 +469,11 @@ void resetDispenseFlag() {
 }
 
 // ===== SENSOR FUNKTIONEN =====
+// SENSOREN DEAKTIVIERT - Nicht benötigt
 
-int countAvailableUnits() {
-  int count = 0;
-  
-  #if USE_IR_SENSORS
-    // === IR-SENSOREN (Infrarot) ===
-    // Jeder Sensor erkennt ob ein Objekt (Powerbank) vorhanden ist
-    // Typische IR-Module: FC-51, TCRT5000, etc.
-    
-    for (int i = 0; i < TOTAL_SLOTS; i++) {
-      int sensorState = digitalRead(sensorPins[i]);
-      
-      if (sensorState == SENSOR_ACTIVE) {
-        count++;
-      }
-      
-      // Debug-Output (kann entfernt werden wenn alles läuft)
-      if (i == 0 || (millis() % 10000 < 100)) {  // Nur alle 10 Sek loggen
-        Serial.print("Slot " + String(i) + ": ");
-        Serial.println(sensorState == SENSOR_ACTIVE ? "BELEGT" : "LEER");
-      }
-    }
-    
-  #elif USE_HALL_SENSORS
-    // === HALL-EFFEKT-SENSOREN (Magnet-Erkennung) ===
-    // Powerbanks haben kleine Magneten, Sensoren erkennen diese
-    // Typische Module: A3144, OH137, SS49E
-    
-    for (int i = 0; i < TOTAL_SLOTS; i++) {
-      int sensorState = digitalRead(sensorPins[i]);
-      
-      if (sensorState == SENSOR_ACTIVE) {  // LOW wenn Magnet erkannt
-        count++;
-      }
-      
-      // Debug
-      if (millis() % 10000 < 100) {
-        Serial.print("Slot " + String(i) + " Hall: ");
-        Serial.println(sensorState == SENSOR_ACTIVE ? "MAGNET" : "KEIN MAGNET");
-      }
-    }
-    
-  #elif USE_TOUCH_SENSORS
-    // === KAPAZITIVE TOUCH-SENSOREN ===
-    // ESP32 hat eingebaute Touch-Pins
-    // Leitfähige Fläche pro Slot erkennt Powerbank
-    
-    for (int i = 0; i < TOTAL_SLOTS; i++) {
-      int touchValue = touchRead(touchPins[i]);
-      
-      if (touchValue < TOUCH_THRESHOLD) {  // Niedriger Wert = berührt/belegt
-        count++;
-      }
-      
-      // Debug
-      if (millis() % 10000 < 100) {
-        Serial.print("Touch " + String(i) + ": " + String(touchValue));
-        Serial.println(touchValue < TOUCH_THRESHOLD ? " BELEGT" : " LEER");
-      }
-    }
-    
-  #elif USE_WEIGHT_SENSOR
-    // === GEWICHTSSENSOR (Load Cell mit HX711) ===
-    // Wiegt alle Powerbanks zusammen
-    // Berechnet Anzahl basierend auf Gesamtgewicht
-    // HINWEIS: Benötigt HX711 Bibliothek!
-    
-    // float totalWeight = scale.get_units(5);  // 5 Messungen mitteln
-    // count = (int)(totalWeight / POWERBANK_WEIGHT);
-    
-    // // Sicherstellen dass count im gültigen Bereich ist
-    // if (count < 0) count = 0;
-    // if (count > TOTAL_SLOTS) count = TOTAL_SLOTS;
-    
-    // // Debug
-    // if (millis() % 10000 < 100) {
-    //   Serial.println("Gewicht: " + String(totalWeight) + "g = " + String(count) + " Powerbanks");
-    // }
-    
-    // TEMPORÄR: Wenn Weight-Sensor gewählt aber nicht implementiert
-    Serial.println("⚠️ WARNUNG: Gewichtssensor gewählt aber HX711-Code auskommentiert!");
-    Serial.println("Entferne die Kommentare oben und installiere 'HX711' Bibliothek!");
-    count = 0;  // Fallback
-    
-  #else
-    // === KEINE SENSOR-METHODE GEWÄHLT ===
-    Serial.println("❌ FEHLER: Keine Sensor-Methode aktiviert!");
-    Serial.println("Setze eine der USE_*_SENSORS Optionen auf true!");
-    count = 0;
-    
-  #endif
-  
-  return count;
-}
+// Diese Funktion wird nicht mehr verwendet
+// Die available_units werden nur durch die Web-App verwaltet
+// (Bei Ausleihe: -1, Bei Rückgabe: +1)
 
 void syncTotalUnits() {
   if (!isConnected) return;
