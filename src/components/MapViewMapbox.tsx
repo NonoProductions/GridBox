@@ -2701,11 +2701,47 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               userName 
             });
             
-            // TODO: Hier die tatsächliche Ausleih-Logik implementieren
-            // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
-            
-            // Erfolgsmeldung
-            alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
+            try {
+              // 🚨 SIGNAL AN ESP32 SENDEN! 🚨
+              // Setze dispense_requested Flag in der Datenbank
+              const { error: updateError } = await supabase
+                .from('stations')
+                .update({ 
+                  dispense_requested: true,
+                  available_units: Math.max(0, (scannedStation.available_units || 1) - 1)
+                })
+                .eq('id', scannedStation.id);
+              
+              if (updateError) {
+                console.error('❌ Fehler beim Senden des Signals:', updateError);
+                throw updateError;
+              }
+              
+              console.log('🎉 Signal an ESP32 gesendet! LED sollte jetzt blinken.');
+              
+              // TODO: Hier die tatsächliche Ausleih-Logik implementieren
+              // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
+              
+              // Erfolgsmeldung
+              alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!\n\n💡 Die LED an der Station blinkt jetzt für 5 Sekunden.${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
+              
+              // Stationen neu laden, um aktualisierten Status zu zeigen
+              if (onStationsUpdate) {
+                // Trigger reload
+                const { data: updatedStations } = await supabase
+                  .from('stations')
+                  .select('*')
+                  .eq('is_active', true);
+                
+                if (updatedStations) {
+                  onStationsUpdate(updatedStations);
+                }
+              }
+              
+            } catch (error) {
+              console.error('Fehler bei der Ausleihe:', error);
+              alert('Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.');
+            }
             
             // Modal schließen und Station auf Karte anzeigen
             setShowRentalModal(false);
