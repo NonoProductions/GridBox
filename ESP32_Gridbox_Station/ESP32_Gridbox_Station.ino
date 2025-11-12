@@ -61,6 +61,7 @@ const unsigned long UPDATE_INTERVAL = 30000;  // 30 Sekunden
 // Globale Variablen
 unsigned long lastUpdate = 0;
 unsigned long lastDispenseCheck = 0;
+unsigned long lastDispenseTime = 0;
 int currentAvailableUnits = 0;
 int lastReportedUnits = -1;
 bool isConnected = false;
@@ -137,18 +138,23 @@ void loop() {
     
     if (elapsed < DISPENSE_LED_DURATION) {
       // Schnelles Blinken (200ms an, 200ms aus)
-      digitalWrite(LED_PIN, (millis() / 200) % 2);
+      bool ledState = (millis() / 200) % 2;
+      digitalWrite(LED_PIN, ledState);
     } else {
-      // Zeit abgelaufen, LED ausschalten
+      // Zeit abgelaufen, LED ausschalten und Flag zurücksetzen
       digitalWrite(LED_PIN, LOW);
       dispenseLEDActive = false;
-      Serial.println("✓ Ausgabe-LED deaktiviert");
+      Serial.println("✓ Ausgabe-LED deaktiviert nach " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
     }
   } else {
     // Normales Status-Blinken (kurz, nur wenn keine Ausgabe aktiv)
-    digitalWrite(LED_PIN, HIGH);
-    delay(50);
-    digitalWrite(LED_PIN, LOW);
+    static unsigned long lastBlink = 0;
+    if (millis() - lastBlink > 1000) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(50);
+      digitalWrite(LED_PIN, LOW);
+      lastBlink = millis();
+    }
   }
   
   // === PRÜFE AUF AUSGABE-ANFRAGE ===
@@ -368,15 +374,25 @@ void checkDispenseRequest() {
       bool dispenseRequested = station["dispense_requested"] | false;
       
       if (dispenseRequested) {
-        // 🎉 AUSGABE-ANFRAGE ERKANNT!
-        Serial.println("\n🚨🚨🚨 AUSGABE-ANFRAGE ERKANNT! 🚨🚨🚨");
-        Serial.println("Powerbank-Ausgabe wurde über die App angefordert!");
+        // Prüfe ob wir schon kürzlich eine Ausgabe hatten (Debounce)
+        unsigned long timeSinceLastDispense = millis() - lastDispenseTime;
         
-        // Aktiviere LED
-        activateDispenseLED();
-        
-        // Setze Flag in Datenbank zurück
-        resetDispenseFlag();
+        if (timeSinceLastDispense > 10000) {  // Mindestens 10 Sekunden zwischen Ausgaben
+          // 🎉 AUSGABE-ANFRAGE ERKANNT!
+          Serial.println("\n🚨🚨🚨 AUSGABE-ANFRAGE ERKANNT! 🚨🚨🚨");
+          Serial.println("Powerbank-Ausgabe wurde über die App angefordert!");
+          
+          // Merke Zeitpunkt
+          lastDispenseTime = millis();
+          
+          // ZUERST Flag in Datenbank zurücksetzen (wichtig!)
+          resetDispenseFlag();
+          
+          // DANN LED aktivieren
+          activateDispenseLED();
+        } else {
+          Serial.println("⚠️ Ausgabe-Anfrage ignoriert (zu kurz nach letzter Ausgabe: " + String(timeSinceLastDispense/1000) + "s)");
+        }
       }
     }
   }
@@ -404,6 +420,8 @@ void activateDispenseLED() {
 void resetDispenseFlag() {
   if (!isConnected) return;
   
+  Serial.println("→ Setze dispense_requested Flag zurück...");
+  
   HTTPClient http;
   
   String url = String(SUPABASE_URL) + "/rest/v1/stations?";
@@ -418,25 +436,31 @@ void resetDispenseFlag() {
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Prefer", "return=minimal");
+  http.addHeader("Prefer", "return=representation");
   
   // Setze dispense_requested zurück und aktualisiere last_dispense_time
   DynamicJsonDocument doc(256);
   doc["dispense_requested"] = false;
-  doc["last_dispense_time"] = "now()";
   
   String jsonBody;
   serializeJson(doc, jsonBody);
   
+  Serial.println("   Body: " + jsonBody);
+  
   int httpCode = http.PATCH(jsonBody);
   
   if (httpCode == 200 || httpCode == 204) {
-    Serial.println("✓ Ausgabe-Flag zurückgesetzt");
+    Serial.println("✓ Ausgabe-Flag erfolgreich zurückgesetzt in Datenbank");
   } else {
-    Serial.println("⚠️ Fehler beim Zurücksetzen: " + String(httpCode));
+    Serial.println("⚠️ Fehler beim Zurücksetzen!");
+    Serial.println("   HTTP Code: " + String(httpCode));
+    Serial.println("   Response: " + http.getString());
   }
   
   http.end();
+  
+  // Kurze Pause damit Datenbank Zeit hat zu aktualisieren
+  delay(500);
 }
 
 // ===== SENSOR FUNKTIONEN =====
