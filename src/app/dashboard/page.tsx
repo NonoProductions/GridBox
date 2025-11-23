@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import OwnerDashboard from "@/components/OwnerDashboard";
 
-export default function DashboardPage() {
+function DashboardContent() {
   const searchParams = useSearchParams();
   const themeParam = searchParams.get("theme");
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
@@ -42,5 +42,17 @@ export default function DashboardPage() {
       isDarkMode={isDarkMode}
       variant="page"
     />
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-emerald-600 border-t-transparent"></div>
+      </div>
+    }>
+      <DashboardContent />
+    </Suspense>
   );
 }
