@@ -16,7 +16,7 @@ export default function AddStationForm({ onClose, onSubmit, isDarkMode, userLoca
     description: '',
     lat: userLocation?.lat || 52.52,
     lng: userLocation?.lng || 13.405,
-    available_units: 0,
+    available_units: 0, // Wird automatisch berechnet basierend auf erkannten Batterien
     total_units: 0,
     address: '',
     is_active: true
@@ -181,43 +181,29 @@ export default function AddStationForm({ onClose, onSubmit, isDarkMode, userLoca
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="available_units" className="block text-sm font-medium mb-2">
-                  Verfügbare Powerbanks
-                </label>
-                <input
-                  type="number"
-                  id="available_units"
-                  name="available_units"
-                  value={formData.available_units}
-                  onChange={handleInputChange}
-                  min="0"
-                  className={`w-full px-3 py-2 rounded-lg border ${
-                    isDarkMode
-                      ? 'bg-gray-700 border-gray-600 text-white focus:border-emerald-500'
-                      : 'bg-white border-gray-300 text-slate-900 focus:border-emerald-500'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
-                />
-              </div>
-              <div>
-                <label htmlFor="total_units" className="block text-sm font-medium mb-2">
-                  Gesamt Powerbanks
-                </label>
-                <input
-                  type="number"
-                  id="total_units"
-                  name="total_units"
-                  value={formData.total_units}
-                  onChange={handleInputChange}
-                  min="0"
-                  className={`w-full px-3 py-2 rounded-lg border ${
-                    isDarkMode
-                      ? 'bg-gray-700 border-gray-600 text-white focus:border-emerald-500'
-                      : 'bg-white border-gray-300 text-slate-900 focus:border-emerald-500'
-                  } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
-                />
-              </div>
+            <div>
+              <label htmlFor="total_units" className="block text-sm font-medium mb-2">
+                Gesamt Powerbanks (Kapazität)
+              </label>
+              <input
+                type="number"
+                id="total_units"
+                name="total_units"
+                value={formData.total_units}
+                onChange={handleInputChange}
+                min="0"
+                className={`w-full px-3 py-2 rounded-lg border ${
+                  isDarkMode
+                    ? 'bg-gray-700 border-gray-600 text-white focus:border-emerald-500'
+                    : 'bg-white border-gray-300 text-slate-900 focus:border-emerald-500'
+                } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                placeholder="Maximale Anzahl Powerbanks in der Station"
+              />
+              <p className={`mt-1 text-xs ${
+                isDarkMode ? 'text-gray-400' : 'text-gray-500'
+              }`}>
+                Die verfügbaren Powerbanks werden automatisch erkannt, sobald die Station Batteriedaten vom Fuelgauge meldet.
+              </p>
             </div>
 
             <div className="flex gap-3 pt-4">

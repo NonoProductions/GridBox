@@ -9,14 +9,12 @@ export default function SideMenu({
   open, 
   onClose, 
   isDarkMode, 
-  onToggleTheme,
-  onOpenOwnerDashboard
+  onToggleTheme
 }: { 
   open: boolean; 
   onClose: () => void; 
   isDarkMode: boolean; 
   onToggleTheme: () => void;
-  onOpenOwnerDashboard?: () => void;
 }) {
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -286,11 +284,11 @@ export default function SideMenu({
               </button>
 
               {/* Owner Dashboard - nur für Owner sichtbar */}
-              {userIsOwner && onOpenOwnerDashboard && (
+              {userIsOwner && (
                 <button 
                   onClick={() => {
                     onClose();
-                    onOpenOwnerDashboard();
+                    router.push(`/dashboard?theme=${isDarkMode ? "dark" : "light"}`);
                   }}
                   className={`w-full flex items-center gap-4 px-6 py-4 ${
                     isDarkMode ? 'active:bg-gray-700' : 'active:bg-gray-50'

@@ -24,9 +24,14 @@ export interface Station {
   short_code?: string; // 4-stelliger Code für manuelle Eingabe
   created_at?: string;
   updated_at?: string;
-  photo_url?: string;
+  photo_url?: string; // Legacy: wird für Rückwärtskompatibilität beibehalten
+  photos?: string[]; // Array von bis zu 3 Foto-URLs
   rental_cost?: number; // Kosten pro Stunde in Euro
   powerbanks?: Powerbank[]; // Liste der Powerbanks an dieser Station
+  battery_voltage?: number; // Batteriespannung in Volt
+  battery_percentage?: number; // Batterieprozente (0-100)
+  charge_enabled?: boolean; // Relais-Steuerung: Laden aktiviert/deaktiviert
+  opening_hours?: string; // Öffnungszeiten (z.B. "Mo-Fr: 8:00-18:00, Sa: 9:00-16:00")
 }
 
 interface StationManagerProps {
@@ -56,9 +61,21 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
       }
 
       const result = data || [];
-      setStations(result);
-      onStationsUpdate(result);
-      return result;
+      // Stelle sicher, dass photos als Array geparst wird, falls es ein JSON-String ist
+      const processedResult = result.map((station: any) => {
+        if (station.photos && typeof station.photos === 'string') {
+          try {
+            station.photos = JSON.parse(station.photos);
+          } catch (e) {
+            console.warn('Fehler beim Parsen von photos:', e);
+            station.photos = [];
+          }
+        }
+        return station;
+      });
+      setStations(processedResult);
+      onStationsUpdate(processedResult);
+      return processedResult;
     } catch (err) {
       console.error('Fehler beim Laden der Stationen:', err);
       setError('Fehler beim Laden der Stationen');

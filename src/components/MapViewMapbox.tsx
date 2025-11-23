@@ -7,7 +7,6 @@ import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
-import OwnerDashboard from "@/components/OwnerDashboard";
 import mapboxgl from "mapbox-gl";
 
 // Legacy Station type for backward compatibility
@@ -56,7 +55,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [showPermissionModal, setShowPermissionModal] = useState<boolean>(false);
   const [showRentalModal, setShowRentalModal] = useState<boolean>(false);
   const [scannedStation, setScannedStation] = useState<Station | null>(null);
-  const [showOwnerDashboard, setShowOwnerDashboard] = useState<boolean>(false);
   const [compassPermissionGranted, setCompassPermissionGranted] = useState<boolean>(false);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
@@ -2751,17 +2749,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           url.searchParams.set("theme", newTheme);
           window.location.href = url.toString();
         }}
-        onOpenOwnerDashboard={() => {
-          setMenuOpen(false);
-          setShowOwnerDashboard(true);
-        }}
       />
-      {showOwnerDashboard && (
-        <OwnerDashboard
-          isDarkMode={isDarkMode === true}
-          onClose={() => setShowOwnerDashboard(false)}
-        />
-      )}
     </>
   );
 }

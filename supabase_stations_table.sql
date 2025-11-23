@@ -51,6 +51,18 @@ BEGIN
                    WHERE table_name = 'stations' AND column_name = 'updated_at') THEN
         ALTER TABLE stations ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
     END IF;
+    
+    -- Füge battery_voltage Spalte hinzu, falls sie nicht existiert
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'stations' AND column_name = 'battery_voltage') THEN
+        ALTER TABLE stations ADD COLUMN battery_voltage DECIMAL(5, 2);
+    END IF;
+    
+    -- Füge battery_percentage Spalte hinzu, falls sie nicht existiert
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'stations' AND column_name = 'battery_percentage') THEN
+        ALTER TABLE stations ADD COLUMN battery_percentage INTEGER;
+    END IF;
 END $$;
 
 -- Erstelle einen Index für bessere Performance bei geografischen Abfragen

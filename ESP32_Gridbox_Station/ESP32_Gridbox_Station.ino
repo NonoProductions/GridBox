@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <Wire.h>
 
 // ===== WLAN Konfiguration =====
 const char* WIFI_SSID = "FRITZ!Box Lamborelle";
@@ -20,17 +21,38 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define USE_SENSORS false         // Alle Sensoren deaktiviert
 #define TOTAL_SLOTS 8            // Anzahl Slots (für Zukunft)
 
+// ===== BATTERIE KONFIGURATION =====
+#define TCA9548A_ADDRESS 0x70     // I2C Adresse des TCA9548A Multiplexers
+#define BQ27441_ADDRESS 0x55      // I2C Adresse des BQ27441 Fuel Gauge
+#define BATTERY_CHANNEL 0         // Kanal des Multiplexers für den Fuel Gauge (0-7)
+#define BATTERY_UPDATE_INTERVAL 10000  // Batteriedaten alle 10 Sekunden aktualisieren
+#define BATTERY_TEST_MODE false   // true = Test-Modus ohne Hardware (verwendet Dummy-Daten)
+
+// BQ27441 Register
+#define REG_VOLTAGE 0x04     // Spannung (mV)
+#define REG_SOC     0x1C     // Ladezustand (%)
+
 // LED Pins
 #define LED_PIN 2           // Eingebaute LED (wird bei Ausgabe aktiviert)
 #define STATUS_LED_PIN 23   // Externe Status-LED (optional)
 
 // LED Konfiguration
 #define ENABLE_STATUS_BLINK false    // false = Kein Status-Blinken (nur bei Ausgabe), true = Normales Blinken
+#define ENABLE_DISPENSE_LED false    // Deaktiviert das Blinksignal bei Ausleihe (war nur ein Test)
 #define DISPENSE_LED_DURATION 5000   // LED leuchtet 5 Sekunden bei Ausgabe
 #define DISPENSE_POLL_INTERVAL 2000  // Prüfe alle 2 Sekunden auf Ausgabe-Anfrage
 
-// Update-Intervall
-const unsigned long UPDATE_INTERVAL = 30000;  // 30 Sekunden
+// Relais & Button Konfiguration
+#define RELAY_PIN 5                 // Kontrolliert das Lade-Relais (Pin 17 = funktionierender Relais-Pin aus Testskript)
+#define RELAY_ACTIVE_LOW false       // true = LOW aktiviert Relais, false = HIGH aktiviert Relais
+                                      // Dein Relais schaltet bei HIGH (siehe funktionierendes Testskript)
+#define CHARGE_BUTTON_PIN 33         // Taster zum Ein-/Ausschalten des Ladevorgangs
+#define BUTTON_DEBOUNCE_MS 200       // Entprellzeit
+#define BATTERY_PRESENT_THRESHOLD 3.2  // ≥3.2V = Batterie erkannt
+#define REQUIRE_BATTERY_FOR_RELAY true  // false = Relais funktioniert auch ohne Batterie (für Tests)
+
+// Update-Intervalle
+const unsigned long UPDATE_INTERVAL = 5000;  // 5 Sekunden (Status-Check)
 
 // ===== ENDE KONFIGURATION =====
 
@@ -39,9 +61,30 @@ unsigned long lastUpdate = 0;
 unsigned long lastDispenseCheck = 0;
 unsigned long lastDispenseTime = 0;
 int currentAvailableUnits = 0;
+int lastReportedUnits = -1;
 bool isConnected = false;
 bool dispenseLEDActive = false;
 unsigned long dispenseLEDStartTime = 0;
+const uint8_t RELAY_ON_STATE = RELAY_ACTIVE_LOW ? LOW : HIGH;
+const uint8_t RELAY_OFF_STATE = RELAY_ACTIVE_LOW ? HIGH : LOW;
+bool chargeEnabled = true;  // Lokaler Button-Status
+bool chargeEnabledFromWeb = true;  // Status aus Supabase
+bool batteryPresent = false;
+bool lastButtonState = HIGH;
+bool stableButtonState = HIGH;
+unsigned long lastButtonChange = 0;
+bool relayCurrentlyOn = false;
+
+// Batterie Variablen
+unsigned long lastBatteryUpdate = 0;
+float batteryVoltage = 0.0;
+int batteryPercentage = 0;
+bool batteryInitialized = false;
+
+// Funktionsprototypen
+void handleChargeButton();
+void updateChargingState();
+void evaluateBatteryPresence();
 
 void setup() {
   // Serielle Kommunikation starten
@@ -63,6 +106,33 @@ void setup() {
   #endif
   Serial.println("  Ausgabe-Dauer: " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
   Serial.println();
+  
+  // I2C initialisieren (ESP32 Standard Pins: SDA=21, SCL=22)
+  Serial.println("→ Initialisiere I2C...");
+  Wire.begin(21, 22);
+  delay(100);
+  Serial.println("✓ I2C initialisiert (SDA=21, SCL=22)");
+  
+  // Batterie-System initialisieren
+  Serial.println("→ Initialisiere Batterie-System...");
+  #if BATTERY_TEST_MODE
+    Serial.println("  ⚠️ TEST-MODUS: Verwende Dummy-Batteriedaten");
+    batteryInitialized = true;
+    batteryVoltage = 3.70;
+    batteryPercentage = 85;
+    evaluateBatteryPresence();
+  #else
+    if (initBatterySystem()) {
+      Serial.println("✓ Batterie-System initialisiert");
+      batteryInitialized = true;
+    } else {
+      Serial.println("⚠️ Batterie-System konnte nicht initialisiert werden");
+      Serial.println("   Hinweis: Setze BATTERY_TEST_MODE = true zum Testen ohne Hardware");
+      batteryInitialized = false;
+      batteryPresent = false;
+      updateChargingState();
+    }
+  #endif
   
   // Pins konfigurieren - SICHER initialisieren
   Serial.println("→ Initialisiere Pins...");
@@ -89,6 +159,40 @@ void setup() {
   delay(500);
   digitalWrite(LED_PIN, LOW);
   Serial.println("✓ LED Test erfolgreich");
+
+  // Relais & Button initialisieren
+  Serial.println("→ Initialisiere Relais...");
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, RELAY_OFF_STATE);
+  relayCurrentlyOn = false;
+  Serial.println("✓ Relais Pin " + String(RELAY_PIN) + " (Ausgang, sicher AUS)");
+  Serial.println("  RELAY_ON_STATE = " + String(RELAY_ON_STATE == LOW ? "LOW" : "HIGH"));
+  Serial.println("  RELAY_OFF_STATE = " + String(RELAY_OFF_STATE == LOW ? "LOW" : "HIGH"));
+  
+  // Relais-Test: Kurz ein- und ausschalten
+  Serial.println("  → Relais-Test: EIN für 1 Sekunde...");
+  Serial.println("     Prüfe ob Relais hörbar/visuell aktiviert wird!");
+  digitalWrite(RELAY_PIN, RELAY_ON_STATE);
+  Serial.println("     Pin " + String(RELAY_PIN) + " = " + String(RELAY_ON_STATE == LOW ? "LOW" : "HIGH"));
+  delay(1000);
+  digitalWrite(RELAY_PIN, RELAY_OFF_STATE);
+  Serial.println("  → Relais-Test: AUS");
+  Serial.println("     Pin " + String(RELAY_PIN) + " = " + String(RELAY_OFF_STATE == LOW ? "LOW" : "HIGH"));
+  Serial.println("  ⚠️ Falls Relais nicht funktioniert, ändere RELAY_ACTIVE_LOW auf false");
+  delay(200);
+
+  pinMode(CHARGE_BUTTON_PIN, INPUT_PULLUP);
+  lastButtonState = digitalRead(CHARGE_BUTTON_PIN);
+  stableButtonState = lastButtonState;
+  Serial.println("✓ Lade-Taster an Pin " + String(CHARGE_BUTTON_PIN) + " (INPUT_PULLUP)");
+  Serial.println("  → Taste gedrückt = LOW");
+  
+  // Initialisiere chargeEnabledFromWeb mit true (wird beim ersten getStationData() aktualisiert)
+  chargeEnabledFromWeb = true;
+  chargeEnabled = true;
+  
+  Serial.println("→ Initialer Relais-Status:");
+  updateChargingState();
   
   // Sensoren deaktiviert - Nicht benötigt
   Serial.println("ℹ️ Sensoren: DEAKTIVIERT (nicht benötigt)");
@@ -110,6 +214,8 @@ void setup() {
 }
 
 void loop() {
+  handleChargeButton();
+  
   // Prüfe WLAN-Verbindung
   if (WiFi.status() != WL_CONNECTED) {
     isConnected = false;
@@ -120,52 +226,54 @@ void loop() {
   }
   
   // === DISPENSE LED STEUERUNG ===
-  if (dispenseLEDActive) {
-    // LED blinken während Ausgabe aktiv ist
-    unsigned long elapsed = millis() - dispenseLEDStartTime;
-    
-    if (elapsed < DISPENSE_LED_DURATION) {
-      // Schnelles Blinken (200ms an, 200ms aus)
-      bool ledState = (millis() / 200) % 2;
-      digitalWrite(LED_PIN, ledState);
+  #if ENABLE_DISPENSE_LED
+    if (dispenseLEDActive) {
+      // LED blinken während Ausgabe aktiv ist
+      unsigned long elapsed = millis() - dispenseLEDStartTime;
       
-      // Debug alle 2 Sekunden
-      static unsigned long lastDispenseDebug = 0;
-      if (millis() - lastDispenseDebug > 2000) {
-        Serial.println("💡 LED blinkt... (noch " + String((DISPENSE_LED_DURATION - elapsed)/1000) + " Sekunden)");
-        lastDispenseDebug = millis();
-      }
-    } else {
-      // Zeit abgelaufen, LED ausschalten und Flag zurücksetzen
-      digitalWrite(LED_PIN, LOW);
-      dispenseLEDActive = false;
-      Serial.println("✓ Ausgabe-LED deaktiviert nach " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
-      Serial.println("→ LED ist jetzt AUS");
-    }
-  } else {
-    // Normales Status-Blinken (nur wenn aktiviert)
-    #if ENABLE_STATUS_BLINK
-      static unsigned long lastBlink = 0;
-      static bool blinkDebugShown = false;
-      
-      if (millis() - lastBlink > 1000) {
-        digitalWrite(LED_PIN, HIGH);
-        delay(50);
-        digitalWrite(LED_PIN, LOW);
-        lastBlink = millis();
+      if (elapsed < DISPENSE_LED_DURATION) {
+        // Schnelles Blinken (200ms an, 200ms aus)
+        bool ledState = (millis() / 200) % 2;
+        digitalWrite(LED_PIN, ledState);
         
-        // Debug nur einmal anzeigen
-        if (!blinkDebugShown) {
-          Serial.println("ℹ️ Status-LED: Normales Blinken (alle 1s)");
-          Serial.println("   Hinweis: Deaktiviere mit ENABLE_STATUS_BLINK = false");
-          blinkDebugShown = true;
+        // Debug alle 2 Sekunden
+        static unsigned long lastDispenseDebug = 0;
+        if (millis() - lastDispenseDebug > 2000) {
+          Serial.println("💡 LED blinkt... (noch " + String((DISPENSE_LED_DURATION - elapsed)/1000) + " Sekunden)");
+          lastDispenseDebug = millis();
         }
+      } else {
+        // Zeit abgelaufen, LED ausschalten und Flag zurücksetzen
+        digitalWrite(LED_PIN, LOW);
+        dispenseLEDActive = false;
+        Serial.println("✓ Ausgabe-LED deaktiviert nach " + String(DISPENSE_LED_DURATION/1000) + " Sekunden");
+        Serial.println("→ LED ist jetzt AUS");
       }
-    #else
-      // Kein Status-Blinken - LED bleibt aus
+    }
+  #endif
+
+  // Normales Status-Blinken (nur wenn aktiviert)
+  #if ENABLE_STATUS_BLINK
+    static unsigned long lastBlink = 0;
+    static bool blinkDebugShown = false;
+    
+    if (millis() - lastBlink > 1000) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(50);
       digitalWrite(LED_PIN, LOW);
-    #endif
-  }
+      lastBlink = millis();
+      
+      // Debug nur einmal anzeigen
+      if (!blinkDebugShown) {
+        Serial.println("ℹ️ Status-LED: Normales Blinken (alle 1s)");
+        Serial.println("   Hinweis: Deaktiviere mit ENABLE_STATUS_BLINK = false");
+        blinkDebugShown = true;
+      }
+    }
+  #else
+    // Kein Status-Blinken - LED bleibt aus
+    digitalWrite(LED_PIN, LOW);
+  #endif
   
   // === PRÜFE AUF AUSGABE-ANFRAGE ===
   if (millis() - lastDispenseCheck > DISPENSE_POLL_INTERVAL) {
@@ -183,7 +291,43 @@ void loop() {
     lastUpdate = millis();
   }
   
-  delay(1000);  // Schleife jede Sekunde
+  // Batteriedaten regelmäßig aktualisieren
+  if (millis() - lastBatteryUpdate > BATTERY_UPDATE_INTERVAL) {
+    if (batteryInitialized) {
+      #if BATTERY_TEST_MODE
+        // Test-Modus: Simuliere leicht variierende Batteriedaten
+        batteryVoltage = 3.65 + (random(0, 20) / 100.0);  // 3.65 - 3.85 V
+        batteryPercentage = 80 + random(-5, 10);  // 75 - 90%
+        if (batteryPercentage > 100) batteryPercentage = 100;
+        if (batteryPercentage < 0) batteryPercentage = 0;
+        evaluateBatteryPresence();
+        Serial.println("\n--- Batteriedaten (TEST-MODUS) ---");
+        Serial.println("Spannung: " + String(batteryVoltage, 2) + " V");
+        Serial.println("Prozent: " + String(batteryPercentage) + " %");
+      #else
+        readBatteryData();
+      #endif
+      updateBatteryData();
+    } else {
+      // Versuche erneut zu initialisieren, falls es beim Start fehlgeschlagen ist
+      Serial.println("\n→ Versuche Batterie-System erneut zu initialisieren...");
+      if (initBatterySystem()) {
+        Serial.println("✓ Batterie-System jetzt initialisiert!");
+        batteryInitialized = true;
+      } else {
+        Serial.println("⚠️ Batterie-System immer noch nicht verfügbar");
+        Serial.println("   Prüfe Hardware-Verbindungen:");
+        Serial.println("   - TCA9548A an I2C (SDA=21, SCL=22)");
+        Serial.println("   - BQ27441 an TCA9548A Kanal " + String(BATTERY_CHANNEL));
+        Serial.println("   Oder setze BATTERY_TEST_MODE = true zum Testen ohne Hardware");
+        batteryPresent = false;
+        updateChargingState();
+      }
+    }
+    lastBatteryUpdate = millis();
+  }
+  
+  delay(100);  // Schneller, damit der Button zuverlässig erkannt wird
 }
 
 // ===== WLAN FUNKTIONEN =====
@@ -270,12 +414,21 @@ void getStationData() {
       int totalUnits = station["total_units"] | 0;
       bool isActive = station["is_active"] | true;
       String shortCode = station["short_code"] | "N/A";
+      bool chargeEnabledWeb = station["charge_enabled"] | true;  // Default: true wenn nicht gesetzt
+      
+      // Aktualisiere Web-Status nur wenn er sich geändert hat
+      if (chargeEnabledWeb != chargeEnabledFromWeb) {
+        chargeEnabledFromWeb = chargeEnabledWeb;
+        Serial.println("  ⚡️ Web-Steuerung: " + String(chargeEnabledFromWeb ? "Laden EIN" : "Laden AUS"));
+        updateChargingState();
+      }
       
       Serial.println("✓ Station gefunden!");
       Serial.println("  Name: " + name);
       Serial.println("  Short-Code: " + shortCode);
       Serial.println("  Verfügbar: " + String(availableUnits) + "/" + String(totalUnits));
       Serial.println("  Aktiv: " + String(isActive ? "Ja" : "Nein"));
+      Serial.println("  Laden (Web): " + String(chargeEnabledFromWeb ? "EIN" : "AUS"));
       
       currentAvailableUnits = availableUnits;
     } else {
@@ -398,6 +551,11 @@ void checkDispenseRequest() {
 }
 
 void activateDispenseLED() {
+  #if !ENABLE_DISPENSE_LED
+    Serial.println("ℹ️ Ausleihe bestätigt – LED-Blinken deaktiviert");
+    return;
+  #endif
+
   Serial.println("\n💡 LED-AUSGABE AKTIVIERT!");
   Serial.println("╔══════════════════════════════════════╗");
   Serial.println("║  LED blinkt für " + String(DISPENSE_LED_DURATION / 1000) + " Sekunden      ║");
@@ -468,6 +626,112 @@ void resetDispenseFlag() {
   delay(500);
 }
 
+// ===== LADE-STEUERUNG (RELAIS & BUTTON) =====
+
+void handleChargeButton() {
+  bool reading = digitalRead(CHARGE_BUTTON_PIN);
+
+  if (reading != lastButtonState) {
+    lastButtonChange = millis();
+  }
+
+  if ((millis() - lastButtonChange) > BUTTON_DEBOUNCE_MS) {
+    if (reading != stableButtonState) {
+      stableButtonState = reading;
+      if (stableButtonState == LOW) {
+        chargeEnabled = !chargeEnabled;
+        Serial.println("\n🔘 BUTTON GEDRÜCKT!");
+        Serial.println(chargeEnabled ? "⚡️ Laden per Taste AKTIVIERT" : "⛔️ Laden per Taste DEAKTIVIERT");
+        Serial.println("  Button-Status: " + String(chargeEnabled ? "EIN" : "AUS"));
+        Serial.println("  Web-Status: " + String(chargeEnabledFromWeb ? "EIN" : "AUS"));
+        Serial.println("  Batterie erkannt: " + String(batteryPresent ? "JA" : "NEIN"));
+        if (batteryPresent) {
+          Serial.println("  Batteriespannung: " + String(batteryVoltage, 2) + " V");
+        }
+        updateChargingState();
+      }
+    }
+  }
+
+  lastButtonState = reading;
+}
+
+void updateChargingState() {
+  // Wenn Web-Steuerung aktiviert ist, geht Relais an (unabhängig von Batterie)
+  // Button-Steuerung ist zusätzliche lokale Kontrolle
+  bool shouldCharge = false;
+  
+  if (chargeEnabledFromWeb) {
+    // Web aktiviert: Relais geht an wenn Button auch aktiviert ist (Batterie wird ignoriert)
+    shouldCharge = chargeEnabled;
+  } else {
+    // Web deaktiviert: Normale Logik mit Button UND Batterie
+    shouldCharge = chargeEnabled;
+    if (REQUIRE_BATTERY_FOR_RELAY) {
+      shouldCharge = shouldCharge && batteryPresent;
+    }
+  }
+  
+  // Debug-Ausgabe
+  Serial.println("\n--- Relais-Status Update ---");
+  Serial.println("  Button: " + String(chargeEnabled ? "EIN" : "AUS"));
+  Serial.println("  Web: " + String(chargeEnabledFromWeb ? "EIN" : "AUS"));
+  Serial.println("  Batterie: " + String(batteryPresent ? "ERKANNT" : "NICHT ERKANNT"));
+  if (batteryPresent) {
+    Serial.println("  Spannung: " + String(batteryVoltage, 2) + " V");
+  }
+  if (chargeEnabledFromWeb) {
+    Serial.println("  ⚡️ Web aktiviert → Batterie-Erkennung wird IGNORIERT");
+  } else if (REQUIRE_BATTERY_FOR_RELAY) {
+    Serial.println("  ⚠️ Batterie erforderlich (Web AUS)");
+  }
+  Serial.println("  → Relais soll: " + String(shouldCharge ? "EIN" : "AUS"));
+  Serial.println("  → Relais aktuell: " + String(relayCurrentlyOn ? "EIN" : "AUS"));
+  
+  if (shouldCharge == relayCurrentlyOn) {
+    Serial.println("  → Keine Änderung nötig");
+    return;
+  }
+
+  relayCurrentlyOn = shouldCharge;
+  uint8_t desiredState = shouldCharge ? RELAY_ON_STATE : RELAY_OFF_STATE;
+
+  Serial.println("  → Setze Pin " + String(RELAY_PIN) + " auf " + String(desiredState == LOW ? "LOW" : "HIGH"));
+  digitalWrite(RELAY_PIN, desiredState);
+
+  if (shouldCharge) {
+    if (chargeEnabledFromWeb) {
+      Serial.println("✅ Relais EIN (Web-Steuerung aktiviert)");
+    } else {
+      Serial.println("✅ Relais EIN (Laden aktiv)");
+    }
+  } else if (!chargeEnabled) {
+    Serial.println("⛔️ Relais AUS (Button deaktiviert)");
+  } else if (!chargeEnabledFromWeb) {
+    if (!batteryPresent && REQUIRE_BATTERY_FOR_RELAY) {
+      Serial.println("⛔️ Relais AUS (Web deaktiviert + Keine Batterie)");
+    } else {
+      Serial.println("⛔️ Relais AUS (Web deaktiviert)");
+    }
+  } else {
+    Serial.println("⛔️ Relais AUS");
+  }
+}
+
+void evaluateBatteryPresence() {
+  bool previousState = batteryPresent;
+  batteryPresent = batteryVoltage >= BATTERY_PRESENT_THRESHOLD;
+
+  if (batteryPresent != previousState) {
+    if (batteryPresent) {
+      Serial.println("✅ Batterieanschluss erkannt (Spannung ≥ " + String(BATTERY_PRESENT_THRESHOLD, 1) + "V)");
+    } else {
+      Serial.println("❌ Batterie entfernt oder zu geringe Spannung");
+    }
+    updateChargingState();
+  }
+}
+
 // ===== SENSOR FUNKTIONEN =====
 // SENSOREN DEAKTIVIERT - Nicht benötigt
 
@@ -508,6 +772,214 @@ void syncTotalUnits() {
   http.end();
 }
 
+// ===== BATTERIE FUNKTIONEN =====
+
+// TCA9548A Multiplexer - Wähle I2C Kanal (genau wie im funktionierenden Code)
+void selectI2CChannel(uint8_t channel) {
+  if (channel > 7) return;
+  
+  Wire.beginTransmission(TCA9548A_ADDRESS);
+  Wire.write(1 << channel);  // Aktiviert genau EINEN Kanal
+  Wire.endTransmission();
+  delay(10);  // Kurze Pause für Multiplexer
+}
+
+// BQ27441 Fuel Gauge - Lese 16-Bit Register (genau wie im funktionierenden Code)
+uint16_t readBQ27441Register(uint8_t reg) {
+  Wire.beginTransmission(BQ27441_ADDRESS);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) {
+    return 0;  // Fehler auf dem Bus
+  }
+  
+  // Wichtig: klare Typen → kein Compiler-Warning (genau wie im funktionierenden Code)
+  Wire.requestFrom((uint16_t)BQ27441_ADDRESS, (uint8_t)2);
+  
+  if (Wire.available() < 2) {
+    return 0;
+  }
+  
+  uint16_t value = Wire.read();
+  value |= (Wire.read() << 8);
+  return value;
+}
+
+// BQ27441 Fuel Gauge - Schreibe Register
+void writeBQ27441Register(uint8_t reg, uint16_t data) {
+  Wire.beginTransmission(BQ27441_ADDRESS);
+  Wire.write(reg);
+  Wire.write(data & 0xFF);
+  Wire.write((data >> 8) & 0xFF);
+  Wire.endTransmission();
+  delay(10);
+}
+
+// Initialisiere Batterie-System (genau wie im funktionierenden Test-Code)
+bool initBatterySystem() {
+  Serial.println("  → Prüfe TCA9548A Multiplexer...");
+  
+  // Prüfe ob TCA9548A erreichbar ist (genau wie im funktionierenden Code)
+  Wire.beginTransmission(TCA9548A_ADDRESS);
+  uint8_t err = Wire.endTransmission();
+  
+  if (err != 0) {
+    Serial.print("  ✗ TCA9548A nicht gefunden (Error ");
+    Serial.print(err);
+    Serial.println(")");
+    return false;
+  }
+  
+  Serial.println("  ✓ TCA9548A gefunden");
+  
+  // Wähle Kanal für Fuel Gauge
+  Serial.println("  → Wähle Kanal " + String(BATTERY_CHANNEL) + " für Fuel Gauge...");
+  selectI2CChannel(BATTERY_CHANNEL);
+  delay(100);
+  
+  // Prüfe ob BQ27441 erreichbar ist (genau wie im funktionierenden Code)
+  Serial.println("  → Prüfe BQ27441 Fuel Gauge...");
+  Wire.beginTransmission(BQ27441_ADDRESS);
+  err = Wire.endTransmission();
+  
+  if (err != 0) {
+    Serial.print("  ✗ BQ27441 nicht gefunden (I2C Error ");
+    Serial.print(err);
+    Serial.println(")");
+    Serial.println("  ⚠️ Stelle sicher, dass der Fuel Gauge am Kanal " + String(BATTERY_CHANNEL) + " angeschlossen ist");
+    return false;
+  }
+  
+  Serial.println("  ✓ BQ27441 gefunden");
+  
+  // Test-Lesen der Daten (genau wie im funktionierenden Code)
+  uint16_t testVoltage = readBQ27441Register(REG_VOLTAGE);
+  uint16_t testSOC = readBQ27441Register(REG_SOC);
+  
+  Serial.println("  → Test-Lesen:");
+  Serial.print("    Spannung: ");
+  Serial.print(testVoltage);
+  Serial.println(" mV");
+  Serial.print("    Ladezustand: ");
+  Serial.print(testSOC);
+  Serial.println(" %");
+  
+  if (testVoltage == 0 && testSOC == 0) {
+    Serial.println("  ⚠️ Warnung: Beide Werte sind 0 - möglicherweise Kommunikationsproblem");
+  }
+  
+  delay(100);
+  
+  return true;
+}
+
+// Lese Batteriedaten vom Fuel Gauge (genau wie im funktionierenden Test-Code)
+void readBatteryData() {
+  if (!batteryInitialized) return;
+  
+  // Wähle den richtigen I2C Kanal
+  selectI2CChannel(BATTERY_CHANNEL);
+  delay(50);
+  
+  // Lese Spannung (Register 0x04 - Voltage) - genau wie im funktionierenden Code
+  uint16_t voltageRaw = readBQ27441Register(REG_VOLTAGE);
+  
+  // Lese State of Charge (Register 0x1C - StateOfCharge) - genau wie im funktionierenden Code
+  uint16_t socRaw = readBQ27441Register(REG_SOC);
+  
+  // Konvertiere mV zu V (genau wie im funktionierenden Code zeigt mV)
+  if (voltageRaw > 0 && voltageRaw < 5000) {  // Gültiger Bereich: 0-5000mV
+    batteryVoltage = voltageRaw / 1000.0;  // Konvertiere mV zu V
+  } else {
+    batteryVoltage = 0;  // Ungültiger Wert
+  }
+  
+  // SOC ist direkt in Prozent (genau wie im funktionierenden Code)
+  if (socRaw <= 100) {
+    batteryPercentage = socRaw;
+  } else {
+    batteryPercentage = 0;  // Ungültiger Wert
+  }
+  
+  // Begrenze Werte auf sinnvolle Bereiche
+  if (batteryVoltage < 0 || batteryVoltage > 5.0) batteryVoltage = 0;
+  if (batteryPercentage < 0 || batteryPercentage > 100) batteryPercentage = 0;
+
+  evaluateBatteryPresence();
+  
+  Serial.println("\n--- Batteriedaten ---");
+  Serial.print("  Spannung: ");
+  Serial.print(voltageRaw);
+  Serial.print(" mV (");
+  Serial.print(batteryVoltage, 2);
+  Serial.println(" V)");
+  Serial.print("  Ladezustand: ");
+  Serial.print(batteryPercentage);
+  Serial.println(" %");
+}
+
+// Sende Batteriedaten an Supabase
+void updateBatteryData() {
+  if (!isConnected) return;
+  
+  HTTPClient http;
+  
+  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
+  
+  #if USE_SHORT_CODE
+    url += "short_code=eq." + String(STATION_SHORT_CODE);
+  #else
+    url += "id=eq." + String(STATION_ID);
+  #endif
+  
+  Serial.println("\n→ UPDATE Battery Data");
+  
+  http.begin(url);
+  http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Prefer", "return=representation");
+  
+  // JSON Body erstellen
+  DynamicJsonDocument doc(256);
+  
+  // Wenn Batterie erkannt wird, sende die Werte, sonst NULL
+  if (batteryPresent && batteryInitialized) {
+    doc["battery_voltage"] = batteryVoltage;
+    doc["battery_percentage"] = batteryPercentage;
+    Serial.println("  Spannung: " + String(batteryVoltage, 2) + " V");
+    Serial.println("  Prozent: " + String(batteryPercentage) + " %");
+    Serial.println("  → Batterie erkannt, sende Werte");
+  } else {
+    // Setze auf NULL wenn keine Batterie erkannt wird
+    doc["battery_voltage"] = nullptr;
+    doc["battery_percentage"] = nullptr;
+    Serial.println("  ⚠️ Keine Batterie erkannt → Setze Werte auf NULL");
+    if (!batteryInitialized) {
+      Serial.println("  → Batterie-System nicht initialisiert");
+    } else {
+      Serial.println("  → Spannung zu niedrig: " + String(batteryVoltage, 2) + " V (Schwellwert: " + String(BATTERY_PRESENT_THRESHOLD, 1) + " V)");
+    }
+  }
+  
+  doc["updated_at"] = "now()";
+  
+  String jsonBody;
+  serializeJson(doc, jsonBody);
+  
+  Serial.println("  Body: " + jsonBody);
+  
+  int httpCode = http.PATCH(jsonBody);
+  
+  if (httpCode == 200 || httpCode == 201 || httpCode == 204) {
+    Serial.println("✓ Batteriedaten erfolgreich aktualisiert!");
+  } else {
+    Serial.println("✗ Update Fehler: " + String(httpCode));
+    Serial.println("  Response: " + http.getString());
+  }
+  
+  http.end();
+}
+
 // ===== HILFSFUNKTIONEN =====
 
 void printDebugInfo() {
@@ -517,6 +989,9 @@ void printDebugInfo() {
   Serial.println("RSSI: " + String(WiFi.RSSI()) + " dBm");
   Serial.println("Free Heap: " + String(ESP.getFreeHeap()) + " bytes");
   Serial.println("Uptime: " + String(millis() / 1000) + " Sekunden");
+  if (batteryInitialized) {
+    Serial.println("Batterie: " + String(batteryVoltage, 2) + " V (" + String(batteryPercentage) + "%)");
+  }
   Serial.println("==================\n");
 }
 

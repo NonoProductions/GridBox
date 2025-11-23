@@ -1,3 +1,4 @@
+der esp connectet und de connecte immer wieder
 @echo off
 REM ESP32 Upload Fix Script
 REM Wenn Arduino IDE nicht uploaden kann, versuche esptool direkt
