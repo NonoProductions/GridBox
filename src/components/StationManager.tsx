@@ -23,7 +23,7 @@ export interface Station {
   is_active: boolean;
   short_code?: string; // 4-stelliger Code für manuelle Eingabe
   created_at?: string;
-  updated_at?: string;
+  updated_at?: string; // Letzter Kontakt mit ESP32 (aktualisiert bei jedem ESP32-Update)
   photo_url?: string; // Legacy: wird für Rückwärtskompatibilität beibehalten
   photos?: string[]; // Array von bis zu 3 Foto-URLs
   rental_cost?: number; // Kosten pro Stunde in Euro

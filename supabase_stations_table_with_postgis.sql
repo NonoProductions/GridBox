@@ -42,12 +42,7 @@ CREATE TRIGGER update_stations_updated_at
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
--- Füge einige Beispieldaten hinzu (optional)
-INSERT INTO stations (name, description, lat, lng, available_units, total_units, address) VALUES
-('Hauptbahnhof', 'Powerbank-Station am Hauptbahnhof', 52.525, 13.369, 8, 12, 'Europaplatz 1, 10557 Berlin'),
-('Stadttor', 'Station am Stadttor', 52.515, 13.405, 3, 8, 'Stadttor 1, 10117 Berlin'),
-('City Mall', 'Powerbank-Station in der City Mall', 52.505, 13.39, 12, 15, 'Alexanderplatz 1, 10178 Berlin')
-ON CONFLICT DO NOTHING;
+-- Keine Testdaten - Stationen werden über die UI oder ESP32-Geräte hinzugefügt
 
 -- Erlaube öffentlichen Zugriff auf die Tabelle (für anonyme Benutzer)
 ALTER TABLE stations ENABLE ROW LEVEL SECURITY;

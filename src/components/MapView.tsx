@@ -389,9 +389,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
-      setIsPanelExpanded(false); // Reset expansion state when selecting new station
+      setIsPanelExpanded(true); // Panel standardmäßig erweitert, damit alle Inhalte sichtbar sind
       
       console.log('✅ Station sofort angezeigt:', station.name);
+      console.log('🔍 Panel State:', {
+        selectedStation: !!station,
+        showStationList: false,
+        userLocation: !!userLocation,
+        isPanelExpanded: false,
+        isClosing: false
+      });
     } catch (error) {
       console.error('Error highlighting station:', error);
     }
@@ -971,7 +978,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
 
       {/* Selected Station Info Panel - Full Width from Bottom */}
-      {selectedStation && !showStationList && userLocation && (
+      {selectedStation && !showStationList && (
         <div className={`fixed bottom-0 left-0 right-0 z-[999] ${isClosing ? 'animate-slide-down' : 'animate-slide-up'}`}>
           <div 
             className={`shadow-lg border-t flex flex-col rounded-t-3xl ${

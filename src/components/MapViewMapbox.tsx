@@ -18,6 +18,242 @@ type LegacyStation = {
   availableUnits: number;
 };
 
+// Photo Carousel Component
+function PhotoCarousel({ photos, isDarkMode }: { photos: string[]; isDarkMode: boolean }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const touchStartX = useRef<number>(0);
+  const touchEndX = useRef<number>(0);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    touchEndX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchEnd = () => {
+    if (!touchStartX.current || !touchEndX.current) return;
+    
+    const distance = touchStartX.current - touchEndX.current;
+    const minSwipeDistance = 50;
+
+    if (distance > minSwipeDistance && currentIndex < photos.length - 1) {
+      // Swipe left - next photo
+      setCurrentIndex(currentIndex + 1);
+    } else if (distance < -minSwipeDistance && currentIndex > 0) {
+      // Swipe right - previous photo
+      setCurrentIndex(currentIndex - 1);
+    }
+  };
+
+  const goToPhoto = (index: number) => {
+    setCurrentIndex(index);
+  };
+
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      const photoWidth = scrollContainerRef.current.offsetWidth;
+      scrollContainerRef.current.scrollTo({
+        left: currentIndex * photoWidth,
+        behavior: 'smooth'
+      });
+    }
+  }, [currentIndex]);
+
+  if (photos.length === 0) return null;
+
+  return (
+    <div className="w-full">
+      {/* Main large photo display with navigation */}
+      <div className="relative w-full h-64 rounded-xl overflow-hidden mb-3">
+        <div 
+          ref={scrollContainerRef}
+          className="w-full h-full"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          style={{
+            display: 'flex',
+            scrollSnapType: 'x mandatory',
+            overflowX: 'auto',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+          }}
+        >
+          {photos.map((photo, index) => (
+            <div
+              key={index}
+              className="flex-shrink-0 w-full h-full"
+              style={{ scrollSnapAlign: 'start' }}
+            >
+              <img
+                src={photo}
+                alt={`Station Foto ${index + 1}`}
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  // Fallback bei Fehler
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+              />
+            </div>
+          ))}
+        </div>
+        <style jsx>{`
+          div::-webkit-scrollbar {
+            display: none;
+          }
+        `}</style>
+
+        {/* Navigation arrows (only show if more than 1 photo) */}
+        {photos.length > 1 && (
+          <>
+            {currentIndex > 0 && (
+              <button
+                onClick={() => goToPhoto(currentIndex - 1)}
+                className={`absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full backdrop-blur-sm transition-all z-10 ${
+                  isDarkMode
+                    ? 'bg-black/40 text-white hover:bg-black/60'
+                    : 'bg-white/80 text-gray-900 hover:bg-white'
+                }`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M15 18l-6-6 6-6"/>
+                </svg>
+              </button>
+            )}
+            {currentIndex < photos.length - 1 && (
+              <button
+                onClick={() => goToPhoto(currentIndex + 1)}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full backdrop-blur-sm transition-all z-10 ${
+                  isDarkMode
+                    ? 'bg-black/40 text-white hover:bg-black/60'
+                    : 'bg-white/80 text-gray-900 hover:bg-white'
+                }`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M9 18l6-6-6-6"/>
+                </svg>
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Photo indicators / thumbnails */}
+      {photos.length > 1 && (
+        <div className="flex items-center justify-center gap-2">
+          {photos.map((photo, index) => (
+            <button
+              key={index}
+              onClick={() => goToPhoto(index)}
+              className={`flex-shrink-0 transition-all ${
+                currentIndex === index
+                  ? 'ring-2 ring-emerald-500 ring-offset-2'
+                  : 'opacity-60 hover:opacity-80'
+              }`}
+            >
+              <img
+                src={photo}
+                alt={`Thumbnail ${index + 1}`}
+                className="w-12 h-12 rounded-lg object-cover"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Function to check if station is currently open based on opening hours
+function isStationOpen(openingHours: string | undefined): boolean {
+  if (!openingHours) return true; // If no opening hours, assume always open
+  
+  const now = new Date();
+  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  const currentTime = now.getHours() * 60 + now.getMinutes(); // Current time in minutes
+  
+  // Map day numbers to German day names
+  const dayNames: { [key: number]: string[] } = {
+    0: ['So', 'Sonntag', 'Sun'],
+    1: ['Mo', 'Montag', 'Mon'],
+    2: ['Di', 'Dienstag', 'Tue'],
+    3: ['Mi', 'Mittwoch', 'Wed'],
+    4: ['Do', 'Donnerstag', 'Thu'],
+    5: ['Fr', 'Freitag', 'Fri'],
+    6: ['Sa', 'Samstag', 'Sat']
+  };
+  
+  const currentDayNames = dayNames[currentDay] || [];
+  
+  // Parse opening hours string (e.g., "Mo-Fr: 8:00-18:00, Sa: 9:00-16:00")
+  const parts = openingHours.split(',').map(p => p.trim());
+  
+  for (const part of parts) {
+    // Check if current day matches
+    let matchesDay = false;
+    
+    // Check for day ranges (Mo-Fr, Mo-Sa, etc.)
+    if (part.includes('-')) {
+      const [dayRange, times] = part.split(':').map(s => s.trim());
+      const [startDay, endDay] = dayRange.split('-').map(d => d.trim());
+      
+      // Find day indices
+      let startIdx = -1, endIdx = -1;
+      for (let i = 0; i <= 6; i++) {
+        const names = dayNames[i];
+        if (names.some(n => n.toLowerCase().startsWith(startDay.toLowerCase()))) {
+          startIdx = i;
+        }
+        if (names.some(n => n.toLowerCase().startsWith(endDay.toLowerCase()))) {
+          endIdx = i;
+        }
+      }
+      
+      if (startIdx !== -1 && endIdx !== -1) {
+        // Handle week wrap (e.g., Fr-Mo)
+        if (startIdx > endIdx) {
+          matchesDay = currentDay >= startIdx || currentDay <= endIdx;
+        } else {
+          matchesDay = currentDay >= startIdx && currentDay <= endIdx;
+        }
+      }
+    } else {
+      // Single day (e.g., "Mo: 8:00-18:00")
+      const dayPart = part.split(':')[0].trim();
+      matchesDay = currentDayNames.some(name => 
+        name.toLowerCase().startsWith(dayPart.toLowerCase())
+      );
+    }
+    
+    if (matchesDay) {
+      // Extract time range (e.g., "8:00-18:00")
+      const timeMatch = part.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+      if (timeMatch) {
+        const [, startH, startM, endH, endM] = timeMatch;
+        const startTime = parseInt(startH) * 60 + parseInt(startM);
+        const endTime = parseInt(endH) * 60 + parseInt(endM);
+        
+        // Handle overnight hours (e.g., 22:00-02:00)
+        if (endTime < startTime) {
+          return currentTime >= startTime || currentTime <= endTime;
+        } else {
+          return currentTime >= startTime && currentTime <= endTime;
+        }
+      }
+    }
+  }
+  
+  return false; // If no match found, assume closed
+}
+
 // Internal component that handles the actual map rendering
 function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [scanning, setScanning] = useState(false);
@@ -1086,9 +1322,25 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
-      setIsPanelExpanded(false); // Reset expansion state when selecting new station
+      setIsPanelExpanded(true); // Panel standardmäßig erweitert, damit alle Inhalte sichtbar sind
       
       console.log('Station highlighted and map centered on:', { lng: station.lng, lat: station.lat + latOffset });
+      console.log('🔍 Panel State:', {
+        selectedStation: !!station,
+        showStationList: false,
+        userLocation: !!userLocation,
+        isPanelExpanded: true,
+        isClosing: false,
+        isFullScreenNavigation: false
+      });
+      console.log('📋 Station Data:', {
+        name: station.name,
+        address: station.address || 'NICHT VORHANDEN',
+        description: station.description || 'NICHT VORHANDEN',
+        opening_hours: station.opening_hours || 'NICHT VORHANDEN',
+        photos: station.photos?.length || 0,
+        photo_url: station.photo_url || 'NICHT VORHANDEN'
+      });
     } catch (error) {
       console.error('Error highlighting station:', error);
     }
@@ -2009,7 +2261,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
 
       {/* Selected Station Info Panel - Full Width from Bottom */}
-      {selectedStation && !showStationList && userLocation && !isFullScreenNavigation && (
+      {selectedStation && !showStationList && !isFullScreenNavigation && (
         <div className={`fixed bottom-0 left-0 right-0 z-[999] ${isClosing ? 'animate-slide-down' : 'animate-slide-up'}`}>
           <div 
             className={`shadow-lg border-t flex flex-col rounded-t-3xl ${
@@ -2021,11 +2273,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               backgroundColor: isDarkMode === true ? '#282828' : 'white',
               height: isPanelExpanded 
                 ? dragOffset < 0 
-                  ? `calc(55vh + ${dragOffset}px)` 
-                  : '55vh'
+                  ? `calc(70vh + ${dragOffset}px)` 
+                  : '90vh'
                 : dragOffset > 0
-                  ? `calc(15rem + ${dragOffset}px)`
-                  : 'auto',
+                  ? `calc(17rem + ${dragOffset}px)`
+                  : '17rem',
               minHeight: 'auto',
               transition: dragOffset === 0 ? 'height 0.3s ease-out' : 'none'
             }}
@@ -2044,7 +2296,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             </div>
 
             {/* Scrollable Content Area */}
-            <div className={`flex-1 overflow-y-auto px-5 ${isPanelExpanded ? '' : 'pb-6'} relative`}>
+            <div className={`flex-1 ${isPanelExpanded ? 'overflow-y-auto' : 'overflow-hidden'} px-5 ${isPanelExpanded ? '' : 'pb-6'} relative`}>
               {/* Close Button - rechts oben */}
               <button
                 onClick={clearHighlight}
@@ -2060,12 +2312,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               </button>
 
               {/* Station Name - größer */}
-              <h3 className="text-base font-semibold mb-4 pr-10">{selectedStation.name}</h3>
+              <h3 className="text-lg font-semibold mb-1 pr-10">{selectedStation.name}</h3>
 
               {/* Hauptbereich: Info links, Foto rechts */}
               <div className="flex gap-4">
                 {/* Linke Seite: Info */}
-                <div className="flex-1 space-y-3">
+                <div className="flex-1 space-y-1.5">
                   {/* Verfügbare Powerbanks */}
                   <div className="flex items-center">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
@@ -2086,6 +2338,27 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       <span className="font-semibold">0,10€</span> zum Start, anschließend <span className="font-semibold">0,05€</span>/Min
                     </span>
                   </div>
+
+                  {/* Öffnungsstatus (nur Geöffnet/Geschlossen) */}
+                  {selectedStation.opening_hours && (
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`flex-shrink-0 ${
+                        isStationOpen(selectedStation.opening_hours) 
+                          ? 'text-emerald-600 dark:text-emerald-400' 
+                          : 'text-red-600 dark:text-red-400'
+                      }`}>
+                        <circle cx="12" cy="12" r="10"/>
+                        <polyline points="12 6 12 12 16 14"/>
+                      </svg>
+                      <span className={`text-sm font-semibold ${
+                        isStationOpen(selectedStation.opening_hours) 
+                          ? 'text-emerald-600 dark:text-emerald-400' 
+                          : 'text-red-600 dark:text-red-400'
+                      }`}>
+                        {isStationOpen(selectedStation.opening_hours) ? 'Geöffnet' : 'Geschlossen'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Rechte Seite: Foto */}
@@ -2111,53 +2384,64 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               {/* Erweiterte Informationen - nur wenn Panel erweitert ist */}
               {isPanelExpanded && (
                 <div className="mt-4 space-y-3">
-                  {/* Powerbanks Liste */}
-                  <div className={`rounded-lg ${
-                    isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
-                  }`}>
-                    <div className="p-3 border-b border-gray-600/30">
-                      <div className="text-sm font-semibold">🔋 Verfügbare Powerbanks</div>
-                    </div>
-                    <div className="divide-y divide-gray-600/20">
-                      {selectedStation.powerbanks && selectedStation.powerbanks.length > 0 ? (
-                        selectedStation.powerbanks
-                          .filter(pb => pb.status === 'available')
-                          .map((powerbank) => (
-                            <div key={powerbank.id} className="p-3 flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className={`w-2 h-2 rounded-full ${
-                                  powerbank.battery_level > 80 ? 'bg-emerald-500' :
-                                  powerbank.battery_level > 50 ? 'bg-yellow-500' :
-                                  'bg-orange-500'
-                                }`}></div>
-                                <span className="text-sm font-medium">{powerbank.name}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className="text-sm font-semibold">{powerbank.battery_level}%</div>
-                                {/* Battery icon */}
-                                <div className={`w-8 h-4 rounded border-2 relative ${
-                                  isDarkMode === true ? 'border-gray-600' : 'border-gray-300'
-                                }`}>
-                                  <div 
-                                    className={`h-full rounded-sm ${
-                                      powerbank.battery_level > 80 ? 'bg-emerald-500' :
-                                      powerbank.battery_level > 50 ? 'bg-yellow-500' :
-                                      powerbank.battery_level > 20 ? 'bg-orange-500' :
-                                      'bg-red-500'
-                                    }`}
-                                    style={{ width: `${powerbank.battery_level}%` }}
-                                  ></div>
-                                </div>
-                              </div>
+                  {/* FOTO-CAROUSEL BEREICH */}
+                  <div className="w-full">
+                    {(() => {
+                      // Kombiniere photos Array und photo_url (für Rückwärtskompatibilität)
+                      const allPhotos: string[] = [];
+                      if (selectedStation.photos && Array.isArray(selectedStation.photos)) {
+                        allPhotos.push(...selectedStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
+                      }
+                      // Falls photo_url existiert und noch nicht in photos enthalten ist
+                      if (selectedStation.photo_url && !allPhotos.includes(selectedStation.photo_url)) {
+                        allPhotos.unshift(selectedStation.photo_url);
+                      }
+                      const displayPhotos = allPhotos.slice(0, 3); // Maximal 3 Fotos
+                      
+                      // Zeige Foto-Carousel immer an
+                      if (displayPhotos.length > 0) {
+                        return <PhotoCarousel photos={displayPhotos} isDarkMode={isDarkMode === true} />;
+                      } else {
+                        return (
+                          <div className={`w-full h-64 rounded-xl flex items-center justify-center border-2 border-dashed ${
+                            isDarkMode === true ? 'bg-gray-700/30 border-gray-600' : 'bg-gray-50 border-gray-300'
+                          }`}>
+                            <div className="text-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={`mx-auto mb-2 ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                <circle cx="8.5" cy="8.5" r="1.5"/>
+                                <polyline points="21 15 16 10 5 21"/>
+                              </svg>
+                              <p className={`text-sm font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                Noch keine Fotos vorhanden
+                              </p>
+                              <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                                Fotos können im Dashboard hinzugefügt werden
+                              </p>
                             </div>
-                          ))
-                      ) : (
-                        <div className="p-3 text-sm opacity-60 text-center">
-                          Keine Powerbanks verfügbar
-                        </div>
-                      )}
-                    </div>
+                          </div>
+                        );
+                      }
+                    })()}
                   </div>
+
+                  {/* Öffnungszeiten */}
+                  {selectedStation.opening_hours && (
+                    <div className={`p-3 rounded-lg ${
+                      isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
+                    }`}>
+                      <div className="flex items-start gap-3">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-gray-500 dark:text-gray-400 mt-0.5">
+                          <circle cx="12" cy="12" r="10"/>
+                          <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        <div className="flex-1">
+                          <div className="text-xs opacity-70 mb-1">🕐 Öffnungszeiten</div>
+                          <div className="text-sm">{selectedStation.opening_hours}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Adresse */}
                   {selectedStation.address && (

@@ -142,27 +142,7 @@ CREATE TRIGGER update_stations_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- 5. Füge Beispieldaten hinzu (nur wenn alle notwendigen Spalten existieren)
-DO $$
-BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'stations' AND column_name = 'available_units') THEN
-        -- Füge Beispieldaten hinzu, falls noch keine vorhanden sind
-        INSERT INTO stations (name, description, lat, lng, available_units, total_units, address) 
-        SELECT 'Hauptbahnhof', 'Powerbank-Station am Hauptbahnhof', 52.525, 13.369, 8, 12, 'Europaplatz 1, 10557 Berlin'
-        WHERE NOT EXISTS (SELECT 1 FROM stations WHERE name = 'Hauptbahnhof');
-        
-        INSERT INTO stations (name, description, lat, lng, available_units, total_units, address) 
-        SELECT 'Stadttor', 'Station am Stadttor', 52.515, 13.405, 3, 8, 'Stadttor 1, 10117 Berlin'
-        WHERE NOT EXISTS (SELECT 1 FROM stations WHERE name = 'Stadttor');
-        
-        INSERT INTO stations (name, description, lat, lng, available_units, total_units, address) 
-        SELECT 'City Mall', 'Powerbank-Station in der City Mall', 52.505, 13.39, 12, 15, 'Alexanderplatz 1, 10178 Berlin'
-        WHERE NOT EXISTS (SELECT 1 FROM stations WHERE name = 'City Mall');
-        
-        RAISE NOTICE 'Beispieldaten hinzugefügt';
-    ELSE
-        RAISE NOTICE 'available_units Spalte existiert nicht - Beispieldaten werden übersprungen';
-    END IF;
-END $$;
+-- Keine Testdaten - Stationen werden über die UI oder ESP32-Geräte hinzugefügt
 
 -- 6. Richte Row Level Security ein
 ALTER TABLE stations ENABLE ROW LEVEL SECURITY;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, type JSX } from "react";
+import React, { useState, useEffect, type JSX } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Station } from "./StationManager";
@@ -200,6 +200,11 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const [isMobile, setIsMobile] = useState(false);
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   const [usersCount, setUsersCount] = useState<number | null>(null);
+  const [showOnlyConnected, setShowOnlyConnected] = useState(false);
+  const [realtimeActive, setRealtimeActive] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [updatingStation, setUpdatingStation] = useState<string | null>(null);
+  const [hasInitialLoad, setHasInitialLoad] = useState(false);
 
   const tabOptions: Array<{
     key: OwnerDashboardTab;
@@ -274,17 +279,35 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     return () => window.removeEventListener('resize', updateViewport);
   }, []);
 
-  // Lade Stationen
-  const fetchStations = async () => {
+  // Lade Stationen (mit useCallback für Realtime-Updates)
+  const fetchStations = React.useCallback(async (silent = false, forceRefresh = false) => {
     try {
-      setLoading(true);
+      // Nur beim initialen Laden den Spinner zeigen
+      if (!silent) {
+        setLoading(true);
+      }
+      
+      // Debug: Prüfe Authentifizierung (nur beim ersten Mal)
+      if (!hasInitialLoad || forceRefresh) {
+        const { data: { session } } = await supabase.auth.getSession();
+        console.log('📊 Lade Stationen... (Session vorhanden:', !!session, ')');
+      }
+      
       const { data, error } = await supabase
         .from('stations')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Supabase Fehler beim Laden der Stationen:', error);
+        throw error;
+      }
+      
       const stationsData = data || [];
+      if (!silent || !hasInitialLoad) {
+        console.log('✅ Stationen geladen:', stationsData.length, 'Stationen', silent ? '(silent)' : '');
+      }
+      
       setStations(stationsData);
       setSelectedStationId((prev) => {
         if (prev && stationsData.some((station: Station) => station.id === prev)) {
@@ -292,23 +315,26 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         }
         return stationsData.length > 0 ? stationsData[0].id : null;
       });
+      setLastUpdate(new Date());
+      setError(null); // Clear any previous errors
       
-      // Debug: Logge Batteriedaten
-      console.log('Geladene Stationen:', stationsData.length);
-      stationsData.forEach((station: Station) => {
-        console.log(`Station ${station.name}:`, {
-          battery_voltage: station.battery_voltage,
-          battery_percentage: station.battery_percentage,
-          hasBatteryData: !!(station.battery_voltage || station.battery_percentage)
-        });
-      });
+      if (!hasInitialLoad) {
+        setHasInitialLoad(true);
+        console.log('✅ Initial Load abgeschlossen - Cache aktiviert');
+      }
     } catch (err) {
-      console.error('Fehler beim Laden der Stationen:', err);
-      setError('Fehler beim Laden der Stationen');
+      console.error('❌ Fehler beim Laden der Stationen:', err);
+      const errorMessage = (err as any)?.message || 'Fehler beim Laden der Stationen';
+      console.error('Fehlerdetails:', errorMessage);
+      if (!silent) {
+        setError('Fehler beim Laden der Stationen: ' + errorMessage);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
-  };
+  }, [hasInitialLoad]);
 
   // Lade Benutzer
   const fetchUsers = async () => {
@@ -368,26 +394,45 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .eq('id', id);
 
       if (error) throw error;
-      await fetchStations();
+      // Lokale Aktualisierung für sofortiges Feedback
+      setStations(prev => prev.filter(station => station.id !== id));
+      setSelectedStationId(null);
     } catch (err) {
       console.error('Fehler beim Löschen der Station:', err);
       setError('Fehler beim Löschen der Station');
+      // Bei Fehler: Hole Daten erneut mit Force-Refresh
+      fetchStations(true, true);
     }
   };
 
   // Aktualisiere Station
   const updateStation = async (id: string, updates: Partial<Station>) => {
     try {
+      setUpdatingStation(id);
+      
+      // Optimistische UI-Aktualisierung für sofortiges Feedback
+      setStations(prev => prev.map(station => 
+        station.id === id ? { ...station, ...updates } : station
+      ));
+
       const { error } = await supabase
         .from('stations')
         .update(updates)
         .eq('id', id);
 
-      if (error) throw error;
-      await fetchStations();
+      if (error) {
+        console.error('Supabase Update Fehler:', error);
+        throw error;
+      }
+      
+      console.log('✅ Station erfolgreich aktualisiert:', id, updates);
     } catch (err) {
-      console.error('Fehler beim Aktualisieren der Station:', err);
-      setError('Fehler beim Aktualisieren der Station');
+      console.error('❌ Fehler beim Aktualisieren der Station:', err);
+      setError('Fehler beim Aktualisieren der Station: ' + (err as Error).message);
+      // Bei Fehler: Stelle alten Zustand wieder her mit Force-Refresh
+      fetchStations(true, true);
+    } finally {
+      setUpdatingStation(null);
     }
   };
 
@@ -419,7 +464,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       }
       
       console.log('Station erfolgreich hinzugefügt:', data);
-      await fetchStations();
+      // Realtime macht das Update automatisch
       setShowAddStationForm(false);
     } catch (err: unknown) {
       console.error('Fehler beim Hinzufügen der Station:', err);
@@ -486,13 +531,146 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     );
   }, []);
 
+  // Initial Load nur einmal beim ersten Öffnen
   useEffect(() => {
-    if (['overview', 'stats', 'stations', 'transactions'].includes(activeTab)) {
-      fetchStations();
-    } else if (activeTab === 'users') {
+    if (!hasInitialLoad) {
+      console.log('🚀 Initialer Ladevorgang...');
+      fetchStations(false, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Nur einmal beim Mount
+  
+  // Lade Users nur wenn Users-Tab geöffnet wird
+  useEffect(() => {
+    if (activeTab === 'users' && users.length === 0) {
       fetchUsers();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+
+  // Automatische Updates: ROBUSTES System mit Realtime + Polling Backup
+  useEffect(() => {
+    // Starte Updates nur wenn initial geladen wurde
+    if (!hasInitialLoad) {
+      return;
+    }
+
+    console.log('🔄 Aktiviere robuste Hintergrund-Updates...');
+    
+    let isSubscribed = true;
+    let channel: any = null;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 5;
+
+    // Funktion zum Starten/Neustarten der Realtime-Verbindung
+    const startRealtimeSubscription = () => {
+      if (!isSubscribed) return;
+      
+      // Entferne alte Verbindung falls vorhanden
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+
+      console.log('🔌 Starte Realtime-Subscription...');
+      
+      // Erstelle neue Realtime-Verbindung
+      channel = supabase
+        .channel(`stations-updates-${Date.now()}`) // Unique channel name
+        .on(
+          'postgres_changes',
+          {
+            event: '*', // Alle Events: INSERT, UPDATE, DELETE
+            schema: 'public',
+            table: 'stations'
+          },
+          (payload) => {
+            console.log('📡 Realtime Update:', payload.eventType, payload.new?.name || payload.old?.name);
+            
+            // Optimistische Update-Strategie
+            if (payload.eventType === 'UPDATE' && payload.new) {
+              setStations(prev => prev.map(station => {
+                if (station.id === payload.new.id) {
+                  const updated = { ...station, ...payload.new };
+                  
+                  // Debug-Log
+                  const changedFields = Object.keys(payload.new)
+                    .filter(key => key !== 'id' && station[key as keyof Station] !== payload.new[key])
+                    .map(key => `${key}: ${station[key as keyof Station]} → ${payload.new[key]}`);
+                  
+                  if (changedFields.length > 0) {
+                    console.log('✅ Station aktualisiert:', updated.name);
+                    console.log('   Änderungen:', changedFields.join(', '));
+                  }
+                  
+                  return updated;
+                }
+                return station;
+              }));
+              setLastUpdate(new Date());
+              reconnectAttempts = 0; // Reset bei erfolgreicher Nachricht
+            } else if (payload.eventType === 'INSERT' && payload.new) {
+              console.log('➕ Neue Station:', payload.new.name);
+              setStations(prev => [payload.new, ...prev]);
+              setLastUpdate(new Date());
+              reconnectAttempts = 0;
+            } else if (payload.eventType === 'DELETE' && payload.old) {
+              console.log('➖ Station entfernt:', payload.old.name);
+              setStations(prev => prev.filter(s => s.id !== payload.old.id));
+              setLastUpdate(new Date());
+              reconnectAttempts = 0;
+            }
+          }
+        )
+        .subscribe((status) => {
+          console.log('📡 Realtime Status:', status);
+          
+          if (status === 'SUBSCRIBED') {
+            console.log('✅ Realtime aktiv');
+            setRealtimeActive(true);
+            reconnectAttempts = 0;
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn('⚠️ Realtime Fehler:', status);
+            setRealtimeActive(false);
+            
+            // Auto-Reconnect mit exponential backoff
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+              const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+              reconnectAttempts++;
+              console.log(`🔄 Reconnect Versuch ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`);
+              setTimeout(() => startRealtimeSubscription(), delay);
+            } else {
+              console.warn('❌ Max Reconnect-Versuche erreicht, nutze nur Polling');
+            }
+          } else if (status === 'CLOSED') {
+            console.log('🔌 Realtime geschlossen');
+            setRealtimeActive(false);
+          }
+        });
+    };
+
+    // Starte Realtime
+    startRealtimeSubscription();
+
+    // IMMER Polling als Backup (unabhängig von Realtime-Status)
+    console.log('⏱️ Starte Polling-Backup (alle 8 Sekunden)...');
+    const pollingInterval = setInterval(() => {
+      if (isSubscribed) {
+        console.log('🔄 Polling-Update...');
+        fetchStations(true, true); // Silent refresh
+      }
+    }, 8000); // 8 Sekunden - garantiert Updates
+
+    // Cleanup
+    return () => {
+      console.log('🛑 Stoppe alle Hintergrund-Updates');
+      isSubscribed = false;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(pollingInterval);
+      setRealtimeActive(false);
+    };
+  }, [hasInitialLoad, fetchStations]);
 
   const getTabBadgeValue = (key: OwnerDashboardTab): string | null => {
     if (key === 'stations' && stations.length > 0) {
@@ -566,41 +744,77 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     : `fixed inset-0 z-[2000] px-0 py-0 md:px-8 md:py-8 backdrop-blur-sm ${
         isDarkMode ? 'bg-black/70 text-white' : 'bg-black/30 text-slate-900'
       }`;
+  // Helper-Funktion: Prüfe ob Station verbunden ist (updated_at < 60 Sekunden alt)
+  const isStationConnected = (station: Station): boolean => {
+    if (!station.updated_at) return false;
+    try {
+      // Stelle sicher, dass updated_at ein gültiges Datum ist
+      const lastContact = new Date(station.updated_at);
+      
+      // Prüfe ob Datum valid ist
+      if (isNaN(lastContact.getTime())) {
+        console.warn('Ungültiges updated_at für Station:', station.name, station.updated_at);
+        return false;
+      }
+      
+      const now = new Date();
+      const diffSeconds = (now.getTime() - lastContact.getTime()) / 1000;
+      
+      // 60 Sekunden statt 30 für mehr Toleranz bei Netzwerk-Latenzen
+      return diffSeconds < 60;
+    } catch (error) {
+      console.error('Fehler beim Prüfen der Station-Verbindung:', error, station.name);
+      return false;
+    }
+  };
+
+  const filteredStations = showOnlyConnected 
+    ? stations.filter(isStationConnected) 
+    : stations;
+
   const selectedStation = selectedStationId
     ? stations.find((station) => station.id === selectedStationId) || null
     : null;
+  const connectedStationsCount = stations.filter(isStationConnected).length;
   const activeStationsCount = stations.filter((station) => station.is_active).length;
   const inactiveStationsCount = stations.length - activeStationsCount;
   const totalCapacity = stations.reduce((sum, station) => sum + (station.total_units || 0), 0);
-  const totalAvailableUnits = stations.reduce((sum, station) => sum + (station.available_units || 0), 0);
+  
+  // Zähle eingelegte Powerbanks (nur wenn ESP32 Batterie-Daten sendet)
+  const totalOccupiedUnits = stations.reduce((sum, station) => {
+    const hasBatteryData = 
+      station.battery_voltage !== undefined && 
+      station.battery_voltage !== null &&
+      station.battery_percentage !== undefined && 
+      station.battery_percentage !== null;
+    return sum + (hasBatteryData ? 1 : 0);
+  }, 0);
+  
+  const totalAvailableUnits = totalCapacity - totalOccupiedUnits;
+  
+  // Durchschnittliche Batterie nur von Stationen mit Batterie-Daten
+  const stationsWithBattery = stations.filter(station => 
+    station.battery_percentage !== undefined && 
+    station.battery_percentage !== null
+  );
   const averageBattery =
-    stations.length > 0
+    stationsWithBattery.length > 0
       ? Math.round(
-          (stations.reduce((sum, station) => sum + (station.battery_percentage ?? 0), 0) / stations.length) * 10
+          (stationsWithBattery.reduce((sum, station) => sum + (station.battery_percentage ?? 0), 0) / stationsWithBattery.length) * 10
         ) / 10
       : null;
   const utilizationPercentage =
-    totalCapacity > 0 ? Math.round(((totalCapacity - totalAvailableUnits) / totalCapacity) * 100) : 0;
-  const transactionsData =
-    stations.length > 0
-      ? stations.slice(0, 8).map((station, index) => ({
-          id: station.id ?? `tx-${index}`,
-          stationName: station.name,
-          amount: station.rental_cost ?? 3.5,
-          status: station.is_active ? 'abgeschlossen' : 'wartend',
-          timestamp: station.updated_at ? new Date(station.updated_at) : null,
-          powerbanksMoved: (station.total_units || 0) - (station.available_units || 0),
-        }))
-      : [
-          {
-            id: 'demo-1',
-            stationName: 'Demo Station',
-            amount: 4.5,
-            status: 'wartend',
-            timestamp: null,
-            powerbanksMoved: 2,
-          },
-        ];
+    totalCapacity > 0 ? Math.round((totalOccupiedUnits / totalCapacity) * 100) : 0;
+  const transactionsData = stations.length > 0
+    ? stations.slice(0, 8).map((station, index) => ({
+        id: station.id ?? `tx-${index}`,
+        stationName: station.name,
+        amount: station.rental_cost ?? 3.5,
+        status: station.is_active ? 'abgeschlossen' : 'wartend',
+        timestamp: station.updated_at ? new Date(station.updated_at) : null,
+        powerbanksMoved: (station.total_units || 0) - (station.available_units || 0),
+      }))
+    : [];
 
   const shellClasses = [
     "flex",
@@ -616,8 +830,8 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     ? "border-white/10 bg-white/5 text-white"
     : "border-slate-200 bg-slate-50 text-slate-900";
   const sectionHeaderWrapper = isStandalone
-    ? "mx-4 mt-6 rounded-2xl"
-    : "mx-4 my-4 rounded-2xl";
+    ? "mt-6 rounded-2xl"
+    : "my-4 rounded-2xl";
 
   return (
     <div className={outerClasses}>
@@ -665,13 +879,9 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               <h2 className="text-2xl font-bold leading-tight">Owner Dashboard</h2>
             </div>
           </div>
-          <div
-            className={`hidden md:flex items-center gap-2 rounded-2xl px-4 py-2 text-sm ${
-              isDarkMode ? 'bg-gray-800 text-gray-300' : 'bg-gray-100 text-gray-600'
-            }`}
-          >
-            <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-            Desktop-optimiert
+          {/* Rechte Seite des Headers - leer für cleanes Design */}
+          <div className="hidden md:flex items-center gap-3">
+            {/* Automatische Updates laufen im Hintergrund - kein UI-Element nötig */}
           </div>
         </div>
 
@@ -777,7 +987,26 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                       : 'border-red-200 bg-red-50 text-red-700'
                   }`}
                 >
-                  {error}
+                  <div className="flex items-start gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                      <circle cx="12" cy="12" r="10"/>
+                      <line x1="12" y1="8" x2="12" y2="12"/>
+                      <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <div className="flex-1">
+                      <p className="font-semibold mb-1">Fehler beim Laden der Daten</p>
+                      <p className="text-sm">{error}</p>
+                      <details className="mt-3 text-xs opacity-80">
+                        <summary className="cursor-pointer hover:opacity-100 font-medium">Fehlerbehebung anzeigen</summary>
+                        <div className="mt-2 space-y-2">
+                          <p>1. Öffne die Browser-Konsole (F12) und suche nach Fehlermeldungen</p>
+                          <p>2. Prüfe ob du eingeloggt bist</p>
+                          <p>3. Führe die SQL-Datei "supabase_diagnose_stations.sql" in Supabase aus</p>
+                          <p>4. Siehe "DASHBOARD_STATIONEN_FIX.md" für Details</p>
+                        </div>
+                      </details>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -788,12 +1017,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                       {
                         label: 'Stationen',
                         value: stations.length,
-                        hint: `${activeStationsCount} aktiv · ${inactiveStationsCount} pausiert`,
+                        hint: `${connectedStationsCount} verbunden · ${activeStationsCount} aktiv`,
                       },
                       {
-                        label: 'Verfügbare Powerbanks',
-                        value: totalAvailableUnits,
-                        hint: `${totalCapacity - totalAvailableUnits} im Einsatz`,
+                        label: 'Eingelegte Powerbanks',
+                        value: totalOccupiedUnits,
+                        hint: `${totalAvailableUnits} Slots frei`,
                       },
                       {
                         label: 'Durchschnittliche Batterie',
@@ -803,7 +1032,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                       {
                         label: 'Auslastung',
                         value: `${utilizationPercentage}%`,
-                        hint: totalCapacity > 0 ? `${totalCapacity - totalAvailableUnits} von ${totalCapacity}` : 'Keine Daten',
+                        hint: totalCapacity > 0 ? `${totalOccupiedUnits} von ${totalCapacity}` : 'Keine Daten',
                       },
                     ].map((card) => (
                       <div
@@ -850,7 +1079,17 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             }`}
                           >
                             <div className="flex items-center justify-between mb-2">
-                              <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{station.name}</p>
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`inline-flex h-2 w-2 rounded-full ${
+                                    isStationConnected(station)
+                                      ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
+                                      : 'bg-gray-400'
+                                  }`}
+                                  title={isStationConnected(station) ? 'Verbunden' : 'Getrennt'}
+                                />
+                                <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{station.name}</p>
+                              </div>
                               <span
                                 className={`text-xs px-2 py-0.5 rounded-full ${
                                   station.is_active
@@ -862,7 +1101,13 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                               </span>
                             </div>
                             <div className={`flex items-center justify-between text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                              <span>{station.available_units ?? 0} / {station.total_units ?? 0} frei</span>
+                              <span>
+                                {station.battery_voltage !== undefined && 
+                                 station.battery_voltage !== null &&
+                                 station.battery_percentage !== undefined && 
+                                 station.battery_percentage !== null
+                                  ? '1' : '0'} / {station.total_units ?? 0} belegt
+                              </span>
                               <span>
                                 {station.battery_percentage !== undefined && station.battery_percentage !== null
                                   ? `${station.battery_percentage}%`
@@ -917,9 +1162,15 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                   ) : (
                     <div className="space-y-3">
                       {stations.map((station) => {
+                        const hasBatteryData = 
+                          station.battery_voltage !== undefined && 
+                          station.battery_voltage !== null &&
+                          station.battery_percentage !== undefined && 
+                          station.battery_percentage !== null;
+                        const occupiedSlots = hasBatteryData ? 1 : 0;
                         const utilization =
                           station.total_units && station.total_units > 0
-                            ? Math.round(((station.total_units - (station.available_units || 0)) / station.total_units) * 100)
+                            ? Math.round((occupiedSlots / station.total_units) * 100)
                             : 0;
                         return (
                           <div
@@ -932,7 +1183,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                               <div>
                                 <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{station.name}</p>
                                 <p className={`text-xs uppercase tracking-[0.2em] ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                                  {station.available_units ?? 0} / {station.total_units ?? 0} frei
+                                  {hasBatteryData ? 1 : 0} / {station.total_units ?? 0} belegt
                                 </p>
                               </div>
                               <span
@@ -992,22 +1243,40 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                       <p className={`text-sm mt-1 ${
                         isDarkMode ? 'text-gray-400' : 'text-gray-600'
                       }`}>
-                        Verwalte deine Powerbank-Stationen
+                        {connectedStationsCount} von {stations.length} verbunden
                       </p>
                     </div>
-                    <button
-                      onClick={() => setShowAddStationForm(true)}
-                      className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="12" y1="5" x2="12" y2="19"/>
-                        <line x1="5" y1="12" x2="19" y2="12"/>
-                      </svg>
-                      Station hinzufügen
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShowOnlyConnected(!showOnlyConnected)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm ${
+                          showOnlyConnected
+                            ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                            : isDarkMode
+                              ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10"/>
+                          <path d="M12 6v6l4 2"/>
+                        </svg>
+                        {showOnlyConnected ? 'Alle anzeigen' : 'Nur Verbundene'}
+                      </button>
+                      <button
+                        onClick={() => setShowAddStationForm(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                          <line x1="12" y1="5" x2="12" y2="19"/>
+                          <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Station hinzufügen
+                      </button>
+                    </div>
                   </div>
 
-                  {stations.length > 0 && (
+                  {filteredStations.length > 0 && (
                     <div className="mt-4">
                       <label className={`block text-xs font-semibold uppercase tracking-[0.15em] mb-2 ${
                         isDarkMode ? 'text-gray-400' : 'text-gray-500'
@@ -1022,9 +1291,20 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             ? 'bg-white/10 border-white/20 text-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20' 
                             : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'
                         }`}
+                        style={isDarkMode ? {
+                          colorScheme: 'dark'
+                        } : undefined}
                       >
-                        {stations.map((station) => (
-                          <option key={station.id} value={station.id}>
+                        {filteredStations.map((station) => (
+                          <option 
+                            key={station.id} 
+                            value={station.id}
+                            style={isDarkMode ? {
+                              backgroundColor: '#1f1f1f',
+                              color: '#ffffff'
+                            } : undefined}
+                          >
+                            {isStationConnected(station) ? '🟢 ' : '⚫ '}
                             {station.name} {station.short_code ? `(${station.short_code})` : ''}
                           </option>
                         ))}
@@ -1047,13 +1327,25 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                       <path d="M15 16v5"/>
                     </svg>
                     <p className={`text-lg font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                      {stations.length === 0 ? 'Noch keine Stationen' : 'Station auswählen'}
+                      {filteredStations.length === 0 
+                        ? (showOnlyConnected ? 'Keine verbundenen Stationen' : 'Noch keine Stationen')
+                        : 'Station auswählen'}
                     </p>
                     <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                      {stations.length === 0 
-                        ? 'Erstelle deine erste Station, um zu beginnen'
+                      {filteredStations.length === 0 
+                        ? (showOnlyConnected 
+                          ? 'Derzeit sind keine Stationen verbunden. Stellen Sie sicher, dass ESP32-Geräte eingeschaltet sind.'
+                          : 'Erstelle deine erste Station, um zu beginnen')
                         : 'Wähle eine Station aus der Liste oben, um Details zu sehen'}
                     </p>
+                    {filteredStations.length === 0 && !showOnlyConnected && !loading && (
+                      <div className={`mt-4 p-3 rounded-lg border text-xs ${
+                        isDarkMode ? 'border-yellow-900/40 bg-yellow-900/10 text-yellow-300' : 'border-yellow-200 bg-yellow-50 text-yellow-700'
+                      }`}>
+                        <p className="font-medium mb-1">💡 Tipp: Keine Stationen gefunden?</p>
+                        <p>Prüfe die Browser-Konsole (F12) für Details oder siehe DASHBOARD_STATIONEN_FIX.md</p>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -1067,6 +1359,22 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             <h4 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                               {selectedStation.name}
                             </h4>
+                            <span
+                              className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                                isStationConnected(selectedStation)
+                                  ? 'bg-emerald-500/10 text-emerald-500'
+                                  : 'bg-gray-500/10 text-gray-500'
+                              }`}
+                            >
+                              <span
+                                className={`inline-flex h-2 w-2 rounded-full ${
+                                  isStationConnected(selectedStation)
+                                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse'
+                                    : 'bg-gray-400'
+                                }`}
+                              />
+                              {isStationConnected(selectedStation) ? 'Verbunden' : 'Getrennt'}
+                            </span>
                             <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${
                               selectedStation.is_active
                                 ? 'bg-emerald-500/10 text-emerald-500'
@@ -1090,36 +1398,63 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                         </div>
                         <button
                           onClick={() => updateStation(selectedStation.id, { is_active: !selectedStation.is_active })}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          disabled={updatingStation === selectedStation.id}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                            updatingStation === selectedStation.id
+                              ? 'opacity-50 cursor-not-allowed'
+                              : ''
+                          } ${
                             selectedStation.is_active
                               ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
                               : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
                           }`}
                         >
-                          {selectedStation.is_active ? 'Deaktivieren' : 'Aktivieren'}
+                          {updatingStation === selectedStation.id ? (
+                            <span className="flex items-center gap-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent"></div>
+                              Aktualisiere...
+                            </span>
+                          ) : (
+                            selectedStation.is_active ? 'Deaktivieren' : 'Aktivieren'
+                          )}
                         </button>
                       </div>
                     </div>
 
-                    {/* Slots Übersicht */}
+                    {/* Slots Übersicht & Kapazität */}
                     <div className={`rounded-2xl border p-5 ${
                       isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
                     }`}>
                       <h5 className={`text-sm font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                        Slot-Übersicht
+                        Station Kapazität
                       </h5>
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className={`rounded-xl p-4 ${
                           isDarkMode ? 'bg-white/5' : 'bg-white'
                         }`}>
-                          <div className={`text-xs font-semibold uppercase tracking-wide mb-1 ${
+                          <div className={`text-xs font-semibold uppercase tracking-wide mb-2 ${
                             isDarkMode ? 'text-gray-400' : 'text-slate-500'
                           }`}>
-                            Leere Slots
+                            Maximale Kapazität (Slots)
                           </div>
-                          <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            {selectedStation.available_units ?? 0}
-                          </div>
+                          <input
+                            type="number"
+                            min="1"
+                            max="32"
+                            value={selectedStation.total_units ?? 8}
+                            onChange={(e) => {
+                              const newValue = parseInt(e.target.value) || 1;
+                              updateStation(selectedStation.id, { total_units: newValue });
+                            }}
+                            className={`w-full px-3 py-2 rounded-lg border text-lg font-bold ${
+                              isDarkMode
+                                ? 'bg-white/10 border-white/20 text-white focus:border-emerald-500'
+                                : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
+                            } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                          />
+                          <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                            Anzahl der verfügbaren Powerbank-Slots
+                          </p>
                         </div>
                         <div className={`rounded-xl p-4 ${
                           isDarkMode ? 'bg-white/5' : 'bg-white'
@@ -1127,11 +1462,20 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                           <div className={`text-xs font-semibold uppercase tracking-wide mb-1 ${
                             isDarkMode ? 'text-gray-400' : 'text-slate-500'
                           }`}>
-                            Belegte Slots
+                            Aktuell eingelegt
                           </div>
                           <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            {(selectedStation.total_units ?? 0) - (selectedStation.available_units ?? 0)}
+                            {(selectedStation.battery_voltage !== undefined && 
+                              selectedStation.battery_voltage !== null &&
+                              selectedStation.battery_percentage !== undefined && 
+                              selectedStation.battery_percentage !== null) ? '1' : '0'} Powerbank{(selectedStation.battery_voltage !== undefined && 
+                              selectedStation.battery_voltage !== null &&
+                              selectedStation.battery_percentage !== undefined && 
+                              selectedStation.battery_percentage !== null) ? '' : 's'}
                           </div>
+                          <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                            Erkannt durch ESP32-Sensoren
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -1142,8 +1486,11 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                     }`}>
                       <div className={`p-5 border-b ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
                         <h5 className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                          Powerbank Details
+                          Slot-Status & Powerbank-Daten
                         </h5>
+                        <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                          Powerbanks werden nur als "eingelegt" angezeigt wenn ESP32 Batterie-Daten sendet
+                        </p>
                       </div>
                       <div className="overflow-x-auto">
                         <table className="w-full">
@@ -1159,22 +1506,17 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                               <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
                                 isDarkMode ? 'text-gray-400' : 'text-slate-500'
                               }`}>
-                                Powerbank ID
+                                Status
                               </th>
                               <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
                                 isDarkMode ? 'text-gray-400' : 'text-slate-500'
                               }`}>
-                                Akkustand
+                                Spannung
                               </th>
                               <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
                                 isDarkMode ? 'text-gray-400' : 'text-slate-500'
                               }`}>
-                                Temperatur
-                              </th>
-                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
-                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                              }`}>
-                                Health Status
+                                Ladezustand
                               </th>
                             </tr>
                           </thead>
@@ -1182,12 +1524,16 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             {selectedStation.total_units && selectedStation.total_units > 0 ? (
                               Array.from({ length: selectedStation.total_units }, (_, index) => {
                                 const slotNumber = index + 1;
-                                const isOccupied = (selectedStation.available_units ?? 0) < slotNumber;
-                                // TODO: Diese Daten sollten aus der Datenbank kommen
-                                const powerbankId = isOccupied ? `PB-${selectedStation.id.slice(0, 8)}-${slotNumber}` : null;
-                                const batteryLevel = isOccupied ? Math.floor(Math.random() * 100) : null;
-                                const temperature = isOccupied ? (20 + Math.random() * 15).toFixed(1) : null;
-                                const healthStatus = isOccupied ? (batteryLevel && batteryLevel > 80 ? 'Gut' : batteryLevel && batteryLevel > 50 ? 'Mittel' : 'Schlecht') : null;
+                                
+                                // Powerbank ist nur eingelegt wenn ESP32 Batterie-Daten sendet
+                                const hasBatteryData = 
+                                  selectedStation.battery_voltage !== undefined && 
+                                  selectedStation.battery_voltage !== null &&
+                                  selectedStation.battery_percentage !== undefined && 
+                                  selectedStation.battery_percentage !== null;
+                                
+                                // Nur Slot 1 kann eine Powerbank haben (da ESP32 nur eine Batterie messen kann)
+                                const isOccupied = slotNumber === 1 && hasBatteryData;
 
                                 return (
                                   <tr
@@ -1199,76 +1545,64 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                                     }`}
                                   >
                                     <td className="py-3 px-5">
-                                      <span className={`text-sm font-medium ${
-                                        isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                                      <div className="flex items-center gap-2">
+                                        <span
+                                          className={`inline-flex h-2 w-2 rounded-full ${
+                                            isOccupied
+                                              ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
+                                              : 'bg-gray-400'
+                                          }`}
+                                        />
+                                        <span className={`text-sm font-medium ${
+                                          isDarkMode ? 'text-gray-300' : 'text-gray-700'
+                                        }`}>
+                                          Slot {slotNumber}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="py-3 px-5">
+                                      <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                                        isOccupied
+                                          ? 'bg-emerald-500/10 text-emerald-500'
+                                          : 'bg-gray-500/10 text-gray-500'
                                       }`}>
-                                        {slotNumber}
+                                        {isOccupied ? 'Powerbank eingelegt' : 'Leer'}
                                       </span>
                                     </td>
                                     <td className="py-3 px-5">
-                                      {powerbankId ? (
-                                        <span className={`text-xs font-mono ${
-                                          isDarkMode ? 'text-gray-300' : 'text-gray-600'
-                                        }`}>
-                                          {powerbankId}
+                                      {isOccupied ? (
+                                        <span className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                          {selectedStation.battery_voltage!.toFixed(2)} V
                                         </span>
                                       ) : (
                                         <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                          Leer
+                                          —
                                         </span>
                                       )}
                                     </td>
                                     <td className="py-3 px-5">
-                                      {batteryLevel !== null ? (
+                                      {isOccupied ? (
                                         <div className="flex items-center gap-2">
-                                          <div className={`w-20 h-1.5 rounded-full overflow-hidden ${
+                                          <div className={`w-20 h-2 rounded-full overflow-hidden ${
                                             isDarkMode ? 'bg-gray-800' : 'bg-gray-200'
                                           }`}>
                                             <div
                                               className={`h-full transition-all ${
-                                                batteryLevel < 20 ? 'bg-red-500' :
-                                                batteryLevel < 50 ? 'bg-yellow-500' :
+                                                selectedStation.battery_percentage! < 20 ? 'bg-red-500' :
+                                                selectedStation.battery_percentage! < 50 ? 'bg-yellow-500' :
                                                 'bg-emerald-500'
                                               }`}
-                                              style={{ width: `${batteryLevel}%` }}
+                                              style={{ width: `${selectedStation.battery_percentage}%` }}
                                             />
                                           </div>
                                           <span className={`text-sm font-medium ${
-                                            batteryLevel < 20 ? 'text-red-500' :
-                                            batteryLevel < 50 ? 'text-yellow-500' :
+                                            selectedStation.battery_percentage! < 20 ? 'text-red-500' :
+                                            selectedStation.battery_percentage! < 50 ? 'text-yellow-500' :
                                             'text-emerald-500'
                                           }`}>
-                                            {batteryLevel}%
+                                            {selectedStation.battery_percentage}%
                                           </span>
                                         </div>
-                                      ) : (
-                                        <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                          —
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="py-3 px-5">
-                                      {temperature ? (
-                                        <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                                          {temperature}°C
-                                        </span>
-                                      ) : (
-                                        <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                          —
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="py-3 px-5">
-                                      {healthStatus ? (
-                                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                          healthStatus === 'Gut' 
-                                            ? 'bg-emerald-500/10 text-emerald-500'
-                                            : healthStatus === 'Mittel'
-                                            ? 'bg-yellow-500/10 text-yellow-500'
-                                            : 'bg-red-500/10 text-red-500'
-                                        }`}>
-                                          {healthStatus}
-                                        </span>
                                       ) : (
                                         <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
                                           —
@@ -1280,9 +1614,9 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                               })
                             ) : (
                               <tr>
-                                <td colSpan={5} className="py-8 px-5 text-center">
+                                <td colSpan={4} className="py-8 px-5 text-center">
                                   <span className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                                    Keine Slots konfiguriert
+                                    Keine Slots konfiguriert. Bitte Kapazität oben einstellen.
                                   </span>
                                 </td>
                               </tr>
@@ -1340,16 +1674,30 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                       <div className="flex flex-wrap gap-3">
                         <button
                           onClick={() => updateStation(selectedStation.id, { charge_enabled: !(selectedStation.charge_enabled ?? true) })}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          disabled={updatingStation === selectedStation.id}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                            updatingStation === selectedStation.id
+                              ? 'opacity-50 cursor-not-allowed'
+                              : ''
+                          } ${
                             (selectedStation.charge_enabled ?? true)
                               ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
-                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400'
+                              : 'bg-gray-500/10 text-gray-500 hover:bg-gray-500/20'
                           }`}
                         >
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-                          </svg>
-                          {(selectedStation.charge_enabled ?? true) ? 'Laden EIN' : 'Laden AUS'}
+                          {updatingStation === selectedStation.id ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent"></div>
+                              Aktualisiere...
+                            </>
+                          ) : (
+                            <>
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                              </svg>
+                              {(selectedStation.charge_enabled ?? true) ? 'Laden EIN' : 'Laden AUS'}
+                            </>
+                          )}
                         </button>
                         <button
                           onClick={() => deleteStation(selectedStation.id)}
@@ -1368,29 +1716,15 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           {activeTab === 'transactions' && (
             <div className="h-full flex flex-col">
               <div className={`${sectionHeaderWrapper} p-4 border ${sectionHeaderClasses}`}>
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <h3 className={`text-lg font-semibold ${
-                      isDarkMode ? 'text-white' : 'text-gray-900'
-                    }`}>
-                      Transaktionen
-                    </h3>
-                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Letzte Bewegungen & Auszahlungen</p>
-                  </div>
-                  <button
-                    onClick={fetchStations}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                      isDarkMode 
-                        ? 'bg-white/10 text-white hover:bg-white/20' 
-                        : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-                    }`}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 12a9 9 0 1 1-9-9v3" />
-                      <path d="M21 3v6h-6" />
-                    </svg>
-                    Aktualisieren
-                  </button>
+                <div>
+                  <h3 className={`text-lg font-semibold ${
+                    isDarkMode ? 'text-white' : 'text-gray-900'
+                  }`}>
+                    Transaktionen
+                  </h3>
+                  <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                    Letzte Bewegungen & Auszahlungen · Automatisch aktualisiert
+                  </p>
                 </div>
               </div>
 

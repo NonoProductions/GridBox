@@ -25,7 +25,7 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define TCA9548A_ADDRESS 0x70     // I2C Adresse des TCA9548A Multiplexers
 #define BQ27441_ADDRESS 0x55      // I2C Adresse des BQ27441 Fuel Gauge
 #define BATTERY_CHANNEL 0         // Kanal des Multiplexers für den Fuel Gauge (0-7)
-#define BATTERY_UPDATE_INTERVAL 10000  // Batteriedaten alle 10 Sekunden aktualisieren
+#define BATTERY_UPDATE_INTERVAL 2000  // Batteriedaten alle 2 Sekunden aktualisieren (schnelle Updates)
 #define BATTERY_TEST_MODE false   // true = Test-Modus ohne Hardware (verwendet Dummy-Daten)
 
 // BQ27441 Register
@@ -52,7 +52,7 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define REQUIRE_BATTERY_FOR_RELAY true  // false = Relais funktioniert auch ohne Batterie (für Tests)
 
 // Update-Intervalle
-const unsigned long UPDATE_INTERVAL = 5000;  // 5 Sekunden (Status-Check)
+const unsigned long UPDATE_INTERVAL = 2000;  // 2 Sekunden (Status-Check für schnelle Updates)
 
 // ===== ENDE KONFIGURATION =====
 
@@ -74,6 +74,7 @@ bool lastButtonState = HIGH;
 bool stableButtonState = HIGH;
 unsigned long lastButtonChange = 0;
 bool relayCurrentlyOn = false;
+bool firstDataReceived = false;  // Flag für initiales Relais-Update
 
 // Batterie Variablen
 unsigned long lastBatteryUpdate = 0;
@@ -206,6 +207,16 @@ void setup() {
     
     // Synchronisiere total_units mit TOTAL_SLOTS Konfiguration
     syncTotalUnits();
+    
+    // Sende initiale Batterie-Daten sofort (falls vorhanden)
+    if (batteryInitialized) {
+      Serial.println("\n→ Sende initiale Batterie-Daten...");
+      #if !BATTERY_TEST_MODE
+        readBatteryData();
+      #endif
+      updateBatteryData();
+      lastBatteryUpdate = millis(); // Setze Timer zurück
+    }
   }
   
   Serial.println("\n=================================");
@@ -396,12 +407,26 @@ void getStationData() {
   if (httpCode == 200) {
     String payload = http.getString();
     
+    // DEBUG: Zeige Antwort
+    Serial.println("\n📥 RAW Response:");
+    Serial.println("Length: " + String(payload.length()) + " bytes");
+    Serial.println("Content: " + payload);
+    Serial.println("---");
+    
+    // Prüfe ob Antwort leer ist
+    if (payload.length() == 0) {
+      Serial.println("✗ Fehler: Leere Antwort von Supabase!");
+      http.end();
+      return;
+    }
+    
     // JSON parsen
     DynamicJsonDocument doc(2048);
     DeserializationError error = deserializeJson(doc, payload);
     
     if (error) {
       Serial.println("✗ JSON Parse Fehler: " + String(error.c_str()));
+      Serial.println("   Ist das wirklich JSON? Prüfe Response oben!");
       http.end();
       return;
     }
@@ -416,19 +441,31 @@ void getStationData() {
       String shortCode = station["short_code"] | "N/A";
       bool chargeEnabledWeb = station["charge_enabled"] | true;  // Default: true wenn nicht gesetzt
       
-      // Aktualisiere Web-Status nur wenn er sich geändert hat
-      if (chargeEnabledWeb != chargeEnabledFromWeb) {
-        chargeEnabledFromWeb = chargeEnabledWeb;
-        Serial.println("  ⚡️ Web-Steuerung: " + String(chargeEnabledFromWeb ? "Laden EIN" : "Laden AUS"));
-        updateChargingState();
-      }
-      
       Serial.println("✓ Station gefunden!");
       Serial.println("  Name: " + name);
       Serial.println("  Short-Code: " + shortCode);
       Serial.println("  Verfügbar: " + String(availableUnits) + "/" + String(totalUnits));
       Serial.println("  Aktiv: " + String(isActive ? "Ja" : "Nein"));
-      Serial.println("  Laden (Web): " + String(chargeEnabledFromWeb ? "EIN" : "AUS"));
+      Serial.println("  📱 Laden (Web): " + String(chargeEnabledWeb ? "EIN ✓" : "AUS ✗"));
+      
+      // Aktualisiere Web-Status und Relais
+      bool statusChanged = (chargeEnabledWeb != chargeEnabledFromWeb);
+      chargeEnabledFromWeb = chargeEnabledWeb;
+      
+      // Beim ersten Empfang oder bei Änderung: Relais aktualisieren
+      if (!firstDataReceived || statusChanged) {
+        if (!firstDataReceived) {
+          Serial.println();
+          Serial.println("🎯 Erster Daten-Empfang - Initialisiere Relais...");
+          firstDataReceived = true;
+        } else {
+          Serial.println();
+          Serial.println("🔄 Web-Schalter geändert!");
+          Serial.println("  Alt: " + String(!chargeEnabledWeb ? "EIN" : "AUS"));
+          Serial.println("  Neu: " + String(chargeEnabledWeb ? "EIN" : "AUS"));
+        }
+        updateChargingState();
+      }
       
       currentAvailableUnits = availableUnits;
     } else {
@@ -657,65 +694,71 @@ void handleChargeButton() {
 }
 
 void updateChargingState() {
-  // Wenn Web-Steuerung aktiviert ist, geht Relais an (unabhängig von Batterie)
-  // Button-Steuerung ist zusätzliche lokale Kontrolle
-  bool shouldCharge = false;
+  // Relais-Logik:
+  // 1. Web-Schalter AUS → Relais IMMER AUS (höchste Priorität)
+  // 2. Web-Schalter EIN → Relais hängt von Button & Batterie ab
   
-  if (chargeEnabledFromWeb) {
-    // Web aktiviert: Relais geht an wenn Button auch aktiviert ist (Batterie wird ignoriert)
-    shouldCharge = chargeEnabled;
+  bool shouldCharge = false;
+  String reason = "";
+  
+  // Prüfe Web-Schalter zuerst (Master-Switch)
+  if (!chargeEnabledFromWeb) {
+    // Web-Schalter ist AUS → Relais muss AUS sein
+    shouldCharge = false;
+    reason = "Web-Schalter AUS";
   } else {
-    // Web deaktiviert: Normale Logik mit Button UND Batterie
-    shouldCharge = chargeEnabled;
-    if (REQUIRE_BATTERY_FOR_RELAY) {
-      shouldCharge = shouldCharge && batteryPresent;
+    // Web-Schalter ist EIN → Prüfe lokale Bedingungen
+    if (!chargeEnabled) {
+      // Lokaler Button ist AUS
+      shouldCharge = false;
+      reason = "Lokaler Button AUS";
+    } else {
+      // Button ist EIN → Prüfe Batterie (falls erforderlich)
+      if (REQUIRE_BATTERY_FOR_RELAY && !batteryPresent) {
+        shouldCharge = false;
+        reason = "Keine Batterie erkannt";
+      } else {
+        // Alles grün → Relais EIN
+        shouldCharge = true;
+        reason = "Alle Bedingungen erfüllt";
+      }
     }
   }
   
   // Debug-Ausgabe
   Serial.println("\n--- Relais-Status Update ---");
-  Serial.println("  Button: " + String(chargeEnabled ? "EIN" : "AUS"));
-  Serial.println("  Web: " + String(chargeEnabledFromWeb ? "EIN" : "AUS"));
-  Serial.println("  Batterie: " + String(batteryPresent ? "ERKANNT" : "NICHT ERKANNT"));
+  Serial.println("  📱 Web-Schalter: " + String(chargeEnabledFromWeb ? "EIN ✓" : "AUS ✗"));
+  Serial.println("  🔘 Lokaler Button: " + String(chargeEnabled ? "EIN ✓" : "AUS ✗"));
+  Serial.println("  🔋 Batterie: " + String(batteryPresent ? "ERKANNT ✓" : "NICHT ERKANNT ✗"));
   if (batteryPresent) {
-    Serial.println("  Spannung: " + String(batteryVoltage, 2) + " V");
+    Serial.println("     Spannung: " + String(batteryVoltage, 2) + " V");
   }
-  if (chargeEnabledFromWeb) {
-    Serial.println("  ⚡️ Web aktiviert → Batterie-Erkennung wird IGNORIERT");
-  } else if (REQUIRE_BATTERY_FOR_RELAY) {
-    Serial.println("  ⚠️ Batterie erforderlich (Web AUS)");
-  }
-  Serial.println("  → Relais soll: " + String(shouldCharge ? "EIN" : "AUS"));
-  Serial.println("  → Relais aktuell: " + String(relayCurrentlyOn ? "EIN" : "AUS"));
+  Serial.println();
+  Serial.println("  💡 Entscheidung: " + reason);
+  Serial.println("  ⚡ Relais soll: " + String(shouldCharge ? "EIN" : "AUS"));
+  Serial.println("  ⚡ Relais aktuell: " + String(relayCurrentlyOn ? "EIN" : "AUS"));
   
+  // Prüfe ob Änderung nötig
   if (shouldCharge == relayCurrentlyOn) {
     Serial.println("  → Keine Änderung nötig");
     return;
   }
 
+  // Ändere Relais-Status
   relayCurrentlyOn = shouldCharge;
   uint8_t desiredState = shouldCharge ? RELAY_ON_STATE : RELAY_OFF_STATE;
 
-  Serial.println("  → Setze Pin " + String(RELAY_PIN) + " auf " + String(desiredState == LOW ? "LOW" : "HIGH"));
+  Serial.println();
+  Serial.println("  🔧 Schalte Relais...");
+  Serial.println("  → Pin " + String(RELAY_PIN) + " = " + String(desiredState == LOW ? "LOW" : "HIGH"));
   digitalWrite(RELAY_PIN, desiredState);
 
   if (shouldCharge) {
-    if (chargeEnabledFromWeb) {
-      Serial.println("✅ Relais EIN (Web-Steuerung aktiviert)");
-    } else {
-      Serial.println("✅ Relais EIN (Laden aktiv)");
-    }
-  } else if (!chargeEnabled) {
-    Serial.println("⛔️ Relais AUS (Button deaktiviert)");
-  } else if (!chargeEnabledFromWeb) {
-    if (!batteryPresent && REQUIRE_BATTERY_FOR_RELAY) {
-      Serial.println("⛔️ Relais AUS (Web deaktiviert + Keine Batterie)");
-    } else {
-      Serial.println("⛔️ Relais AUS (Web deaktiviert)");
-    }
+    Serial.println("  ✅ RELAIS EIN - Laden aktiv");
   } else {
-    Serial.println("⛔️ Relais AUS");
+    Serial.println("  ⛔️ RELAIS AUS - " + reason);
   }
+  Serial.println("--- Ende Relais-Update ---\n");
 }
 
 void evaluateBatteryPresence() {
@@ -961,6 +1004,7 @@ void updateBatteryData() {
     }
   }
   
+  // WICHTIG: updated_at aktualisieren (für Verbindungsstatus im Dashboard)
   doc["updated_at"] = "now()";
   
   String jsonBody;
