@@ -15,7 +15,7 @@
     "@zxing/library": "^0.21.3",
     "leaflet": "^1.9.4",
     "mapbox-gl": "^3.16.0",
-    "next": "15.5.3",
+    "next": "15.5.9",
     "qrcode.react": "^4.2.0",
     "react": "19.1.0",
     "react-dom": "19.1.0"
