@@ -75,8 +75,49 @@ export default function RentalConfirmationModal({
     setError(null);
 
     try {
-      // Prüfe Verfügbarkeit
-      if ((station.available_units ?? 0) <= 0) {
+      // Hole aktuellen User
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        setError("Bitte melden Sie sich an, um eine Powerbank auszuleihen.");
+        setLoading(false);
+        return;
+      }
+
+      // Prüfe ob User bereits eine aktive Ausleihe hat
+      const { data: activeRental, error: checkError } = await supabase
+        .from('rentals')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (checkError) {
+        setError("Fehler beim Prüfen der Ausleihen.");
+        setLoading(false);
+        return;
+      }
+
+      if (activeRental) {
+        setError("Sie haben bereits eine aktive Powerbank-Ausleihe. Bitte geben Sie diese zuerst zurück.");
+        setLoading(false);
+        return;
+      }
+
+      // Prüfe Verfügbarkeit (berücksichtige gesperrte Slots)
+      const { data: availableSlots, error: slotsError } = await supabase
+        .from('slots')
+        .select('id')
+        .eq('station_id', station.id)
+        .eq('state', 'free')
+        .limit(1);
+
+      if (slotsError) {
+        setError("Fehler beim Prüfen der Verfügbarkeit.");
+        setLoading(false);
+        return;
+      }
+
+      if (!availableSlots || availableSlots.length === 0) {
         setError("Leider sind momentan keine Powerbanks verfügbar.");
         setLoading(false);
         return;
@@ -86,7 +127,7 @@ export default function RentalConfirmationModal({
       
     } catch (err) {
       console.error("Fehler bei der Bestätigung:", err);
-      setError("Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.");
+      setError(err instanceof Error ? err.message : "Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.");
       setLoading(false);
     }
   };
@@ -111,65 +152,88 @@ export default function RentalConfirmationModal({
       }}
     >
       <div className="flex flex-col h-full relative">
-        {/* Station Foto - transparent im Hintergrund */}
-        {station.photo_url && (
-          <div className="absolute inset-x-0 top-0 h-96 overflow-hidden">
-            <img 
-              src={station.photo_url} 
-              alt={station.name}
-              className="w-full h-full object-cover opacity-20"
-              style={{
-                maskImage: 'linear-gradient(to bottom, black 0%, transparent 100%)',
-                WebkitMaskImage: 'linear-gradient(to bottom, black 0%, transparent 100%)'
-              }}
-            />
-          </div>
-        )}
-
-        {/* Content - über dem Foto */}
-        <div className={`relative z-10 px-5 pt-6 pb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-          {/* Station Name */}
-          <h3 className="text-2xl font-bold mb-6">{station.name}</h3>
-
-          <div className="space-y-3">
-            {/* Verfügbare Powerbanks */}
-            <div className="flex items-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
-                <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
-              </svg>
-              <span className="text-base -ml-2">
-                <span className="font-semibold">{station.available_units || 0}</span> verfügbar
-              </span>
+        {/* Powerbank Bild - ganz oben mit allen Infos */}
+        <div className="px-5 pt-6 pb-4">
+          <div className={`rounded-2xl overflow-hidden shadow-lg ${
+            isDarkMode ? 'bg-gray-800/50' : 'bg-white'
+          }`}>
+            {/* Powerbank Bild */}
+            <div className="relative w-full aspect-[4/3] bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 flex items-center justify-center">
+              <img 
+                src="/powerbank.jpg" 
+                alt="Powerbank"
+                className="w-full h-full object-contain p-4"
+                onError={(e) => {
+                  // Fallback zu PNG wenn JPG nicht existiert
+                  const target = e.target as HTMLImageElement;
+                  if (target.src.endsWith('.jpg')) {
+                    target.src = '/powerbank.png';
+                  } else {
+                    // Wenn beide nicht existieren, zeige Placeholder
+                    target.style.display = 'none';
+                    const parent = target.parentElement;
+                    if (parent) {
+                      parent.innerHTML = `
+                        <div class="flex flex-col items-center justify-center h-full text-center p-6">
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-600 dark:text-emerald-400 mb-3">
+                            <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+                          </svg>
+                          <p class="text-sm opacity-60">Powerbank Bild</p>
+                        </div>
+                      `;
+                    }
+                  }
+                }}
+              />
             </div>
+            
+            {/* Info-Bereich mit Stationsname, Verfügbarkeit und Kosten */}
+            <div className={`p-4 space-y-3 ${isDarkMode ? 'bg-gray-800/30' : 'bg-gray-50'}`}>
+              {/* Stationsname */}
+              <h3 className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                {station.name}
+              </h3>
 
-            {/* Kosten - mit neuem Preis */}
-            <div className="flex items-center gap-3">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
-                <rect x="2" y="5" width="20" height="14" rx="2"/>
-                <path d="M2 10h20"/>
-              </svg>
-              <span className="text-base">
-                <span className="font-semibold">{startPrice.toFixed(2)}€</span> zum Start, anschließend <span className="font-semibold">{pricePerMinute.toFixed(2)}€</span>/Min
-              </span>
-            </div>
-
-            {/* Adresse falls vorhanden */}
-            {station.address && (
-              <div className="flex items-center gap-3">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
-                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-                  <circle cx="12" cy="10" r="3"/>
+              {/* Verfügbare Powerbanks */}
+              <div className="flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                  <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
                 </svg>
-                <span className="text-sm opacity-70">
-                  {station.address}
+                <span className={`text-base ml-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                  <span className="font-semibold">{station.available_units || 0}</span> verfügbar
                 </span>
               </div>
-            )}
+
+              {/* Kosten */}
+              <div className="flex items-center gap-3">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                  <rect x="2" y="5" width="20" height="14" rx="2"/>
+                  <path d="M2 10h20"/>
+                </svg>
+                <span className={`text-base ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                  <span className="font-semibold">{startPrice.toFixed(2)}€</span> zum Start, anschließend <span className="font-semibold">{pricePerMinute.toFixed(2)}€</span>/Min
+                </span>
+              </div>
+
+              {/* Adresse falls vorhanden */}
+              {station.address && (
+                <div className="flex items-center gap-3">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
+                    <circle cx="12" cy="10" r="3"/>
+                  </svg>
+                  <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                    {station.address}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto px-5 pb-6">
+
           {/* Auth Status */}
           {isAuthenticated ? (
             <div className={`rounded-lg p-4 mb-4 ${

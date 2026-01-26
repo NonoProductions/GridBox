@@ -8,6 +8,7 @@ import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import mapboxgl from "mapbox-gl";
+import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
 
 // Legacy Station type for backward compatibility
 type LegacyStation = {
@@ -881,10 +882,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // This ensures all station markers are visible after navigation ends
       setForceStationRerender(prev => prev + 1);
       
-      // Ensure the panel is expanded for the selected station
+      // Ensure the panel is in collapsed state for the selected station
       if (selectedStation) {
-        setIsPanelExpanded(true);
-        console.log('Panel expanded for selected station:', selectedStation.name);
+        setIsPanelExpanded(false);
+        console.log('Panel collapsed for selected station:', selectedStation.name);
         
         // Center map on the selected station (same as when selecting a station normally)
         const map = mapRef.current;
@@ -1322,7 +1323,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
-      setIsPanelExpanded(true); // Panel standardmäßig erweitert, damit alle Inhalte sichtbar sind
+      setIsPanelExpanded(false); // Panel standardmäßig im kleinen Zustand
       
       console.log('Station highlighted and map centered on:', { lng: station.lng, lat: station.lat + latOffset });
       console.log('🔍 Panel State:', {
@@ -1954,14 +1955,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         console.log('3D following mode activated');
       }
-    } else {
-      // Zustand 1: Following 2D aktivieren
-      console.log('Activating 2D following mode');
+    } else if (isCentered && !isFollowingLocation) {
+      // Zustand 1b: Bereits zentriert -> Aktiviere 2D Following
+      console.log('Activating 2D following mode from centered state');
       
-      // Verwende die bereits gecachte Position wenn vorhanden
       if (userLocation) {
         setIsFollowingLocation(true);
         setIs3DFollowing(false);
+        setIsCentered(false); // Reset centered state when activating following
         // Location Tracking wird automatisch durch useEffect gestartet
         
         map.flyTo({
@@ -1990,6 +1991,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
               setIsFollowingLocation(true);
               setIs3DFollowing(false);
+              setIsCentered(false); // Reset centered state when activating following
               // Location Tracking wird automatisch durch useEffect gestartet
               
               map.flyTo({
@@ -2004,6 +2006,68 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               // Update user marker with direction
               updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
               console.log('2D following mode activated');
+            } catch (error) {
+              console.error('Error updating user location:', error);
+            }
+          },
+          (error) => {
+            console.error('Geolocation error:', error);
+          },
+          { 
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 10000
+          }
+        );
+      } catch (error) {
+        console.error('Error with geolocation:', error);
+      }
+    } else {
+      // Zustand 1a: Standort einfach zentrieren (ohne Following zu aktivieren)
+      console.log('Centering on user location');
+      
+      // Verwende die bereits gecachte Position wenn vorhanden
+      if (userLocation) {
+        setIsCentered(true);
+        
+        map.flyTo({
+          center: [userLocation.lng, userLocation.lat],
+          zoom: 17,
+          bearing: 0,
+          pitch: 0,
+          essential: true,
+          duration: 800
+        });
+        
+        console.log('Location centered');
+        return;
+      }
+      
+      try {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            try {
+              const { latitude, longitude, heading } = pos.coords;
+              // Update user location state
+              setUserLocation({ lat: latitude, lng: longitude });
+              if (heading !== null && !isNaN(heading)) {
+                setUserHeading(heading);
+              }
+              
+              setIsCentered(true);
+              
+              map.flyTo({
+                center: [longitude, latitude],
+                zoom: 17,
+                bearing: 0,
+                pitch: 0,
+                essential: true,
+                duration: 800
+              });
+              
+              // Update user marker with direction
+              updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
+              console.log('Location centered');
             } catch (error) {
               console.error('Error updating user location:', error);
             }
@@ -2361,23 +2425,35 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                   )}
                 </div>
 
-                {/* Rechte Seite: Foto */}
+                {/* Rechte Seite: Powerbank Bild */}
                 <div className="w-24 h-24 flex-shrink-0">
-                  {selectedStation.photo_url ? (
-                    <img 
-                      src={selectedStation.photo_url} 
-                      alt={selectedStation.name}
-                      className="w-full h-full object-cover rounded-lg shadow-md"
-                    />
-                  ) : (
-                    <div className={`w-full h-full rounded-lg flex items-center justify-center ${
-                      isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-200'
-                    }`}>
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="opacity-40">
-                        <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
-                      </svg>
-                    </div>
-                  )}
+                  <img 
+                    src="/powerbank.jpg" 
+                    alt="Powerbank"
+                    className="w-full h-full object-contain rounded-lg shadow-md bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 p-2"
+                    onError={(e) => {
+                      // Fallback zu PNG wenn JPG nicht existiert
+                      const target = e.target as HTMLImageElement;
+                      if (target.src.endsWith('.jpg')) {
+                        target.src = '/powerbank.png';
+                      } else {
+                        // Wenn beide nicht existieren, zeige Placeholder
+                        target.style.display = 'none';
+                        const parent = target.parentElement;
+                        if (parent) {
+                          parent.innerHTML = `
+                            <div class="w-full h-full rounded-lg flex items-center justify-center ${
+                              isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-200'
+                            }">
+                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="opacity-40">
+                                <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+                              </svg>
+                            </div>
+                          `;
+                        }
+                      }
+                    }}
+                  />
                 </div>
               </div>
 
@@ -3005,6 +3081,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               // TODO: Hier die tatsächliche Ausleih-Logik implementieren
               // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
               
+              // Push-Benachrichtigung senden
+              await notifyRentalSuccess(scannedStation.name, '/');
+              
               // Erfolgsmeldung
               alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!\n\n💡 Die LED an der Station blinkt jetzt für 5 Sekunden.${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
               
@@ -3012,6 +3091,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
             } catch (error) {
               console.error('Fehler bei der Ausleihe:', error);
+              const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
+              await notifyRentalError(errorMessage);
               alert('Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.');
             }
             

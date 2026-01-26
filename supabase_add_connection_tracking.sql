@@ -31,3 +31,5 @@ BEGIN
     RAISE NOTICE 'Eine Station gilt als verbunden, wenn last_seen < 30 Sekunden alt ist';
 END $$;
 
+
+

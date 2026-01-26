@@ -1,15 +1,96 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
 function HilfeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [expandedFAQ, setExpandedFAQ] = useState<number | null>(null);
-  
-  // Get theme from URL parameter, default to dark mode
-  const isDarkMode = searchParams.get("theme") === "light" ? false : true;
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // Initialize theme from localStorage or system preference
+  useEffect(() => {
+    const initializeTheme = () => {
+      if (typeof window === "undefined") return;
+      
+      // Check URL parameter first (for navigation from other pages)
+      const themeParam = searchParams.get("theme");
+      if (themeParam === "light" || themeParam === "dark") {
+        const shouldBeDark = themeParam === "dark";
+        setIsDarkMode(shouldBeDark);
+        if (shouldBeDark) {
+          document.documentElement.classList.add("dark");
+        } else {
+          document.documentElement.classList.remove("dark");
+        }
+        localStorage.setItem("theme", themeParam);
+        return;
+      }
+      
+      // First check current DOM state (set by ThemeScript in layout)
+      const currentlyDark = document.documentElement.classList.contains("dark");
+      
+      // Then check localStorage
+      const saved = localStorage.getItem("theme");
+      
+      // Determine what theme should be
+      let shouldBeDark: boolean;
+      if (saved) {
+        shouldBeDark = saved === "dark";
+      } else {
+        // If no saved preference, use current DOM state (which was set by ThemeScript)
+        shouldBeDark = currentlyDark;
+      }
+      
+      setIsDarkMode(shouldBeDark);
+      // Explicitly set the class instead of toggle
+      if (shouldBeDark) {
+        document.documentElement.classList.add("dark");
+      } else {
+        document.documentElement.classList.remove("dark");
+      }
+    };
+
+    initializeTheme();
+
+    // Listen for storage changes (e.g., from other tabs)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "theme") {
+        const newTheme = e.newValue;
+        const shouldBeDark = newTheme === "dark";
+        setIsDarkMode(shouldBeDark);
+        if (shouldBeDark) {
+          document.documentElement.classList.add("dark");
+        } else {
+          document.documentElement.classList.remove("dark");
+        }
+      }
+    };
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      const saved = localStorage.getItem("theme");
+      // Only update if no manual preference is saved
+      if (!saved) {
+        setIsDarkMode(e.matches);
+        if (e.matches) {
+          document.documentElement.classList.add("dark");
+        } else {
+          document.documentElement.classList.remove("dark");
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    mediaQuery.addEventListener("change", handleMediaChange);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      mediaQuery.removeEventListener("change", handleMediaChange);
+    };
+  }, [searchParams]);
 
   const faqs = [
     {
@@ -59,22 +140,17 @@ function HilfeContent() {
   };
 
   return (
-    <main className={`min-h-[calc(100vh-0px)] ${
-      isDarkMode ? 'text-white' : 'text-slate-900'
-    }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
+    <main className="min-h-[calc(100vh-0px)] bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
       {/* Back button */}
       <div className="absolute top-4 left-4 z-10">
         <button
           type="button"
           onClick={() => {
-            router.push(`/app?theme=${isDarkMode ? "dark" : "light"}`);
+            const theme = isDarkMode ? "dark" : "light";
+            router.push(`/app?theme=${theme}`);
           }}
           aria-label="Zurück"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm ${
-            isDarkMode 
-              ? 'bg-white/20 text-white hover:bg-white/30' 
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
+          className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg transition-colors mt-[15px] mb-[15px]"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <polyline points="15,18 9,12 15,6" />
@@ -83,28 +159,20 @@ function HilfeContent() {
       </div>
 
       {/* Content */}
-      <div className="p-6 space-y-6 pt-4">
+      <div className="px-5 pt-20 pb-6 space-y-8">
         {/* Header */}
         <div className="text-center">
-          <h1 className={`text-2xl font-bold mb-2 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+          <h1 className="text-[30px] font-bold mb-2 text-slate-900 dark:text-white flex flex-col justify-start items-center gap-0 -mt-[65px]">
             Hilfe & Support
           </h1>
-          <p className={`text-sm ${
-            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-          }`}>
+          <p className="text-[13px] text-slate-500 dark:text-gray-400 -mt-[5px] -mb-[5px]">
             Häufige Fragen und Kontaktmöglichkeiten
           </p>
         </div>
 
         {/* Quick Help Cards */}
         <div className="grid grid-cols-2 gap-4">
-          <div className={`rounded-xl p-4 ${
-            isDarkMode 
-              ? 'bg-white/5 border border-white/10' 
-              : 'bg-slate-50 border border-slate-200'
-          }`}>
+          <div className="rounded-xl p-4 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
             <div className="text-center">
               <div className="grid place-items-center h-12 w-12 rounded-full bg-emerald-100 mx-auto mb-3">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
@@ -113,38 +181,26 @@ function HilfeContent() {
                   <line x1="12" y1="17" x2="12.01" y2="17" />
                 </svg>
               </div>
-              <div className={`text-sm font-medium ${
-                isDarkMode ? 'text-white' : 'text-slate-900'
-              }`}>
+              <div className="text-sm font-medium text-slate-900 dark:text-white">
                 FAQ
               </div>
-              <div className={`text-xs ${
-                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-              }`}>
+              <div className="text-xs text-slate-500 dark:text-gray-400">
                 Häufige Fragen
               </div>
             </div>
           </div>
           
-          <div className={`rounded-xl p-4 ${
-            isDarkMode 
-              ? 'bg-white/5 border border-white/10' 
-              : 'bg-slate-50 border border-slate-200'
-          }`}>
+          <div className="rounded-xl p-4 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
             <div className="text-center">
               <div className="grid place-items-center h-12 w-12 rounded-full bg-blue-100 mx-auto mb-3">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
                   <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
                 </svg>
               </div>
-              <div className={`text-sm font-medium ${
-                isDarkMode ? 'text-white' : 'text-slate-900'
-              }`}>
+              <div className="text-sm font-medium text-slate-900 dark:text-white">
                 Support
               </div>
-              <div className={`text-xs ${
-                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-              }`}>
+              <div className="text-xs text-slate-500 dark:text-gray-400">
                 Kontakt & Hilfe
               </div>
             </div>
@@ -152,30 +208,22 @@ function HilfeContent() {
         </div>
 
         {/* FAQ Section */}
-        <div className={`rounded-xl border ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <div className="p-4 border-b border-slate-200 dark:border-white/10">
-            <h3 className={`text-lg font-semibold ${
-              isDarkMode ? 'text-white' : 'text-slate-900'
-            }`}>
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
               Häufig gestellte Fragen
             </h3>
           </div>
           
-          <div className="divide-y divide-slate-200 dark:divide-white/10">
+          <div className="space-y-3">
             {faqs.map((faq) => (
-              <div key={faq.id} className="p-4">
+              <div key={faq.id} className="py-3 border-b border-slate-200 dark:border-white/10 last:border-0">
                 <button
                   onClick={() => toggleFAQ(faq.id)}
                   className="w-full text-left"
                 >
                   <div className="flex items-center justify-between">
-                    <h4 className={`font-medium ${
-                      isDarkMode ? 'text-white' : 'text-slate-900'
-                    }`}>
+                    <h4 className="font-semibold text-slate-900 dark:text-white">
                       {faq.question}
                     </h4>
                     <svg 
@@ -188,9 +236,9 @@ function HilfeContent() {
                       strokeWidth="2" 
                       strokeLinecap="round" 
                       strokeLinejoin="round"
-                      className={`transition-transform ${
+                      className={`transition-transform text-slate-500 dark:text-gray-400 ${
                         expandedFAQ === faq.id ? 'rotate-180' : ''
-                      } ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}
+                      }`}
                     >
                       <polyline points="6,9 12,15 18,9" />
                     </svg>
@@ -199,9 +247,7 @@ function HilfeContent() {
                 
                 {expandedFAQ === faq.id && (
                   <div className="mt-3">
-                    <div className={`text-sm leading-relaxed whitespace-pre-line ${
-                      isDarkMode ? 'text-gray-300' : 'text-slate-600'
-                    }`}>
+                    <div className="text-sm leading-relaxed whitespace-pre-line text-slate-600 dark:text-gray-300">
                       {faq.answer}
                     </div>
                   </div>
@@ -212,14 +258,8 @@ function HilfeContent() {
         </div>
 
         {/* Contact Section */}
-        <div className={`rounded-xl border p-4 ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <h3 className={`text-lg font-semibold mb-4 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+        <div className="rounded-xl border p-4 bg-slate-50 dark:bg-white/5 border-slate-200 dark:border-white/10">
+          <h3 className="text-lg font-semibold mb-4 text-slate-900 dark:text-white">
             Kontakt & Support
           </h3>
           
@@ -233,14 +273,10 @@ function HilfeContent() {
                 </svg>
               </div>
               <div>
-                <div className={`font-medium ${
-                  isDarkMode ? 'text-white' : 'text-slate-900'
-                }`}>
+                <div className="font-medium text-slate-900 dark:text-white">
                   E-Mail Support
                 </div>
-                <div className={`text-sm ${
-                  isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                }`}>
+                <div className="text-sm text-slate-500 dark:text-gray-400">
                   support@gridbox.de
                 </div>
               </div>
@@ -254,14 +290,10 @@ function HilfeContent() {
                 </svg>
               </div>
               <div>
-                <div className={`font-medium ${
-                  isDarkMode ? 'text-white' : 'text-slate-900'
-                }`}>
+                <div className="font-medium text-slate-900 dark:text-white">
                   Telefon Support
                 </div>
-                <div className={`text-sm ${
-                  isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                }`}>
+                <div className="text-sm text-slate-500 dark:text-gray-400">
                   +49 30 123 456 789
                 </div>
               </div>
@@ -275,14 +307,10 @@ function HilfeContent() {
                 </svg>
               </div>
               <div>
-                <div className={`font-medium ${
-                  isDarkMode ? 'text-white' : 'text-slate-900'
-                }`}>
+                <div className="font-medium text-slate-900 dark:text-white">
                   Live Chat
                 </div>
-                <div className={`text-sm ${
-                  isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                }`}>
+                <div className="text-sm text-slate-500 dark:text-gray-400">
                   Mo-Fr 9:00-18:00 Uhr
                 </div>
               </div>
@@ -298,14 +326,10 @@ function HilfeContent() {
                 </svg>
               </div>
               <div>
-                <div className={`font-medium ${
-                  isDarkMode ? 'text-white' : 'text-slate-900'
-                }`}>
+                <div className="font-medium text-slate-900 dark:text-white">
                   Website
                 </div>
-                <div className={`text-sm ${
-                  isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                }`}>
+                <div className="text-sm text-slate-500 dark:text-gray-400">
                   www.gridbox.de
                 </div>
               </div>
@@ -314,11 +338,7 @@ function HilfeContent() {
         </div>
 
         {/* Emergency Contact */}
-        <div className={`rounded-xl border p-4 ${
-          isDarkMode 
-            ? 'bg-red-900/20 border-red-800' 
-            : 'bg-red-50 border-red-200'
-        }`}>
+        <div className="rounded-xl border p-4 bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800">
           <div className="flex items-center gap-3">
             <div className="grid place-items-center h-10 w-10 rounded-full bg-red-100">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-600">
@@ -328,14 +348,10 @@ function HilfeContent() {
               </svg>
             </div>
             <div>
-              <div className={`font-medium ${
-                isDarkMode ? 'text-red-400' : 'text-red-700'
-              }`}>
+              <div className="font-medium text-red-700 dark:text-red-400">
                 Notfall-Support
               </div>
-              <div className={`text-sm ${
-                isDarkMode ? 'text-red-300' : 'text-red-600'
-              }`}>
+              <div className="text-sm text-red-600 dark:text-red-300">
                 Bei dringenden Problemen: +49 30 123 456 790
               </div>
             </div>

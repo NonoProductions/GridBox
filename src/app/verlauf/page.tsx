@@ -19,9 +19,63 @@ function VerlaufContent() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  // Get theme from URL parameter, default to dark mode
-  const isDarkMode = searchParams.get("theme") === "light" ? false : true;
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // Initialize theme from localStorage or system preference
+  useEffect(() => {
+    const initializeTheme = () => {
+      if (typeof window === "undefined") return;
+      
+      // Check URL parameter first (for navigation from other pages)
+      const themeParam = searchParams.get("theme");
+      if (themeParam === "light" || themeParam === "dark") {
+        const shouldBeDark = themeParam === "dark";
+        setIsDarkMode(shouldBeDark);
+        document.documentElement.classList.toggle("dark", shouldBeDark);
+        localStorage.setItem("theme", themeParam);
+        return;
+      }
+      
+      // Otherwise use localStorage or system preference
+      const saved = localStorage.getItem("theme");
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const shouldBeDark = saved ? saved === "dark" : prefersDark;
+      
+      setIsDarkMode(shouldBeDark);
+      document.documentElement.classList.toggle("dark", shouldBeDark);
+    };
+
+    initializeTheme();
+
+    // Listen for storage changes (e.g., from other tabs)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "theme") {
+        const newTheme = e.newValue;
+        const shouldBeDark = newTheme === "dark";
+        setIsDarkMode(shouldBeDark);
+        document.documentElement.classList.toggle("dark", shouldBeDark);
+      }
+    };
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      const saved = localStorage.getItem("theme");
+      // Only update if no manual preference is saved
+      if (!saved) {
+        setIsDarkMode(e.matches);
+        document.documentElement.classList.toggle("dark", e.matches);
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    mediaQuery.addEventListener("change", handleMediaChange);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      mediaQuery.removeEventListener("change", handleMediaChange);
+    };
+  }, [searchParams]);
 
   useEffect(() => {
     loadTransactions();
@@ -146,34 +200,27 @@ function VerlaufContent() {
 
   if (loading) {
     return (
-      <main className={`min-h-[calc(100vh-0px)] flex items-center justify-center ${
-        isDarkMode ? 'text-white' : 'text-slate-900'
-      }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
+      <main className="min-h-[calc(100vh-0px)] flex items-center justify-center bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
-          <p className={isDarkMode ? 'text-gray-400' : 'text-slate-500'}>Lade Transaktionen...</p>
+          <p className="text-slate-500 dark:text-gray-400">Lade Transaktionen...</p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className={`min-h-[calc(100vh-0px)] ${
-      isDarkMode ? 'text-white' : 'text-slate-900'
-    }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
+    <main className="min-h-[calc(100vh-0px)] bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
       {/* Back button */}
       <div className="absolute top-4 left-4 z-10">
         <button
           type="button"
           onClick={() => {
-            router.push(`/app?theme=${isDarkMode ? "dark" : "light"}`);
+            const theme = isDarkMode ? "dark" : "light";
+            router.push(`/app?theme=${theme}`);
           }}
           aria-label="Zurück"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm ${
-            isDarkMode 
-              ? 'bg-white/20 text-white hover:bg-white/30' 
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
+          className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg transition-colors mt-[15px] mb-[15px]"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <polyline points="15,18 9,12 15,6" />
@@ -182,67 +229,43 @@ function VerlaufContent() {
       </div>
 
       {/* Content */}
-      <div className="p-6 space-y-6 pt-4">
+      <div className="px-5 pt-20 pb-6 space-y-8">
         {/* Error message */}
         {error && (
-          <div className={`rounded-xl border px-4 py-3 text-sm ${
-            isDarkMode 
-              ? 'border-red-800 bg-red-900/20 text-red-400' 
-              : 'border-red-200 bg-red-50 text-red-700'
-          }`}>
+          <div className="px-4 py-3 text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl">
             {error}
           </div>
         )}
 
         {/* Header */}
         <div className="text-center">
-          <h1 className={`text-2xl font-bold mb-2 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+          <h1 className="text-4xl font-bold mb-2 text-slate-900 dark:text-white flex flex-col justify-start items-center gap-0 -mt-[65px]">
             Verlauf
           </h1>
-          <p className={`text-sm ${
-            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-          }`}>
+          <p className="text-sm text-slate-500 dark:text-gray-400 -mt-[5px] -mb-[5px]">
             Deine Transaktionshistorie
           </p>
         </div>
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 gap-4">
-          <div className={`rounded-xl p-4 ${
-            isDarkMode 
-              ? 'bg-white/5 border border-white/10' 
-              : 'bg-slate-50 border border-slate-200'
-          }`}>
+          <div className="rounded-xl p-4 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
             <div className="text-center">
-              <div className={`text-2xl font-bold ${
-                isDarkMode ? 'text-emerald-400' : 'text-emerald-600'
-              }`}>
+              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
                 {transactions.filter(t => t.amount > 0).length}
               </div>
-              <div className={`text-sm ${
-                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-              }`}>
+              <div className="text-sm text-slate-500 dark:text-gray-400">
                 Aufladungen
               </div>
             </div>
           </div>
           
-          <div className={`rounded-xl p-4 ${
-            isDarkMode 
-              ? 'bg-white/5 border border-white/10' 
-              : 'bg-slate-50 border border-slate-200'
-          }`}>
+          <div className="rounded-xl p-4 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10">
             <div className="text-center">
-              <div className={`text-2xl font-bold ${
-                isDarkMode ? 'text-blue-400' : 'text-blue-600'
-              }`}>
+              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
                 {transactions.filter(t => t.amount < 0).length}
               </div>
-              <div className={`text-sm ${
-                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-              }`}>
+              <div className="text-sm text-slate-500 dark:text-gray-400">
                 Ausleihen
               </div>
             </div>
@@ -250,67 +273,55 @@ function VerlaufContent() {
         </div>
 
         {/* Transactions List */}
-        <div className={`rounded-xl border ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <div className="p-4 border-b border-slate-200 dark:border-white/10">
-            <h3 className={`text-lg font-semibold ${
-              isDarkMode ? 'text-white' : 'text-slate-900'
-            }`}>
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
               Alle Transaktionen
             </h3>
           </div>
           
-          <div className="divide-y divide-slate-200 dark:divide-white/10">
+          <div className="space-y-3">
             {transactions.length === 0 ? (
-              <div className={`text-center py-12 ${
-                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-              }`}>
-                <div className="mb-4">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto opacity-50">
-                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                    <line x1="1" y1="10" x2="23" y2="10" />
-                  </svg>
-                </div>
-                <p className="text-lg font-medium mb-2">Noch keine Transaktionen</p>
-                <p className="text-sm">Deine Transaktionen erscheinen hier</p>
+              <div className="text-center py-12">
+                <p className="text-slate-500 dark:text-gray-400">Noch keine Transaktionen</p>
               </div>
             ) : (
               transactions.map((transaction) => {
                 const info = getTransactionInfo(transaction);
                 const colorClasses = getColorClasses(info.color);
                 
+                let iconColor, amountColor;
+                if (info.isPositive) {
+                  iconColor = 'text-emerald-600 dark:text-emerald-400';
+                  amountColor = 'text-emerald-600 dark:text-emerald-400';
+                } else if (info.isReturn) {
+                  iconColor = 'text-green-600 dark:text-green-400';
+                  amountColor = 'text-slate-500 dark:text-gray-400';
+                } else {
+                  iconColor = 'text-blue-600 dark:text-blue-400';
+                  amountColor = 'text-red-600 dark:text-red-400';
+                }
+                
                 return (
-                  <div key={transaction.id} className="p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`grid place-items-center h-10 w-10 rounded-full ${colorClasses.bg}`}>
-                          {getIcon(info.icon, colorClasses.text)}
+                  <div 
+                    key={transaction.id} 
+                    className="flex items-center justify-between py-3 border-b border-slate-200 dark:border-white/10 last:border-0"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`grid place-items-center h-10 w-10 ${iconColor}`}>
+                        {getIcon(info.icon, iconColor)}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-slate-900 dark:text-white">
+                          {transaction.description || 'Transaktion'}
                         </div>
-                        <div>
-                          <div className={`font-medium ${
-                            isDarkMode ? 'text-white' : 'text-slate-900'
-                          }`}>
-                            {transaction.description || 'Transaktion'}
-                          </div>
-                          <div className={`text-sm ${
-                            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                          }`}>
-                            {formatDate(transaction.created_at)}
-                          </div>
+                        <div className="text-sm text-slate-500 dark:text-gray-400">
+                          {formatDate(transaction.created_at)}
                         </div>
                       </div>
-                      <div className={`font-semibold ${
-                        info.isPositive
-                          ? isDarkMode ? 'text-emerald-400' : 'text-emerald-600'
-                          : info.isReturn
-                            ? isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                            : isDarkMode ? 'text-red-400' : 'text-red-600'
-                      }`}>
-                        {info.isPositive ? '+' : ''}€{Math.abs(transaction.amount).toFixed(2)}
-                      </div>
+                    </div>
+                    <div className={`font-bold text-lg ${amountColor}`}>
+                      {info.isPositive ? '+' : ''}€{Math.abs(transaction.amount).toFixed(2)}
                     </div>
                   </div>
                 );

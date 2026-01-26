@@ -24,9 +24,63 @@ function WalletContent() {
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
-  
-  // Get theme from URL parameter, default to dark mode
-  const isDarkMode = searchParams.get("theme") === "light" ? false : true;
+  const [isDarkMode, setIsDarkMode] = useState(false);
+
+  // Initialize theme from localStorage or system preference
+  useEffect(() => {
+    const initializeTheme = () => {
+      if (typeof window === "undefined") return;
+      
+      // Check URL parameter first (for navigation from other pages)
+      const themeParam = searchParams.get("theme");
+      if (themeParam === "light" || themeParam === "dark") {
+        const shouldBeDark = themeParam === "dark";
+        setIsDarkMode(shouldBeDark);
+        document.documentElement.classList.toggle("dark", shouldBeDark);
+        localStorage.setItem("theme", themeParam);
+        return;
+      }
+      
+      // Otherwise use localStorage or system preference
+      const saved = localStorage.getItem("theme");
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const shouldBeDark = saved ? saved === "dark" : prefersDark;
+      
+      setIsDarkMode(shouldBeDark);
+      document.documentElement.classList.toggle("dark", shouldBeDark);
+    };
+
+    initializeTheme();
+
+    // Listen for storage changes (e.g., from other tabs)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "theme") {
+        const newTheme = e.newValue;
+        const shouldBeDark = newTheme === "dark";
+        setIsDarkMode(shouldBeDark);
+        document.documentElement.classList.toggle("dark", shouldBeDark);
+      }
+    };
+
+    // Listen for system theme changes
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      const saved = localStorage.getItem("theme");
+      // Only update if no manual preference is saved
+      if (!saved) {
+        setIsDarkMode(e.matches);
+        document.documentElement.classList.toggle("dark", e.matches);
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    mediaQuery.addEventListener("change", handleMediaChange);
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+      mediaQuery.removeEventListener("change", handleMediaChange);
+    };
+  }, [searchParams]);
 
   // Lade Wallet-Daten beim Start
   useEffect(() => {
@@ -155,34 +209,27 @@ function WalletContent() {
 
   if (initialLoading) {
     return (
-      <main className={`min-h-[calc(100vh-0px)] flex items-center justify-center ${
-        isDarkMode ? 'text-white' : 'text-slate-900'
-      }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
+      <main className="min-h-[calc(100vh-0px)] flex items-center justify-center bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
-          <p className={isDarkMode ? 'text-gray-400' : 'text-slate-500'}>Lade Wallet...</p>
+          <p className="text-slate-500 dark:text-gray-400">Lade Wallet...</p>
         </div>
       </main>
     );
   }
 
   return (
-    <main className={`min-h-[calc(100vh-0px)] ${
-      isDarkMode ? 'text-white' : 'text-slate-900'
-    }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
+    <main className="min-h-[calc(100vh-0px)] bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
       {/* Back button */}
       <div className="absolute top-4 left-4 z-10">
         <button
           type="button"
           onClick={() => {
-            router.push(`/app?theme=${isDarkMode ? "dark" : "light"}`);
+            const theme = isDarkMode ? "dark" : "light";
+            router.push(`/app?theme=${theme}`);
           }}
           aria-label="Zurück"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm ${
-            isDarkMode 
-              ? 'bg-white/20 text-white hover:bg-white/30' 
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
+          className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg transition-colors mt-[15px] mb-[15px]"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <polyline points="15,18 9,12 15,6" />
@@ -191,99 +238,76 @@ function WalletContent() {
       </div>
 
       {/* Content */}
-      <div className="p-6 space-y-6 pt-4">
+      <div className="px-5 pt-20 pb-6 space-y-8">
         {/* Success message */}
         {success && (
-          <div className={`rounded-xl border px-4 py-3 text-sm ${
-            isDarkMode 
-              ? 'border-green-800 bg-green-900/20 text-green-400' 
-              : 'border-green-200 bg-green-50 text-green-700'
-          }`}>
+          <div className="px-4 py-3 text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl">
             {success}
           </div>
         )}
 
         {/* Error message */}
         {error && (
-          <div className={`rounded-xl border px-4 py-3 text-sm ${
-            isDarkMode 
-              ? 'border-red-800 bg-red-900/20 text-red-400' 
-              : 'border-red-200 bg-red-50 text-red-700'
-          }`}>
+          <div className="px-4 py-3 text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl">
             {error}
           </div>
         )}
 
         {/* Wallet Header */}
         <div className="text-center">
-          <h1 className={`text-2xl font-bold mb-2 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+          <h1 className="text-4xl font-bold mb-2 text-slate-900 dark:text-white flex flex-col justify-start items-center gap-0 -mt-[65px]">
             Wallet
           </h1>
-          <p className={`text-sm ${
-            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-          }`}>
+          <p className="text-sm text-slate-500 dark:text-gray-400 -mt-[5px] -mb-[5px]">
             Verwalte dein Guthaben
           </p>
         </div>
 
-        {/* Balance Card */}
-        <div className={`rounded-2xl p-6 shadow-lg ${
-          isDarkMode 
-            ? 'bg-gradient-to-br from-emerald-600 to-emerald-700' 
-            : 'bg-gradient-to-br from-emerald-500 to-emerald-600'
-        }`}>
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="grid place-items-center h-12 w-12 rounded-full bg-white/20">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white">
-                  <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
-                  <line x1="1" y1="10" x2="23" y2="10" />
-                </svg>
-              </div>
-              <div>
-                <div className="text-white/80 text-sm">Aktuelles Guthaben</div>
-                <div className="text-white text-3xl font-bold">
-                  €{balance.toFixed(2)}
-                </div>
-              </div>
-            </div>
+        {/* Balance Display - Minimalistisch */}
+        <div className="text-center">
+          <div className="text-[40px] font-bold text-emerald-600 dark:text-emerald-400 mb-4">
+            €{balance.toFixed(2)}
           </div>
-          
           <button
             onClick={() => setShowAddMoney(true)}
-            className="w-full bg-white/20 hover:bg-white/30 text-white font-medium py-3 rounded-xl transition-colors"
+            className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl transition-colors active:scale-95"
           >
             Geld hinzufügen
           </button>
         </div>
 
-        {/* Quick Add Money */}
+        {/* Quick Add Money - Minimalistisch */}
         {showAddMoney && (
-          <div className={`rounded-xl border p-4 ${
-            isDarkMode 
-              ? 'bg-white/5 border-white/10' 
-              : 'bg-slate-50 border-slate-200'
-          }`}>
-            <h3 className={`text-lg font-semibold mb-4 ${
-              isDarkMode ? 'text-white' : 'text-slate-900'
-            }`}>
-              Geld hinzufügen
-            </h3>
+          <div className="space-y-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                Geld hinzufügen
+              </h3>
+              <button
+                onClick={() => {
+                  setShowAddMoney(false);
+                  setAddAmount("");
+                }}
+                className="text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-300 transition-colors"
+                aria-label="Schließen"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
             
             {/* Quick amounts */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="grid grid-cols-2 gap-3">
               {quickAddAmounts.map((amount) => (
                 <button
                   key={amount}
                   onClick={() => setAddAmount(amount.toString())}
-                  className={`py-3 rounded-xl font-medium transition-colors ${
+                  className={`py-4 rounded-xl font-semibold transition-all duration-200 ${
                     addAmount === amount.toString()
                       ? 'bg-emerald-600 text-white'
-                      : isDarkMode
-                        ? 'bg-white/10 text-white hover:bg-white/20'
-                        : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
+                      : 'bg-slate-100 dark:bg-white/10 text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-white/20'
                   }`}
                 >
                   €{amount}
@@ -294,15 +318,11 @@ function WalletContent() {
             {/* Custom amount */}
             <form onSubmit={handleAddMoney} className="space-y-4">
               <div>
-                <label className={`block text-sm font-medium mb-2 ${
-                  isDarkMode ? 'text-white/90' : 'text-slate-700'
-                }`}>
+                <label className="block text-sm font-medium mb-2 text-slate-700 dark:text-white/90">
                   Betrag eingeben
                 </label>
                 <div className="relative">
-                  <span className={`absolute left-3 top-1/2 transform -translate-y-1/2 text-lg ${
-                    isDarkMode ? 'text-white/60' : 'text-slate-500'
-                  }`}>
+                  <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-lg font-semibold text-slate-500 dark:text-white/60">
                     €
                   </span>
                   <input
@@ -312,11 +332,7 @@ function WalletContent() {
                     value={addAmount}
                     onChange={(e) => setAddAmount(e.target.value)}
                     placeholder="0.00"
-                    className={`w-full rounded-xl border px-4 py-3 pl-8 outline-none focus:ring-4 ${
-                      isDarkMode 
-                        ? 'bg-white/10 border-white/20 text-white placeholder:text-white/50 focus:ring-emerald-900/40' 
-                        : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-500 focus:ring-emerald-500/40'
-                    }`}
+                    className="w-full rounded-xl border border-slate-200 dark:border-white/20 bg-white dark:bg-white/10 text-slate-900 dark:text-white placeholder:text-slate-500 dark:placeholder:text-white/50 px-4 py-3.5 pl-10 outline-none focus:ring-2 focus:ring-emerald-500 dark:focus:ring-emerald-400 transition-all"
                   />
                 </div>
               </div>
@@ -328,18 +344,14 @@ function WalletContent() {
                     setShowAddMoney(false);
                     setAddAmount("");
                   }}
-                  className={`flex-1 py-3 rounded-xl font-medium transition-colors ${
-                    isDarkMode
-                      ? 'bg-white/10 text-white hover:bg-white/20'
-                      : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-                  }`}
+                  className="flex-1 py-3.5 rounded-xl font-semibold transition-colors bg-slate-100 dark:bg-white/10 text-slate-900 dark:text-white hover:bg-slate-200 dark:hover:bg-white/20"
                 >
                   Abbrechen
                 </button>
                 <button
                   type="submit"
                   disabled={loading || !addAmount || parseFloat(addAmount) <= 0}
-                  className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-medium shadow hover:opacity-95 disabled:opacity-60 transition-opacity"
+                  className="flex-1 bg-emerald-600 text-white py-3.5 rounded-xl font-semibold hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200"
                 >
                   {loading ? (
                     <div className="flex items-center justify-center gap-2">
@@ -355,23 +367,18 @@ function WalletContent() {
           </div>
         )}
 
-        {/* Transaction History */}
-        <div className={`rounded-xl border p-4 ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
+        {/* Transaction History - Minimalistisch */}
+        <div>
           <div className="flex items-center justify-between mb-4">
-            <h3 className={`text-lg font-semibold ${
-              isDarkMode ? 'text-white' : 'text-slate-900'
-            }`}>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
               Letzte Transaktionen
             </h3>
             <button
-              onClick={() => router.push(`/verlauf?theme=${isDarkMode ? "dark" : "light"}`)}
-              className={`text-sm font-medium ${
-                isDarkMode ? 'text-emerald-400 hover:text-emerald-300' : 'text-emerald-600 hover:text-emerald-700'
-              }`}
+              onClick={() => {
+                const theme = isDarkMode ? "dark" : "light";
+                router.push(`/verlauf?theme=${theme}`);
+              }}
+              className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
             >
               Alle anzeigen →
             </button>
@@ -379,10 +386,8 @@ function WalletContent() {
           
           <div className="space-y-3">
             {recentTransactions.length === 0 ? (
-              <div className={`text-center py-8 ${
-                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-              }`}>
-                Noch keine Transaktionen
+              <div className="text-center py-12">
+                <p className="text-slate-500 dark:text-gray-400">Noch keine Transaktionen</p>
               </div>
             ) : (
               recentTransactions.map((transaction) => {
@@ -390,50 +395,52 @@ function WalletContent() {
                 const isRental = transaction.type === 'rental';
                 const isReturn = transaction.type === 'return';
                 
+                // Icon and color based on transaction type
+                let iconColor, amountColor;
+                if (isPositive) {
+                  iconColor = 'text-emerald-600 dark:text-emerald-400';
+                  amountColor = 'text-emerald-600 dark:text-emerald-400';
+                } else if (isReturn) {
+                  iconColor = 'text-green-600 dark:text-green-400';
+                  amountColor = 'text-slate-500 dark:text-gray-400';
+                } else {
+                  iconColor = 'text-blue-600 dark:text-blue-400';
+                  amountColor = 'text-red-600 dark:text-red-400';
+                }
+                
                 return (
-                  <div key={transaction.id} className={`flex items-center justify-between py-3 px-4 rounded-xl ${
-                    isDarkMode ? 'bg-white/5' : 'bg-white'
-                  }`}>
+                  <div 
+                    key={transaction.id} 
+                    className="flex items-center justify-between py-3 border-b border-slate-200 dark:border-white/10 last:border-0"
+                  >
                     <div className="flex items-center gap-3">
-                      <div className={`grid place-items-center h-10 w-10 rounded-full ${
-                        isPositive ? 'bg-emerald-100' : isReturn ? 'bg-green-100' : 'bg-blue-100'
-                      }`}>
+                      <div className={`grid place-items-center h-10 w-10 ${iconColor}`}>
                         {isPositive ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-emerald-600">
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="12" y1="5" x2="12" y2="19" />
                             <line x1="5" y1="12" x2="19" y2="12" />
                           </svg>
                         ) : isReturn ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-600">
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <polyline points="20,6 9,17 4,12" />
                           </svg>
                         ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/>
                             <path d="M13 11h3l-4 6v-4H9l4-6v4z" fill="currentColor"/>
                           </svg>
                         )}
                       </div>
                       <div>
-                        <div className={`font-medium ${
-                          isDarkMode ? 'text-white' : 'text-slate-900'
-                        }`}>
+                        <div className="font-semibold text-slate-900 dark:text-white">
                           {transaction.description || 'Transaktion'}
                         </div>
-                        <div className={`text-sm ${
-                          isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                        }`}>
+                        <div className="text-sm text-slate-500 dark:text-gray-400">
                           {formatDate(transaction.created_at)}
                         </div>
                       </div>
                     </div>
-                    <div className={`font-semibold ${
-                      isPositive 
-                        ? isDarkMode ? 'text-emerald-400' : 'text-emerald-600'
-                        : isReturn
-                          ? isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                          : isDarkMode ? 'text-red-400' : 'text-red-600'
-                    }`}>
+                    <div className={`font-bold text-lg ${amountColor}`}>
                       {isPositive ? '+' : ''}€{Math.abs(transaction.amount).toFixed(2)}
                     </div>
                   </div>

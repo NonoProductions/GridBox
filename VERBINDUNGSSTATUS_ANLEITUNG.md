@@ -169,3 +169,5 @@ export interface Station {
 4. 📊 Verbindungsstatus überwachen
 5. 🔧 Bei Bedarf Timeout-Werte anpassen
 
+
+

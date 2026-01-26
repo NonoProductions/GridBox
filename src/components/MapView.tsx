@@ -7,6 +7,7 @@ import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
+import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
 
 // Legacy Station type for backward compatibility
 type LegacyStation = {
@@ -389,7 +390,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Set selected station
       setSelectedStation(station);
       setShowStationList(false);
-      setIsPanelExpanded(true); // Panel standardmäßig erweitert, damit alle Inhalte sichtbar sind
+      setIsPanelExpanded(false); // Panel standardmäßig im kleinen Zustand
       
       console.log('✅ Station sofort angezeigt:', station.name);
       console.log('🔍 Panel State:', {
@@ -1031,6 +1032,37 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               {/* Station Name - größer */}
               <h3 className="text-base font-semibold mb-4 pr-10">{selectedStation.name}</h3>
 
+              {/* Powerbank Bild */}
+              <div className="w-full mb-4">
+                <img 
+                  src="/powerbank.jpg" 
+                  alt="Powerbank"
+                  className="w-full h-32 object-contain rounded-lg shadow-md bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 p-2"
+                  onError={(e) => {
+                    // Fallback zu PNG wenn JPG nicht existiert
+                    const target = e.target as HTMLImageElement;
+                    if (target.src.endsWith('.jpg')) {
+                      target.src = '/powerbank.png';
+                    } else {
+                      // Wenn beide nicht existieren, zeige Placeholder
+                      target.style.display = 'none';
+                      const parent = target.parentElement;
+                      if (parent) {
+                        parent.innerHTML = `
+                          <div class="w-full h-32 rounded-lg flex items-center justify-center ${
+                            isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-200'
+                          }">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="opacity-40">
+                              <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+                            </svg>
+                          </div>
+                        `;
+                      }
+                    }
+                  }}
+                />
+              </div>
+
               {/* Kosten Info */}
               <div className="flex items-center gap-3 mb-4">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
@@ -1387,6 +1419,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               // TODO: Hier die tatsächliche Ausleih-Logik implementieren
               // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
               
+              // Push-Benachrichtigung senden
+              await notifyRentalSuccess(scannedStation.name, '/');
+              
               // Erfolgsmeldung
               alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!\n\n💡 Die LED an der Station blinkt jetzt für 5 Sekunden.${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
               
@@ -1394,6 +1429,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
             } catch (error) {
               console.error('Fehler bei der Ausleihe:', error);
+              const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
+              await notifyRentalError(errorMessage);
               alert('Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.');
             }
             

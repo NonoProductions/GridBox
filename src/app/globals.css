@@ -5,6 +5,8 @@ html {
   font-size: 16px; /* Basis-Schriftgröße */
   -webkit-text-size-adjust: 100%; /* Verhindert automatische Schriftgrößenanpassung auf iOS */
   text-size-adjust: 100%;
+  /* Smooth theme transition - visible animation */
+  transition: background-color 0.3s ease-in-out, color 0.3s ease-in-out;
 }
 
 @media (max-width: 640px) {
@@ -18,6 +20,26 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Smooth theme transition - visible animation */
+  transition: background-color 0.3s ease-in-out, color 0.3s ease-in-out;
+}
+
+/* Smooth theme transitions for all elements - optimized for performance */
+*,
+*::before,
+*::after {
+  transition: background-color 0.3s ease-in-out, 
+              color 0.3s ease-in-out, 
+              border-color 0.3s ease-in-out,
+              box-shadow 0.3s ease-in-out;
+}
+
+/* Disable transitions for elements that shouldn't animate */
+svg,
+img,
+canvas,
+video {
+  transition: none;
 }
 
 /* Minimum Touch Target Sizes für mobile Geräte (iOS Guidelines: 44x44pt) */
@@ -192,3 +214,4 @@ a,
     transform: translateY(0);
   }
 }
+

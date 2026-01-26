@@ -1,20 +1,18 @@
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { useTheme } from "@/lib/useTheme";
 
 function ProfileContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const { isDark: isDarkMode, toggleTheme } = useTheme();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  
-  // Get theme from URL parameter, default to dark mode
-  const isDarkMode = searchParams.get("theme") === "light" ? false : true;
 
   useEffect(() => {
     (async () => {
@@ -29,8 +27,7 @@ function ProfileContent() {
     })();
   }, [router]);
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSave() {
     setError(null);
     setSuccess(null);
     
@@ -55,22 +52,14 @@ function ProfileContent() {
   }
 
   return (
-    <main className={`min-h-[calc(100vh-0px)] ${
-      isDarkMode ? 'text-white' : 'text-slate-900'
-    }`} style={isDarkMode ? { backgroundColor: "#282828" } : { backgroundColor: "#ffffff" }}>
+    <main className="min-h-[calc(100vh-0px)] bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
       {/* Back button */}
       <div className="absolute top-4 left-4 z-10">
         <button
           type="button"
-          onClick={() => {
-            router.push(`/app?theme=${isDarkMode ? "dark" : "light"}`);
-          }}
+          onClick={() => router.push("/app")}
           aria-label="Zurück"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm ${
-            isDarkMode 
-              ? 'bg-white/20 text-white hover:bg-white/30' 
-              : 'bg-slate-200 text-slate-900 hover:bg-slate-300'
-          }`}
+          className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg transition-colors mt-[15px] mb-[15px]"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <polyline points="15,18 9,12 15,6" />
@@ -80,57 +69,32 @@ function ProfileContent() {
 
       
       {/* Content */}
-      <div className="p-6 space-y-6 pt-4">
+      <div className="px-5 pt-20 pb-6 space-y-8">
         {/* Header */}
         <div className="text-center">
-          <h1 className={`text-2xl font-bold mb-2 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+          <h1 className="text-4xl font-bold mb-2 text-slate-900 dark:text-white flex flex-col justify-start items-center gap-0 -mt-[65px]">
             Profil
           </h1>
-          <p className={`text-sm ${
-            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-          }`}>
+          <p className="text-sm text-slate-500 dark:text-gray-400 -mt-[5px] -mb-[5px]">
             Verwalte deine persönlichen Informationen
           </p>
         </div>
 
         {error && (
-          <div className={`rounded-xl border px-4 py-3 text-sm ${
-            isDarkMode 
-              ? 'border-rose-800 bg-rose-900/20 text-rose-400' 
-              : 'border-rose-200 bg-rose-50 text-rose-700'
-          }`}>
+          <div className="px-4 py-3 text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-xl">
             {error}
           </div>
         )}
         {success && (
-          <div className={`rounded-xl border px-4 py-3 text-sm ${
-            isDarkMode 
-              ? 'border-green-800 bg-green-900/20 text-green-400' 
-              : 'border-green-200 bg-green-50 text-green-700'
-          }`}>
+          <div className="px-4 py-3 text-sm text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 rounded-xl">
             {success}
           </div>
         )}
 
         {/* Profile Form */}
-        <div className={`rounded-xl border p-4 ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <h3 className={`text-lg font-semibold mb-4 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
-            Persönliche Daten
-          </h3>
-
-          <form onSubmit={handleSave} className="space-y-4">
+        <div className="space-y-4">
           <div>
-            <label className={`block text-sm font-medium mb-2 ${
-              isDarkMode ? 'text-white/90' : 'text-slate-700'
-            }`}>
+            <label className="block text-sm font-medium mb-2 text-slate-700 dark:text-white/90">
               Name
             </label>
             <input
@@ -138,73 +102,55 @@ function ProfileContent() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Dein Name"
-              className={`w-full rounded-xl border px-4 py-3 outline-none focus:ring-4 ${
-                isDarkMode 
-                  ? 'bg-white/10 border-white/20 text-white placeholder:text-white/50 focus:ring-emerald-900/40' 
-                  : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-500 focus:ring-emerald-500/40'
-              }`}
+              className="w-full rounded-xl border px-4 py-3 outline-none focus:ring-4 bg-white dark:bg-white/10 border-slate-200 dark:border-white/20 text-slate-900 dark:text-white placeholder:text-slate-500 dark:placeholder:text-white/50 focus:ring-emerald-500/40 dark:focus:ring-emerald-900/40"
             />
           </div>
 
           <div>
-            <label className={`block text-sm font-medium mb-2 ${
-              isDarkMode ? 'text-white/90' : 'text-slate-700'
-            }`}>
+            <label className="block text-sm font-medium mb-2 text-slate-700 dark:text-white/90">
               E-Mail-Adresse
             </label>
             <input
               type="email"
               value={email}
               disabled
-              className={`w-full rounded-xl border px-4 py-3 cursor-not-allowed ${
-                isDarkMode 
-                  ? 'bg-white/5 border-white/10 text-white/50' 
-                  : 'bg-slate-100 border-slate-200 text-slate-500'
-              }`}
+              className="w-full rounded-xl border px-4 py-3 cursor-not-allowed bg-slate-100 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-500 dark:text-white/50"
             />
-            <p className={`text-xs mt-1 ${
-              isDarkMode ? 'text-white/60' : 'text-slate-500'
-            }`}>
+            <p className="text-xs mt-1 text-slate-500 dark:text-white/60">
               E-Mail-Adresse kann nicht geändert werden
             </p>
           </div>
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded-xl bg-emerald-600 text-white py-3 font-medium shadow hover:opacity-95 disabled:opacity-60"
-            >
-              {loading ? "Speichere…" : "Änderungen speichern"}
-            </button>
-          </form>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={loading}
+            className="w-full rounded-xl bg-emerald-600 text-white py-3 font-medium shadow hover:opacity-95 disabled:opacity-60"
+          >
+            {loading ? "Speichere…" : "Änderungen speichern"}
+          </button>
         </div>
 
         {/* Theme Toggle Section */}
-        <div className={`rounded-xl border p-4 ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <h3 className={`text-lg font-semibold mb-4 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
             Darstellung
           </h3>
           
-          <div className={`rounded-xl border px-4 py-3 ${
-            isDarkMode 
-              ? 'bg-white/10 border-white/20' 
-              : 'bg-white border-slate-200'
-          }`}>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="w-full rounded-xl border px-4 py-3 transition-colors bg-white dark:bg-white/10 border-slate-200 dark:border-white/20 hover:bg-slate-50 dark:hover:bg-white/15"
+          >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="grid place-items-center h-10 w-10">
                   {isDarkMode ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600 dark:text-gray-300">
                       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
                     </svg>
                   ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-slate-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500">
                       <circle cx="12" cy="12" r="5" />
                       <line x1="12" y1="1" x2="12" y2="3" />
                       <line x1="12" y1="21" x2="12" y2="23" />
@@ -217,49 +163,33 @@ function ProfileContent() {
                     </svg>
                   )}
                 </div>
-                <div>
-                  <div className={`font-medium ${
-                    isDarkMode ? 'text-white' : 'text-slate-900'
-                  }`}>
+                <div className="text-left">
+                  <div className="font-medium text-slate-900 dark:text-white">
                     {isDarkMode ? 'Dark Mode' : 'Light Mode'}
                   </div>
-                  <div className={`text-sm ${
-                    isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                  }`}>
+                  <div className="text-sm text-slate-500 dark:text-gray-400">
                     {isDarkMode ? 'Dunkles Design aktiviert' : 'Helles Design aktiviert'}
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const newTheme = isDarkMode ? "light" : "dark";
-                  router.push(`/profile?theme=${newTheme}`);
-                }}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${
-                  isDarkMode ? 'bg-emerald-600' : 'bg-slate-300'
-                }`}
-                aria-label={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
-              >
+              <div className={`relative inline-flex h-7 w-16 items-center rounded-full transition-colors duration-300 ease-in-out ${
+                isDarkMode 
+                  ? 'bg-emerald-600' 
+                  : 'bg-slate-300 dark:bg-slate-600'
+              }`}>
                 <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    isDarkMode ? 'translate-x-6' : 'translate-x-1'
+                  className={`absolute left-0.5 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-white shadow-lg transition-transform duration-300 ease-in-out ${
+                    isDarkMode ? 'translate-x-[2.125rem]' : 'translate-x-0'
                   }`}
                 />
-              </button>
+              </div>
             </div>
-          </div>
+          </button>
         </div>
 
         {/* Logout Section */}
-        <div className={`rounded-xl border p-4 ${
-          isDarkMode 
-            ? 'bg-white/5 border-white/10' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <h3 className={`text-lg font-semibold mb-4 ${
-            isDarkMode ? 'text-white' : 'text-slate-900'
-          }`}>
+        <div className="space-y-4">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
             Account
           </h3>
           
@@ -273,17 +203,11 @@ function ProfileContent() {
                 console.error("Error signing out:", error);
               }
             }}
-            className={`w-full rounded-xl border px-4 py-3 transition-colors ${
-              isDarkMode 
-                ? 'bg-red-900/20 border-red-800 hover:bg-red-900/30 text-red-400' 
-                : 'bg-red-50 border-red-200 hover:bg-red-100 text-red-600'
-            }`}
+            className="w-full rounded-xl border px-4 py-3 transition-colors bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400"
           >
             <div className="flex items-center gap-3">
               <div className="grid place-items-center h-10 w-10">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`${
-                  isDarkMode ? 'text-red-400' : 'text-red-600'
-                }`}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
                   <polyline points="16,17 21,12 16,7" />
                   <line x1="21" y1="12" x2="9" y2="12" />
@@ -291,9 +215,7 @@ function ProfileContent() {
               </div>
               <div className="flex-1 text-left">
                 <div className="font-medium">Abmelden</div>
-                <div className={`text-sm ${
-                  isDarkMode ? 'text-red-400' : 'text-red-500'
-                }`}>
+                <div className="text-sm opacity-80">
                   Aus der App ausloggen
                 </div>
               </div>

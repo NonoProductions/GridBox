@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import { Station } from "@/components/StationManager";
+import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
@@ -168,14 +169,59 @@ function RentPageContent() {
             userName 
           });
           
-          // TODO: Hier die tatsächliche Ausleih-Logik implementieren
-          // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
-          
-          // Erfolgsmeldung
-          alert(`Powerbank erfolgreich an Station "${station.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
-          
-          // Zur Startseite navigieren
-          router.push('/');
+          try {
+            // Hole aktuellen User
+            const { data: { user }, error: userError } = await supabase.auth.getUser();
+            if (userError || !user) {
+              throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
+            }
+
+            // Prüfe ob User bereits eine aktive Ausleihe hat
+            const { data: activeRental, error: checkError } = await supabase
+              .from('rentals')
+              .select('id')
+              .eq('user_id', user.id)
+              .eq('status', 'active')
+              .maybeSingle();
+
+            if (checkError) {
+              throw new Error('Fehler beim Prüfen der Ausleihen.');
+            }
+
+            if (activeRental) {
+              throw new Error('Sie haben bereits eine aktive Powerbank-Ausleihe. Bitte geben Sie diese zuerst zurück.');
+            }
+
+            // Erstelle die Ausleihe über die Datenbankfunktion
+            const { data: rentalData, error: rentalError } = await supabase.rpc('create_rental', {
+              p_user_id: user.id,
+              p_station_id: station.id
+            });
+
+            if (rentalError) {
+              throw new Error(rentalError.message || 'Fehler beim Erstellen der Ausleihe.');
+            }
+
+            if (!rentalData || !rentalData.success) {
+              throw new Error('Ausleihe konnte nicht erstellt werden.');
+            }
+
+            console.log('✅ Ausleihe erfolgreich erstellt:', rentalData);
+            
+            // Push-Benachrichtigung senden
+            await notifyRentalSuccess(station.name, '/');
+            
+            // Erfolgsmeldung
+            alert(`Powerbank erfolgreich an Station "${station.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
+            
+            // Zur Startseite navigieren
+            router.push('/');
+          } catch (error) {
+            console.error('Fehler bei der Ausleihe:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
+            await notifyRentalError(errorMessage);
+            alert(errorMessage);
+          }
         }}
         isDarkMode={isDarkMode}
       />

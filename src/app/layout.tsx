@@ -1,6 +1,7 @@
 import "./globals.css";
 import AuthGate from "@/components/AuthGate";
 import AppHeader from "@/components/AppHeader";
+import NotificationManager from "@/components/NotificationManager";
 
 export const metadata = { 
   title: "GridBox - Powerbank ausleihen",
@@ -51,8 +52,7 @@ const ThemeScript = () => (
   />
 );
 
-// Service Worker temporär deaktiviert - wird später wieder aktiviert
-const ServiceWorkerScript = () => null;
+// Service Worker wird jetzt über NotificationManager verwaltet
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -71,9 +71,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
         <ThemeScript />
-        <ServiceWorkerScript />
       </head>
       <body className="bg-slate-50 text-slate-900 dark:bg-black dark:text-slate-100">
+        <NotificationManager />
         <AppHeader />
         <AuthGate />
         {children}
