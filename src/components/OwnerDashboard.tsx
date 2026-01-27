@@ -834,25 +834,27 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       channel = supabase
         .channel(`stations-updates-${Date.now()}`) // Unique channel name
         .on(
-          'postgres_changes',
+          'postgres_changes' as any,
           {
             event: '*', // Alle Events: INSERT, UPDATE, DELETE
             schema: 'public',
             table: 'stations'
           },
-          (payload) => {
-            console.log('📡 Realtime Update:', payload.eventType, payload.new?.name || payload.old?.name);
+          (payload: { eventType: string; new?: Station | null; old?: Station | null }) => {
+            const newStation = payload.new as Station | null | undefined;
+            const oldStation = payload.old as Station | null | undefined;
+            console.log('📡 Realtime Update:', payload.eventType, newStation?.name || oldStation?.name);
             
             // Optimistische Update-Strategie
-            if (payload.eventType === 'UPDATE' && payload.new) {
+            if (payload.eventType === 'UPDATE' && newStation) {
               setStations(prev => prev.map(station => {
-                if (station.id === payload.new.id) {
-                  const updated = { ...station, ...payload.new };
+                if (station.id === newStation.id) {
+                  const updated = { ...station, ...newStation };
                   
                   // Debug-Log
-                  const changedFields = Object.keys(payload.new)
-                    .filter(key => key !== 'id' && station[key as keyof Station] !== payload.new[key])
-                    .map(key => `${key}: ${station[key as keyof Station]} → ${payload.new[key]}`);
+                  const changedFields = Object.keys(newStation)
+                    .filter(key => key !== 'id' && station[key as keyof Station] !== newStation[key as keyof Station])
+                    .map(key => `${key}: ${station[key as keyof Station]} → ${newStation[key as keyof Station]}`);
                   
                   if (changedFields.length > 0) {
                     console.log('✅ Station aktualisiert:', updated.name);
@@ -865,14 +867,14 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               }));
               setLastUpdate(new Date());
               reconnectAttempts = 0; // Reset bei erfolgreicher Nachricht
-            } else if (payload.eventType === 'INSERT' && payload.new) {
-              console.log('➕ Neue Station:', payload.new.name);
-              setStations(prev => [payload.new, ...prev]);
+            } else if (payload.eventType === 'INSERT' && newStation) {
+              console.log('➕ Neue Station:', newStation.name);
+              setStations(prev => [newStation, ...prev]);
               setLastUpdate(new Date());
               reconnectAttempts = 0;
-            } else if (payload.eventType === 'DELETE' && payload.old) {
-              console.log('➖ Station entfernt:', payload.old.name);
-              setStations(prev => prev.filter(s => s.id !== payload.old.id));
+            } else if (payload.eventType === 'DELETE' && oldStation) {
+              console.log('➖ Station entfernt:', oldStation.name);
+              setStations(prev => prev.filter(s => s.id !== oldStation.id));
               setLastUpdate(new Date());
               reconnectAttempts = 0;
             }
