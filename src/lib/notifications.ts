@@ -17,6 +17,7 @@ export interface NotificationOptions {
   data?: Record<string, any>;
   url?: string;
   actions?: NotificationAction[];
+  vibrate?: number[];
 }
 
 // Prüfe ob Browser Push-Benachrichtigungen unterstützt
