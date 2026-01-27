@@ -4,7 +4,23 @@ import { useState } from "react";
 import Image from "next/image";
 import { supabase } from "@/lib/supabaseClient";
 
-const isValidEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+// Email validation with length limits and stricter pattern
+const isValidEmail = (email: string): boolean => {
+  if (!email || typeof email !== 'string') return false;
+  
+  // Length limits to prevent DoS
+  if (email.length > 254) return false; // RFC 5321 limit
+  
+  // Stricter email pattern
+  const emailPattern = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+  
+  return emailPattern.test(email);
+};
+
+// Sanitize OTP code - only allow digits
+const sanitizeOtpCode = (code: string): string => {
+  return code.replace(/\D/g, '').slice(0, 6);
+};
 
 export default function LoginCard() {
   const [email, setEmail] = useState("");
@@ -17,23 +33,49 @@ export default function LoginCard() {
   async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
-    if (!isValidEmail(email)) {
+    
+    // Validate and sanitize email
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
       setStatus({ kind: "error", msg: "Bitte eine gültige E-Mail-Adresse eingeben." });
       return;
     }
+    
     setLoading(true);
     try {
+      // Rate limiting: prevent abuse by checking localStorage
+      const lastOtpTime = localStorage.getItem(`otp_${trimmedEmail}`);
+      const now = Date.now();
+      if (lastOtpTime && now - parseInt(lastOtpTime, 10) < 60000) {
+        setStatus({ kind: "error", msg: "Bitte warten Sie einen Moment, bevor Sie erneut einen Code anfordern." });
+        setLoading(false);
+        return;
+      }
+      
       const { error } = await supabase.auth.signInWithOtp({ 
-        email, 
+        email: trimmedEmail, 
         options: { 
-          shouldCreateUser: true 
+          shouldCreateUser: true,
+          emailRedirectTo: typeof window !== 'undefined' ? window.location.origin + '/auth/callback' : undefined,
         } 
       });
-      if (error) throw error;
+      
+      if (error) {
+        // Don't leak specific error details to prevent user enumeration
+        const errorMessage = error.message.includes('rate limit') 
+          ? "Zu viele Anfragen. Bitte warten Sie einen Moment."
+          : "Fehler beim Senden des Codes. Bitte versuchen Sie es erneut.";
+        throw new Error(errorMessage);
+      }
+      
+      // Store timestamp for rate limiting
+      localStorage.setItem(`otp_${trimmedEmail}`, now.toString());
+      
       setOtpSent(true);
       setStatus({ kind: "ok", msg: "6-stelliger Code wurde gesendet. Bitte Posteingang prüfen." });
     } catch (err: unknown) {
-      setStatus({ kind: "error", msg: (err as Error)?.message ?? "Unbekannter Fehler." });
+      const errorMessage = err instanceof Error ? err.message : "Unbekannter Fehler.";
+      setStatus({ kind: "error", msg: errorMessage });
     } finally {
       setLoading(false);
     }
@@ -42,22 +84,57 @@ export default function LoginCard() {
   async function handleVerifyOtp(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
-    if (otpCode.length !== 6) {
+    
+    // Sanitize and validate OTP code
+    const sanitizedCode = sanitizeOtpCode(otpCode);
+    if (sanitizedCode.length !== 6) {
       setStatus({ kind: "error", msg: "Bitte gib den 6-stelligen Code ein." });
       return;
     }
+    
+    // Validate email is still present
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail || !isValidEmail(trimmedEmail)) {
+      setStatus({ kind: "error", msg: "Ungültige E-Mail-Adresse." });
+      return;
+    }
+    
     setVerifying(true);
     try {
+      // Rate limiting for verification attempts
+      const verifyKey = `verify_${trimmedEmail}`;
+      const lastVerifyTime = localStorage.getItem(verifyKey);
+      const now = Date.now();
+      if (lastVerifyTime && now - parseInt(lastVerifyTime, 10) < 5000) {
+        setStatus({ kind: "error", msg: "Bitte warten Sie einen Moment vor dem nächsten Versuch." });
+        setVerifying(false);
+        return;
+      }
+      
       const { error } = await supabase.auth.verifyOtp({ 
-        email, 
-        token: otpCode, 
+        email: trimmedEmail, 
+        token: sanitizedCode, 
         type: 'email' 
       });
-      if (error) throw error;
+      
+      if (error) {
+        // Don't leak specific error details
+        const errorMessage = error.message.includes('expired')
+          ? "Code abgelaufen. Bitte fordern Sie einen neuen Code an."
+          : error.message.includes('invalid')
+          ? "Ungültiger Code. Bitte erneut versuchen."
+          : "Fehler bei der Verifizierung. Bitte versuchen Sie es erneut.";
+        throw new Error(errorMessage);
+      }
+      
+      // Store verification timestamp
+      localStorage.setItem(verifyKey, now.toString());
+      
       setStatus({ kind: "ok", msg: "Erfolgreich angemeldet!" });
       // Die Weiterleitung erfolgt automatisch über den AuthGate
     } catch (err: unknown) {
-      setStatus({ kind: "error", msg: (err as Error)?.message ?? "Ungültiger Code. Bitte erneut versuchen." });
+      const errorMessage = err instanceof Error ? err.message : "Ungültiger Code. Bitte erneut versuchen.";
+      setStatus({ kind: "error", msg: errorMessage });
     } finally {
       setVerifying(false);
     }
@@ -190,7 +267,7 @@ export default function LoginCard() {
                   pattern="[0-9]*"
                   maxLength={6}
                   value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                  onChange={(e) => setOtpCode(sanitizeOtpCode(e.target.value))}
                   placeholder="123456"
                   className="w-full rounded-xl border border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-700/50 pl-12 pr-4 py-3.5 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:ring-4 focus:ring-emerald-500/30 dark:focus:ring-emerald-500/40 transition-all text-center text-2xl font-mono tracking-widest"
                   required

@@ -492,6 +492,12 @@ function ReservierungContent() {
           mapRef.current = null;
         }
 
+        // Check container exists (TypeScript safety)
+        if (!mapContainerRef.current) {
+          console.error('Map container not found');
+          return;
+        }
+
         // Determine map style based on theme
         const lightStyle = process.env.NEXT_PUBLIC_MAPBOX_LIGHT_STYLE || 'mapbox://styles/mapbox/light-v11';
         const darkStyle = process.env.NEXT_PUBLIC_MAPBOX_DARK_STYLE || 'mapbox://styles/mapbox/dark-v11';

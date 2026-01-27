@@ -24,22 +24,81 @@ export default function AddStationForm({ onClose, onSubmit, isDarkMode, userLoca
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Input validation and sanitization
+  const validateFormData = (): { valid: boolean; error?: string } => {
+    // Name validation
+    const name = formData.name.trim();
+    if (!name) {
+      return { valid: false, error: 'Name ist erforderlich' };
+    }
+    if (name.length > 100) {
+      return { valid: false, error: 'Name darf maximal 100 Zeichen lang sein' };
+    }
+    
+    // Description validation
+    if (formData.description && formData.description.length > 500) {
+      return { valid: false, error: 'Beschreibung darf maximal 500 Zeichen lang sein' };
+    }
+    
+    // Coordinate validation
+    if (formData.lat < -90 || formData.lat > 90) {
+      return { valid: false, error: 'Ungültiger Breitengrad' };
+    }
+    if (formData.lng < -180 || formData.lng > 180) {
+      return { valid: false, error: 'Ungültiger Längengrad' };
+    }
+    
+    // Address validation
+    if (formData.address && formData.address.length > 200) {
+      return { valid: false, error: 'Adresse darf maximal 200 Zeichen lang sein' };
+    }
+    
+    // Total units validation
+    if (formData.total_units < 0 || formData.total_units > 100) {
+      return { valid: false, error: 'Anzahl der Powerbanks muss zwischen 0 und 100 liegen' };
+    }
+    
+    return { valid: true };
+  };
+
+  const sanitizeInput = (input: string): string => {
+    // Remove potentially dangerous characters but keep basic formatting
+    return input
+      .replace(/[<>]/g, '') // Remove HTML brackets
+      .trim();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!formData.name.trim()) {
-      setError('Name ist erforderlich');
+    // Validate form data
+    const validation = validateFormData();
+    if (!validation.valid) {
+      setError(validation.error || 'Ungültige Eingaben');
       return;
     }
 
     try {
       setLoading(true);
       setError(null);
-      await onSubmit(formData);
+      
+      // Sanitize inputs
+      const sanitizedData = {
+        ...formData,
+        name: sanitizeInput(formData.name),
+        description: formData.description ? sanitizeInput(formData.description) : '',
+        address: formData.address ? sanitizeInput(formData.address) : '',
+      };
+      
+      await onSubmit(sanitizedData);
       onClose();
     } catch (err: unknown) {
       console.error('Fehler beim Hinzufügen der Station:', err);
-      setError((err as Error)?.message || 'Fehler beim Hinzufügen der Station. Bitte überprüfen Sie Ihre Berechtigung.');
+      // Don't leak specific error details
+      const errorMessage = err instanceof Error && err.message.includes('permission')
+        ? 'Fehler beim Hinzufügen der Station. Bitte überprüfen Sie Ihre Berechtigung.'
+        : 'Fehler beim Hinzufügen der Station. Bitte versuchen Sie es erneut.';
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }

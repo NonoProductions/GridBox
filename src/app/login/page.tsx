@@ -14,10 +14,19 @@ function LoginContent() {
   // Get return URL from query params
   const returnUrl = searchParams.get('returnUrl') || '/app';
 
-  // Save returnUrl to localStorage so auth callback can use it
+  // Save returnUrl to localStorage so auth callback can use it (with validation)
   useEffect(() => {
     if (returnUrl && returnUrl !== '/app') {
-      localStorage.setItem('auth_return_url', returnUrl);
+      try {
+        // Validate return URL to prevent open redirect
+        const url = new URL(returnUrl, window.location.origin);
+        // Only allow same-origin URLs
+        if (url.origin === window.location.origin && url.pathname.startsWith('/')) {
+          localStorage.setItem('auth_return_url', url.pathname + url.search);
+        }
+      } catch {
+        // Invalid URL, ignore
+      }
     }
   }, [returnUrl]);
 

@@ -48,8 +48,16 @@ function RentPageContent() {
         // Debug: Log die empfangene Station-ID
         console.log('🔍 Station-ID empfangen:', stationId);
         
-        // Prüfe ob es ein 4-stelliger Short-Code ist
-        const isShortCode = /^[A-Z0-9]{4}$/i.test(stationId);
+        // Sanitize and validate stationId
+        const sanitizedStationId = stationId.trim();
+        if (!sanitizedStationId || sanitizedStationId.length > 100) {
+          setError("Ungültige Station-ID");
+          setLoading(false);
+          return;
+        }
+        
+        // Prüfe ob es ein 4-stelliger Short-Code ist (alphanumeric only)
+        const isShortCode = /^[A-Z0-9]{4}$/i.test(sanitizedStationId);
         console.log('📝 Ist Short-Code?', isShortCode);
         
         let query = supabase
@@ -57,13 +65,21 @@ function RentPageContent() {
           .select('*')
           .eq('is_active', true);
         
-        // Suche nach Short-Code oder UUID
+        // Suche nach Short-Code oder UUID (with validation)
         if (isShortCode) {
-          console.log('🔎 Suche nach Short-Code:', stationId);
-          query = query.ilike('short_code', stationId);
+          console.log('🔎 Suche nach Short-Code:', sanitizedStationId);
+          // Use exact match for short codes (case-insensitive)
+          query = query.ilike('short_code', sanitizedStationId);
         } else {
-          console.log('🔎 Suche nach UUID:', stationId);
-          query = query.eq('id', stationId);
+          // Validate UUID format to prevent injection
+          const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          if (!uuidPattern.test(sanitizedStationId)) {
+            setError("Ungültige Station-ID Format");
+            setLoading(false);
+            return;
+          }
+          console.log('🔎 Suche nach UUID:', sanitizedStationId);
+          query = query.eq('id', sanitizedStationId);
         }
         
         const { data, error: fetchError } = await query.single();
@@ -176,6 +192,12 @@ function RentPageContent() {
               throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
             }
 
+            // Validate station ID format
+            const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!uuidPattern.test(station.id)) {
+              throw new Error('Ungültige Station-ID.');
+            }
+            
             // Prüfe ob User bereits eine aktive Ausleihe hat
             const { data: activeRental, error: checkError } = await supabase
               .from('rentals')
@@ -185,6 +207,7 @@ function RentPageContent() {
               .maybeSingle();
 
             if (checkError) {
+              console.error('Error checking active rentals:', checkError);
               throw new Error('Fehler beim Prüfen der Ausleihen.');
             }
 
@@ -192,14 +215,31 @@ function RentPageContent() {
               throw new Error('Sie haben bereits eine aktive Powerbank-Ausleihe. Bitte geben Sie diese zuerst zurück.');
             }
 
-            // Erstelle die Ausleihe über die Datenbankfunktion
+            // Validate station is still active before creating rental
+            const { data: stationCheck, error: stationCheckError } = await supabase
+              .from('stations')
+              .select('id, is_active')
+              .eq('id', station.id)
+              .single();
+
+            if (stationCheckError || !stationCheck) {
+              throw new Error('Station nicht gefunden.');
+            }
+
+            if (!stationCheck.is_active) {
+              throw new Error('Station ist derzeit nicht aktiv.');
+            }
+
+            // Erstelle die Ausleihe über die Datenbankfunktion (with validated inputs)
             const { data: rentalData, error: rentalError } = await supabase.rpc('create_rental', {
               p_user_id: user.id,
               p_station_id: station.id
             });
 
             if (rentalError) {
-              throw new Error(rentalError.message || 'Fehler beim Erstellen der Ausleihe.');
+              console.error('Error creating rental:', rentalError);
+              // Don't leak specific database errors
+              throw new Error('Fehler beim Erstellen der Ausleihe. Bitte versuchen Sie es erneut.');
             }
 
             if (!rentalData || !rentalData.success) {

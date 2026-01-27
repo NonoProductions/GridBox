@@ -767,24 +767,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
-      // Create destination marker element
+      // Create destination marker element (secure DOM manipulation)
       const destinationElement = document.createElement('div');
-      destinationElement.innerHTML = `
-        <div style="
-          background: #10b981;
-          color: white;
-          padding: 8px 12px;
-          border-radius: 20px;
-          font-size: 14px;
-          font-weight: 600;
-          text-align: center;
-          white-space: nowrap;
-          box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
-          border: 2px solid white;
-        ">
-          🎯 Ziel: ${station.name}
-        </div>
+      const innerDiv = document.createElement('div');
+      innerDiv.style.cssText = `
+        background: #10b981;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: 600;
+        text-align: center;
+        white-space: nowrap;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+        border: 2px solid white;
       `;
+      // Safely set text content (prevents XSS)
+      innerDiv.textContent = `🎯 Ziel: ${station.name}`;
+      destinationElement.appendChild(innerDiv);
       
       // Add destination marker
       const destinationMarker = new mapboxgl.Marker({

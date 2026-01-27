@@ -30,10 +30,54 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
     setPhotos(station.photos || []);
   }, [station.photos]);
 
+  // File validation constants
+  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+  const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  const MAX_FILENAME_LENGTH = 255;
+
+  // Validate file before upload
+  const validateFile = (file: File): { valid: boolean; error?: string } => {
+    // Check file type
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      return { valid: false, error: 'Nur JPEG, PNG und WebP Bilder sind erlaubt.' };
+    }
+    
+    // Check file size
+    if (file.size > MAX_FILE_SIZE) {
+      return { valid: false, error: 'Datei ist zu groß. Maximum: 5MB.' };
+    }
+    
+    // Check filename length
+    if (file.name.length > MAX_FILENAME_LENGTH) {
+      return { valid: false, error: 'Dateiname ist zu lang.' };
+    }
+    
+    // Validate filename doesn't contain path traversal
+    if (file.name.includes('..') || file.name.includes('/') || file.name.includes('\\')) {
+      return { valid: false, error: 'Ungültiger Dateiname.' };
+    }
+    
+    return { valid: true };
+  };
+
+  // Sanitize filename - remove dangerous characters
+  const sanitizeFilename = (filename: string): string => {
+    // Extract extension
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+      return 'image.jpg'; // Default extension
+    }
+    
+    // Remove path components and sanitize
+    const baseName = filename.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `${baseName.slice(0, 50)}.${ext}`;
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
+    // Check total file count
     if (photos.length + files.length > 3) {
       alert('Sie können maximal 3 Fotos hochladen. Bitte entfernen Sie zuerst einige Fotos.');
       return;
@@ -46,41 +90,52 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
       for (let i = 0; i < files.length && photos.length + uploadedUrls.length < 3; i++) {
         const file = files[i];
         
-        // Erstelle einen eindeutigen Dateinamen
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${station.id}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+        // Validate file
+        const validation = validateFile(file);
+        if (!validation.valid) {
+          alert(validation.error || 'Ungültige Datei.');
+          continue;
+        }
         
-        // Upload zu Supabase Storage
+        // Sanitize filename and create unique name
+        const sanitizedBaseName = sanitizeFilename(file.name);
+        const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        const fileName = `${station.id}/${uniqueId}-${sanitizedBaseName}`;
+        
+        // Upload to Supabase Storage with security settings
         try {
           const { data, error } = await supabase.storage
             .from('station-photos')
             .upload(fileName, file, {
               cacheControl: '3600',
-              upsert: false
+              upsert: false,
+              contentType: file.type, // Explicit content type
             });
 
           if (error) {
-            throw error;
+            console.error('Upload error:', error);
+            throw new Error('Fehler beim Hochladen der Datei.');
           }
 
-          // Hole die öffentliche URL
+          if (!data?.path) {
+            throw new Error('Upload fehlgeschlagen: Keine Pfad-Information erhalten.');
+          }
+
+          // Get public URL
           const { data: urlData } = supabase.storage
             .from('station-photos')
-            .getPublicUrl(fileName);
+            .getPublicUrl(data.path);
+          
+          if (!urlData?.publicUrl) {
+            throw new Error('Fehler beim Abrufen der öffentlichen URL.');
+          }
           
           uploadedUrls.push(urlData.publicUrl);
         } catch (uploadError) {
           console.error('Upload error:', uploadError);
-          // Fallback: Verwende Data URL als temporäre Lösung
-          const reader = new FileReader();
-          const promise = new Promise<string>((resolve) => {
-            reader.onloadend = () => {
-              resolve(reader.result as string);
-            };
-            reader.readAsDataURL(file);
-          });
-          const base64data = await promise;
-          uploadedUrls.push(base64data);
+          // Don't use Data URL fallback - it's a security risk and can cause memory issues
+          alert(`Fehler beim Hochladen: ${uploadError instanceof Error ? uploadError.message : 'Unbekannter Fehler'}`);
+          continue;
         }
       }
 
@@ -144,14 +199,14 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
               ? 'border-white/20 hover:border-white/40 bg-white/5'
               : 'border-slate-300 hover:border-slate-400 bg-slate-50'
         }`}>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={handleFileUpload}
-            disabled={uploading}
-            className="hidden"
-          />
+              <input
+                type="file"
+                accept="image/jpeg,image/jpg,image/png,image/webp"
+                multiple
+                onChange={handleFileUpload}
+                disabled={uploading}
+                className="hidden"
+              />
           <div className="flex flex-col items-center gap-2">
             {uploading ? (
               <>
@@ -324,10 +379,9 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       }
     } catch (err) {
       console.error('❌ Fehler beim Laden der Stationen:', err);
-      const errorMessage = (err as any)?.message || 'Fehler beim Laden der Stationen';
-      console.error('Fehlerdetails:', errorMessage);
+      // Don't leak specific error details to prevent information disclosure
       if (!silent) {
-        setError('Fehler beim Laden der Stationen: ' + errorMessage);
+        setError('Fehler beim Laden der Stationen. Bitte versuchen Sie es erneut.');
       }
     } finally {
       if (!silent) {
@@ -375,7 +429,8 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       setUsersCount(usersData.length);
     } catch (err) {
       console.error('Fehler beim Laden der Benutzer:', err);
-      setError((err as Error)?.message || 'Fehler beim Laden der Benutzer');
+      // Don't leak specific error details
+      setError('Fehler beim Laden der Benutzer. Bitte versuchen Sie es erneut.');
       setUsers([]);
       setUsersCount(null);
     } finally {
@@ -383,41 +438,166 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     }
   };
 
-  // Lösche Station
+  // Lösche Station (with validation and authorization check)
   const deleteStation = async (id: string) => {
+    // Validate ID format
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(id)) {
+      setError('Ungültige Station-ID');
+      return;
+    }
+    
     if (!confirm('Sind Sie sicher, dass Sie diese Station löschen möchten?')) return;
     
     try {
+      // Verify user is owner before deletion
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setError('Sie müssen angemeldet sein, um Stationen zu löschen');
+        return;
+      }
+
+      // Check if user owns this station
+      const { data: stationData, error: checkError } = await supabase
+        .from('stations')
+        .select('owner_id')
+        .eq('id', id)
+        .single();
+
+      if (checkError || !stationData) {
+        setError('Station nicht gefunden');
+        return;
+      }
+
+      // Verify ownership (if owner_id is set)
+      if (stationData.owner_id && stationData.owner_id !== user.id) {
+        setError('Sie haben keine Berechtigung, diese Station zu löschen');
+        return;
+      }
+
       const { error } = await supabase
         .from('stations')
         .delete()
         .eq('id', id);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Delete error:', error);
+        throw error;
+      }
+      
       // Lokale Aktualisierung für sofortiges Feedback
       setStations(prev => prev.filter(station => station.id !== id));
       setSelectedStationId(null);
+      setError(null);
     } catch (err) {
       console.error('Fehler beim Löschen der Station:', err);
-      setError('Fehler beim Löschen der Station');
+      setError('Fehler beim Löschen der Station. Bitte versuchen Sie es erneut.');
       // Bei Fehler: Hole Daten erneut mit Force-Refresh
       fetchStations(true, true);
     }
   };
 
-  // Aktualisiere Station
+  // Aktualisiere Station (with validation and authorization)
   const updateStation = async (id: string, updates: Partial<Station>) => {
+    // Validate ID format
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(id)) {
+      setError('Ungültige Station-ID');
+      return;
+    }
+
+    // Validate and sanitize updates
+    const sanitizedUpdates: Partial<Station> = {};
+    
+    if (updates.name !== undefined) {
+      const name = String(updates.name).trim().slice(0, 100);
+      if (name.length === 0) {
+        setError('Name darf nicht leer sein');
+        return;
+      }
+      sanitizedUpdates.name = name;
+    }
+    
+    if (updates.description !== undefined) {
+      sanitizedUpdates.description = String(updates.description).trim().slice(0, 500);
+    }
+    
+    if (updates.address !== undefined) {
+      sanitizedUpdates.address = String(updates.address).trim().slice(0, 200);
+    }
+    
+    if (updates.lat !== undefined) {
+      const lat = Number(updates.lat);
+      if (isNaN(lat) || lat < -90 || lat > 90) {
+        setError('Ungültiger Breitengrad');
+        return;
+      }
+      sanitizedUpdates.lat = lat;
+    }
+    
+    if (updates.lng !== undefined) {
+      const lng = Number(updates.lng);
+      if (isNaN(lng) || lng < -180 || lng > 180) {
+        setError('Ungültiger Längengrad');
+        return;
+      }
+      sanitizedUpdates.lng = lng;
+    }
+    
+    if (updates.total_units !== undefined) {
+      const totalUnits = Number(updates.total_units);
+      if (isNaN(totalUnits) || totalUnits < 0 || totalUnits > 100) {
+        setError('Anzahl der Powerbanks muss zwischen 0 und 100 liegen');
+        return;
+      }
+      sanitizedUpdates.total_units = Math.floor(totalUnits);
+    }
+    
+    // Copy other safe fields
+    if (updates.is_active !== undefined) sanitizedUpdates.is_active = Boolean(updates.is_active);
+    if (updates.charge_enabled !== undefined) sanitizedUpdates.charge_enabled = Boolean(updates.charge_enabled);
+    if (updates.opening_hours !== undefined) {
+      sanitizedUpdates.opening_hours = String(updates.opening_hours).trim().slice(0, 200);
+    }
+    if (updates.photos !== undefined && Array.isArray(updates.photos)) {
+      // Validate photo URLs
+      sanitizedUpdates.photos = updates.photos
+        .slice(0, 3)
+        .filter((url): url is string => typeof url === 'string' && url.length > 0 && url.length < 2048);
+    }
+
     try {
       setUpdatingStation(id);
       
+      // Verify user is owner before update
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setError('Sie müssen angemeldet sein, um Stationen zu aktualisieren');
+        setUpdatingStation(null);
+        return;
+      }
+
+      // Check ownership if owner_id exists
+      const { data: stationData } = await supabase
+        .from('stations')
+        .select('owner_id')
+        .eq('id', id)
+        .single();
+
+      if (stationData?.owner_id && stationData.owner_id !== user.id) {
+        setError('Sie haben keine Berechtigung, diese Station zu aktualisieren');
+        setUpdatingStation(null);
+        return;
+      }
+      
       // Optimistische UI-Aktualisierung für sofortiges Feedback
       setStations(prev => prev.map(station => 
-        station.id === id ? { ...station, ...updates } : station
+        station.id === id ? { ...station, ...sanitizedUpdates } : station
       ));
 
       const { error } = await supabase
         .from('stations')
-        .update(updates)
+        .update(sanitizedUpdates)
         .eq('id', id);
 
       if (error) {
@@ -425,10 +605,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         throw error;
       }
       
-      console.log('✅ Station erfolgreich aktualisiert:', id, updates);
+      console.log('✅ Station erfolgreich aktualisiert:', id);
+      setError(null);
     } catch (err) {
       console.error('❌ Fehler beim Aktualisieren der Station:', err);
-      setError('Fehler beim Aktualisieren der Station: ' + (err as Error).message);
+      // Don't leak specific error details
+      setError('Fehler beim Aktualisieren der Station. Bitte versuchen Sie es erneut.');
       // Bei Fehler: Stelle alten Zustand wieder her mit Force-Refresh
       fetchStations(true, true);
     } finally {
@@ -436,56 +618,131 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     }
   };
 
-  // Füge neue Station hinzu
+  // Füge neue Station hinzu (with validation and error handling)
   const handleAddStation = async (stationData: Omit<Station, 'id' | 'created_at' | 'updated_at'>) => {
     try {
       setError(null);
       
-      // Hole den aktuellen Benutzer
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        throw new Error('Sie müssen eingeloggt sein um eine Station hinzuzufügen');
+      // Validate station data
+      if (!stationData.name || !stationData.name.trim()) {
+        throw new Error('Name ist erforderlich');
       }
       
-      // Füge owner_id hinzu
-      const stationWithOwner = {
-        ...stationData,
-        owner_id: user.id
+      if (stationData.lat < -90 || stationData.lat > 90) {
+        throw new Error('Ungültiger Breitengrad');
+      }
+      
+      if (stationData.lng < -180 || stationData.lng > 180) {
+        throw new Error('Ungültiger Längengrad');
+      }
+      
+      if (stationData.total_units !== undefined && (stationData.total_units < 0 || stationData.total_units > 100)) {
+        throw new Error('Anzahl der Powerbanks muss zwischen 0 und 100 liegen');
+      }
+      
+      // Hole den aktuellen Benutzer
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        throw new Error('Sie müssen eingeloggt sein, um eine Station hinzuzufügen');
+      }
+      
+      // Sanitize and prepare data
+      const sanitizedData = {
+        name: String(stationData.name).trim().slice(0, 100),
+        description: stationData.description ? String(stationData.description).trim().slice(0, 500) : null,
+        lat: Number(stationData.lat),
+        lng: Number(stationData.lng),
+        address: stationData.address ? String(stationData.address).trim().slice(0, 200) : null,
+        total_units: stationData.total_units !== undefined ? Math.max(0, Math.min(100, Math.floor(Number(stationData.total_units)))) : 0,
+        available_units: 0,
+        is_active: Boolean(stationData.is_active ?? true),
+        owner_id: user.id,
+        charge_enabled: Boolean(stationData.charge_enabled ?? true),
+        opening_hours: stationData.opening_hours ? String(stationData.opening_hours).trim().slice(0, 200) : null,
+        photos: Array.isArray(stationData.photos) ? stationData.photos.slice(0, 3) : [],
       };
       
       const { data, error } = await supabase
         .from('stations')
-        .insert([stationWithOwner])
+        .insert([sanitizedData])
         .select();
 
       if (error) {
         console.error('Supabase Fehler:', error);
-        throw error;
+        // Don't leak specific database errors
+        throw new Error('Fehler beim Hinzufügen der Station. Bitte versuchen Sie es erneut.');
       }
       
-      console.log('Station erfolgreich hinzugefügt:', data);
+      if (!data || data.length === 0) {
+        throw new Error('Station konnte nicht erstellt werden');
+      }
+      
+      console.log('Station erfolgreich hinzugefügt');
       // Realtime macht das Update automatisch
       setShowAddStationForm(false);
+      setError(null);
     } catch (err: unknown) {
       console.error('Fehler beim Hinzufügen der Station:', err);
-      setError((err as Error)?.message || 'Fehler beim Hinzufügen der Station');
+      const errorMessage = err instanceof Error ? err.message : 'Fehler beim Hinzufügen der Station';
+      setError(errorMessage);
       throw err;
     }
   };
 
-  // Weise Benutzerrolle zu
+  // Weise Benutzerrolle zu (with validation)
   const assignUserRole = async (userId: string, role: 'owner' | 'user') => {
+    // Validate inputs
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(userId)) {
+      setError('Ungültige Benutzer-ID');
+      return;
+    }
+    
+    if (role !== 'owner' && role !== 'user') {
+      setError('Ungültige Rolle');
+      return;
+    }
+
     try {
+      // Verify current user is owner
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setError('Sie müssen angemeldet sein');
+        return;
+      }
+
+      const { data: currentUserRole } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      if (currentUserRole?.role !== 'owner') {
+        setError('Nur Owner können Rollen zuweisen');
+        return;
+      }
+
+      // Prevent self-demotion from owner
+      if (userId === user.id && role === 'user') {
+        setError('Sie können sich nicht selbst die Owner-Rolle entziehen');
+        return;
+      }
+
       const { error } = await supabase
         .from('profiles')
         .update({ role })
         .eq('id', userId);
 
-      if (error) throw error;
+      if (error) {
+        console.error('Role assignment error:', error);
+        throw error;
+      }
+      
       await fetchUsers();
+      setError(null);
     } catch (err) {
       console.error('Fehler beim Zuweisen der Rolle:', err);
-      setError('Fehler beim Zuweisen der Rolle');
+      setError('Fehler beim Zuweisen der Rolle. Bitte versuchen Sie es erneut.');
     }
   };
 

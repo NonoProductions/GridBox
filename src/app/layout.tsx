@@ -28,6 +28,8 @@ export const viewport = {
   themeColor: '#10b981',
 };
 
+// Theme script - using dangerouslySetInnerHTML is safe here as content is static
+// but we validate localStorage values to prevent XSS
 const ThemeScript = () => (
   <script
     dangerouslySetInnerHTML={{
@@ -35,8 +37,11 @@ const ThemeScript = () => (
 (function(){
   try {
     const saved = localStorage.getItem('theme');
+    // Validate saved theme value to prevent XSS
+    const validThemes = ['dark', 'light'];
+    const isValidTheme = saved && validThemes.includes(saved);
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const useDark = saved ? saved === 'dark' : prefersDark;
+    const useDark = isValidTheme ? saved === 'dark' : prefersDark;
     
     // Entferne alle dark classes und setze sie explizit
     document.documentElement.classList.remove('dark');
@@ -44,7 +49,8 @@ const ThemeScript = () => (
       document.documentElement.classList.add('dark');
     }
   } catch (e) {
-    console.error('Theme initialization error:', e);
+    // Silently fail - don't expose errors
+    console.error('Theme initialization error');
   }
 })();
 `,

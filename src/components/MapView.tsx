@@ -1048,15 +1048,33 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       target.style.display = 'none';
                       const parent = target.parentElement;
                       if (parent) {
-                        parent.innerHTML = `
-                          <div class="w-full h-32 rounded-lg flex items-center justify-center ${
-                            isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-200'
-                          }">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="opacity-40">
-                              <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
-                            </svg>
-                          </div>
-                        `;
+                        // Clear existing content safely
+                        parent.textContent = '';
+                        
+                        // Create placeholder using DOM API (prevents XSS)
+                        const placeholderDiv = document.createElement('div');
+                        placeholderDiv.className = `w-full h-32 rounded-lg flex items-center justify-center ${
+                          isDarkMode === true ? 'bg-gray-700/50' : 'bg-gray-200'
+                        }`;
+                        
+                        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                        svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+                        svg.setAttribute('viewBox', '0 0 24 24');
+                        svg.setAttribute('width', '32');
+                        svg.setAttribute('height', '32');
+                        svg.setAttribute('fill', 'none');
+                        svg.setAttribute('stroke', 'currentColor');
+                        svg.setAttribute('stroke-width', '1.5');
+                        svg.setAttribute('stroke-linecap', 'round');
+                        svg.setAttribute('stroke-linejoin', 'round');
+                        svg.className.baseVal = 'opacity-40';
+                        
+                        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        path.setAttribute('d', 'M13 11h3l-4 6v-4H9l4-6v4z');
+                        svg.appendChild(path);
+                        
+                        placeholderDiv.appendChild(svg);
+                        parent.appendChild(placeholderDiv);
                       }
                     }
                   }}

@@ -64,10 +64,20 @@ export default function RentalConfirmationModal({
   }, []);
 
   const handleConfirm = async () => {
-    // Wenn nicht angemeldet, zur Login-Seite weiterleiten
+    // Wenn nicht angemeldet, zur Login-Seite weiterleiten (with URL validation)
     if (!isAuthenticated) {
-      const currentUrl = window.location.pathname + window.location.search;
-      window.location.href = `/login?returnUrl=${encodeURIComponent(currentUrl)}`;
+      try {
+        const currentUrl = window.location.pathname + window.location.search;
+        // Validate URL before encoding
+        const url = new URL(currentUrl, window.location.origin);
+        if (url.origin === window.location.origin) {
+          window.location.href = `/login?returnUrl=${encodeURIComponent(url.pathname + url.search)}`;
+        } else {
+          window.location.href = '/login';
+        }
+      } catch {
+        window.location.href = '/login';
+      }
       return;
     }
 
@@ -169,18 +179,40 @@ export default function RentalConfirmationModal({
                   if (target.src.endsWith('.jpg')) {
                     target.src = '/powerbank.png';
                   } else {
-                    // Wenn beide nicht existieren, zeige Placeholder
+                    // Wenn beide nicht existieren, zeige Placeholder (secure DOM manipulation)
                     target.style.display = 'none';
                     const parent = target.parentElement;
                     if (parent) {
-                      parent.innerHTML = `
-                        <div class="flex flex-col items-center justify-center h-full text-center p-6">
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-emerald-600 dark:text-emerald-400 mb-3">
-                            <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
-                          </svg>
-                          <p class="text-sm opacity-60">Powerbank Bild</p>
-                        </div>
-                      `;
+                      // Clear existing content safely
+                      parent.textContent = '';
+                      
+                      // Create placeholder elements using DOM API (prevents XSS)
+                      const placeholderDiv = document.createElement('div');
+                      placeholderDiv.className = 'flex flex-col items-center justify-center h-full text-center p-6';
+                      
+                      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                      svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+                      svg.setAttribute('viewBox', '0 0 24 24');
+                      svg.setAttribute('width', '64');
+                      svg.setAttribute('height', '64');
+                      svg.setAttribute('fill', 'none');
+                      svg.setAttribute('stroke', 'currentColor');
+                      svg.setAttribute('stroke-width', '2');
+                      svg.setAttribute('stroke-linecap', 'round');
+                      svg.setAttribute('stroke-linejoin', 'round');
+                      svg.className.baseVal = 'text-emerald-600 dark:text-emerald-400 mb-3';
+                      
+                      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                      path.setAttribute('d', 'M13 11h3l-4 6v-4H9l4-6v4z');
+                      svg.appendChild(path);
+                      
+                      const text = document.createElement('p');
+                      text.className = 'text-sm opacity-60';
+                      text.textContent = 'Powerbank Bild';
+                      
+                      placeholderDiv.appendChild(svg);
+                      placeholderDiv.appendChild(text);
+                      parent.appendChild(placeholderDiv);
                     }
                   }
                 }}
