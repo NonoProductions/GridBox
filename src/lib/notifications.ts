@@ -1,5 +1,12 @@
 // Push-Benachrichtigungen für GridBox PWA
 
+// NotificationAction Typ Definition (falls nicht in DOM-Typen verfügbar)
+export interface NotificationAction {
+  action: string;
+  title: string;
+  icon?: string;
+}
+
 export interface NotificationOptions {
   title: string;
   body: string;
