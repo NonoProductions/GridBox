@@ -108,7 +108,7 @@ export async function showLocalNotification(options: NotificationOptions): Promi
       },
       vibrate: [200, 100, 200],
       actions: options.actions || []
-    });
+    } as any);
     
     console.log('Benachrichtigung angezeigt:', options.title);
   } catch (error) {
@@ -163,7 +163,7 @@ export async function sendPushNotification(options: NotificationOptions): Promis
       },
       vibrate: [200, 100, 200],
       actions: options.actions || []
-    });
+    } as any);
     
     console.log('Push-Benachrichtigung gesendet:', options.title);
   } catch (error) {
