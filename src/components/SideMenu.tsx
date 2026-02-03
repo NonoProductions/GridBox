@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { isOwner } from "@/lib/userRoles";
+
+const MENU_ANIMATION_MS = 300;
 
 export default function SideMenu({ 
   open, 
@@ -22,6 +24,10 @@ export default function SideMenu({
   const [userIsOwner, setUserIsOwner] = useState<boolean>(false);
   const [totalHours, setTotalHours] = useState<number>(0);
   const [totalSessions, setTotalSessions] = useState<number>(0);
+  const [backdropVisible, setBackdropVisible] = useState(false);
+  const [panelSlideIn, setPanelSlideIn] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -76,24 +82,66 @@ export default function SideMenu({
     };
   }, []);
 
+  // Öffnen: Panel von links reinsliden, Backdrop einblenden
+  useEffect(() => {
+    if (open) {
+      setIsClosing(false);
+      setBackdropVisible(false);
+      setPanelSlideIn(false);
+      const raf = requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setBackdropVisible(true);
+          setPanelSlideIn(true);
+        });
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      setBackdropVisible(false);
+      setPanelSlideIn(false);
+    }
+  }, [open]);
+
+  // Schließen: erst animieren, dann onClose
+  const handleClose = () => {
+    if (closeTimeoutRef.current) return;
+    setIsClosing(true);
+    closeTimeoutRef.current = setTimeout(() => {
+      closeTimeoutRef.current = null;
+      setIsClosing(false);
+      onClose();
+    }, MENU_ANIMATION_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    };
+  }, []);
+
+  const menuVisible = open && !isClosing;
+  const panelShown = menuVisible && panelSlideIn;
+
   return (
     <>
-      {/* Backdrop */}
-      {open && (
+      {/* Backdrop mit Ein-/Ausblend-Animation */}
+      {(open || isClosing) && (
         <div
-          className="fixed inset-0 z-[1100] bg-black/40 backdrop-blur-sm"
-          onClick={onClose}
+          className={`fixed inset-0 z-[1100] bg-black/40 backdrop-blur-sm transition-opacity duration-300 ease-out ${
+            backdropVisible && menuVisible ? "opacity-100" : "opacity-0"
+          }`}
+          onClick={handleClose}
+          aria-hidden="true"
         />
       )}
 
-      {/* Panel */}
+      {/* Panel: slide von links rein */}
       <aside
         className={`fixed top-0 left-0 z-[1110] h-full w-80 max-w-[85vw] ${
           isDarkMode 
             ? 'text-white border-r border-gray-600' 
             : 'bg-white text-slate-900 border-r border-slate-200'
-        } shadow-2xl transform transition-transform duration-300 ${
-          open ? "translate-x-0" : "-translate-x-full"
+        } shadow-2xl transition-transform duration-300 ease-out ${
+          panelShown ? "translate-x-0" : "-translate-x-full"
         }`}
         style={isDarkMode ? { backgroundColor: '#282828' } : {}}
       >

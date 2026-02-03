@@ -1,16 +1,37 @@
 "use client";
 
-import React, { useState, useEffect, type JSX } from "react";
+import React, { useState, useEffect, useMemo, type JSX } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { Station } from "./StationManager";
 import AddStationForm from "./AddStationForm";
+import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 interface UserWithRole {
   user_id: string;
   email: string;
   role: string;
   created_at: string;
+}
+
+interface Rental {
+  id: string;
+  station_id: string;
+  total_price: number | null;
+  started_at: string;
+  ended_at: string | null;
+  status: string;
 }
 
 interface OwnerDashboardProps {
@@ -168,7 +189,7 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
           {photos.map((photo, index) => (
             <div key={index} className="relative group">
               <img
-                src={photo}
+                src={getAbsoluteStationPhotoUrl(photo)}
                 alt={`Station Foto ${index + 1}`}
                 className="w-full h-24 object-cover rounded-lg"
                 onError={(e) => {
@@ -255,11 +276,20 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const [isMobile, setIsMobile] = useState(false);
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   const [usersCount, setUsersCount] = useState<number | null>(null);
+  const [usersSearchQuery, setUsersSearchQuery] = useState("");
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersPageSize, setUsersPageSize] = useState(20);
+  const [usersTotalCount, setUsersTotalCount] = useState<number | null>(null);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [showOnlyConnected, setShowOnlyConnected] = useState(false);
   const [realtimeActive, setRealtimeActive] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [updatingStation, setUpdatingStation] = useState<string | null>(null);
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
+  const [testDataEnabled, setTestDataEnabled] = useState(false);
+  const [ownerRentals, setOwnerRentals] = useState<Rental[]>([]);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsTimeRangeDays, setStatsTimeRangeDays] = useState<7 | 14 | 30 | 90>(14);
 
   const tabOptions: Array<{
     key: OwnerDashboardTab;
@@ -364,6 +394,10 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       }
       
       setStations(stationsData);
+      // Aktualisiere auch Original-Stationen wenn Testdaten-Modus aktiv ist
+      if (testDataEnabled) {
+        setOriginalStations([...stationsData]);
+      }
       setSelectedStationId((prev) => {
         if (prev && stationsData.some((station: Station) => station.id === prev)) {
           return prev;
@@ -390,10 +424,52 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     }
   }, [hasInitialLoad]);
 
-  // Lade Benutzer
-  const fetchUsers = async () => {
+  // Lade Ausleihen (Rentals) der eigenen Stationen für Einnahmen-Statistiken
+  const fetchOwnerRentals = React.useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user || stations.length === 0) {
+      setOwnerRentals([]);
+      return;
+    }
+    setStatsLoading(true);
     try {
-      setLoading(true);
+      const stationIds = stations.map((s) => s.id).filter(Boolean) as string[];
+      if (stationIds.length === 0) {
+        setOwnerRentals([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("rentals")
+        .select("id, station_id, total_price, started_at, ended_at, status")
+        .in("station_id", stationIds)
+        .order("started_at", { ascending: false });
+
+      if (error) {
+        console.warn("Rentals für Statistiken (optional):", error.message);
+        setOwnerRentals([]);
+        return;
+      }
+      const list = (data || []).map((r) => ({
+        id: r.id,
+        station_id: r.station_id,
+        total_price: r.total_price != null ? Number(r.total_price) : null,
+        started_at: r.started_at,
+        ended_at: r.ended_at ?? null,
+        status: r.status ?? "",
+      }));
+      setOwnerRentals(list);
+    } catch (e) {
+      console.warn("Rentals laden:", e);
+      setOwnerRentals([]);
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [stations]);
+
+  // Lade Benutzer (mit Suche und Paginierung)
+  const fetchUsers = React.useCallback(async (opts?: { search?: string; page?: number; pageSize?: number }) => {
+    try {
+      setUsersLoading(true);
       setError(null);
 
       const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -404,42 +480,60 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         throw new Error('Sie müssen eingeloggt sein, um Benutzer zu sehen');
       }
 
-      const response = await fetch('/api/admin/users', {
-        headers: {
-          Authorization: `Bearer ${accessToken}`
-        }
+      const search = opts?.search ?? usersSearchQuery;
+      const page = opts?.page ?? usersPage;
+      const pageSize = opts?.pageSize ?? usersPageSize;
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('search', search.trim());
+      params.set('page', String(page));
+      params.set('pageSize', String(pageSize));
+
+      const response = await fetch(`/api/admin/users?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
 
       if (!response.ok) {
         let message = 'Fehler beim Laden der Benutzer';
         try {
           const body = await response.json();
-          if (body?.message) {
-            message = body.message;
-          }
+          if (body?.message) message = body.message;
         } catch {
-          // ignore JSON parse errors
+          // ignore
         }
         throw new Error(message);
       }
 
       const payload = await response.json();
       const usersData: UserWithRole[] = Array.isArray(payload?.users) ? payload.users : [];
+      const total = typeof payload?.total === 'number' ? payload.total : usersData.length;
       setUsers(usersData);
-      setUsersCount(usersData.length);
+      setUsersCount(total);
+      setUsersTotalCount(total);
+      if (opts?.page != null) setUsersPage(opts.page);
+      if (opts?.pageSize != null) setUsersPageSize(opts.pageSize);
+      if (opts?.search !== undefined) setUsersSearchQuery(opts.search);
     } catch (err) {
       console.error('Fehler beim Laden der Benutzer:', err);
-      // Don't leak specific error details
       setError('Fehler beim Laden der Benutzer. Bitte versuchen Sie es erneut.');
       setUsers([]);
       setUsersCount(null);
+      setUsersTotalCount(null);
     } finally {
-      setLoading(false);
+      setUsersLoading(false);
     }
-  };
+  }, [usersSearchQuery, usersPage, usersPageSize]);
 
   // Lösche Station (with validation and authorization check)
   const deleteStation = async (id: string) => {
+    // Wenn Testdaten aktiviert sind, nur lokale Löschung
+    if (testDataEnabled) {
+      if (!confirm('Sind Sie sicher, dass Sie diese Station löschen möchten? (Testdaten-Modus: Nur lokale Löschung)')) return;
+      setStations(prev => prev.filter(station => station.id !== id));
+      setSelectedStationId(null);
+      console.log('⚠️ Testdaten-Modus: Löschung nur lokal (keine DB-Änderung)');
+      return;
+    }
+
     // Validate ID format
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidPattern.test(id)) {
@@ -499,6 +593,15 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
   // Aktualisiere Station (with validation and authorization)
   const updateStation = async (id: string, updates: Partial<Station>) => {
+    // Wenn Testdaten aktiviert sind, nur lokale Updates (keine DB-Schreibvorgänge)
+    if (testDataEnabled) {
+      setStations(prev => prev.map(station => 
+        station.id === id ? { ...station, ...updates } : station
+      ));
+      console.log('⚠️ Testdaten-Modus: Update nur lokal (keine DB-Änderung)');
+      return;
+    }
+
     // Validate ID format
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidPattern.test(id)) {
@@ -620,6 +723,23 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
   // Füge neue Station hinzu (with validation and error handling)
   const handleAddStation = async (stationData: Omit<Station, 'id' | 'created_at' | 'updated_at'>) => {
+    // Wenn Testdaten aktiviert sind, nur lokale Hinzufügung
+    if (testDataEnabled) {
+      const newStation: Station = {
+        ...stationData,
+        id: `test-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        battery_voltage: 3.7,
+        battery_percentage: 85,
+        available_units: 0,
+      };
+      setStations(prev => [newStation, ...prev]);
+      setShowAddStationForm(false);
+      console.log('⚠️ Testdaten-Modus: Station nur lokal hinzugefügt (keine DB-Änderung)');
+      return;
+    }
+
     try {
       setError(null);
       
@@ -796,14 +916,119 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Nur einmal beim Mount
-  
-  // Lade Users nur wenn Users-Tab geöffnet wird
+
+  // Testdaten-Funktion: Generiert realistische Testdaten für alle Stationen
+  const generateTestData = (baseStations: Station[]): Station[] => {
+    if (baseStations.length === 0) return [];
+    const now = Date.now() / 10000;
+
+    return baseStations.map((station, index) => {
+      const baseVoltage = 3.6 + (index % 3) * 0.1;
+      const basePercentage = 65 + (index % 5) * 8; // 65% - 97%
+      const variation = Math.sin(now + index) * 0.04;
+      const batteryPct = Math.max(0, Math.min(100, Math.round(basePercentage + variation * 100)));
+      // Unterschiedliche Auslastung: manche Stationen voll, manche leer, manche teilweise
+      const occupancyPattern = index % 3; // 0 = oft 1 belegt, 1 = oft leer, 2 = wechselnd
+      const totalUnits = station.total_units ?? 4;
+      const occupied = occupancyPattern === 0 ? 1 : occupancyPattern === 1 ? 0 : (Math.sin(now + index * 2) > 0 ? 1 : 0);
+      const availableUnits = Math.max(0, totalUnits - occupied);
+
+      return {
+        ...station,
+        battery_voltage: baseVoltage + variation,
+        battery_percentage: batteryPct,
+        available_units: availableUnits,
+        updated_at: new Date().toISOString(),
+        is_active: index % 10 !== 2, // eine Station gelegentlich „pausiert“
+      };
+    });
+  };
+
+  // Test-Rentals für Einnahmen-Statistiken (deterministisch, damit Graphen stabil sind)
+  const generateTestRentals = (baseStations: Station[]): Rental[] => {
+    if (baseStations.length === 0) return [];
+    const rentals: Rental[] = [];
+    const stationIds = baseStations.map((s) => s.id).filter(Boolean) as string[];
+    let id = 0;
+    for (let dayOffset = 13; dayOffset >= 0; dayOffset--) {
+      const date = new Date();
+      date.setDate(date.getDate() - dayOffset);
+      date.setHours(8 + (dayOffset % 6), (dayOffset * 7) % 60, 0, 0);
+      const dayStr = date.toISOString().slice(0, 10);
+      const countThisDay = 2 + (dayOffset % 4) + (stationIds.length > 1 ? 1 : 0);
+      for (let i = 0; i < countThisDay; i++) {
+        const stationIndex = (dayOffset + i) % stationIds.length;
+        const price = 1.2 + (stationIndex * 0.5) + (i % 3) * 0.8; // 1.20 € - ca. 5.50 €
+        const start = new Date(date);
+        start.setMinutes(start.getMinutes() + i * 25);
+        const end = new Date(start);
+        end.setMinutes(end.getMinutes() + 15 + (i % 45));
+        rentals.push({
+          id: `test-rental-${id++}`,
+          station_id: stationIds[stationIndex],
+          total_price: Math.round(price * 100) / 100,
+          started_at: start.toISOString(),
+          ended_at: end.toISOString(),
+          status: "finished",
+        });
+      }
+    }
+    return rentals;
+  };
+
+  // Speichere Original-Stationen für Testdaten-Modus
+  const [originalStations, setOriginalStations] = useState<Station[]>([]);
+
+  // Aktiviere/Deaktiviere Testdaten
+  const toggleTestData = async () => {
+    if (!testDataEnabled) {
+      setOriginalStations([...stations]);
+      const testStations = generateTestData(stations);
+      setStations(testStations);
+      setOwnerRentals(generateTestRentals(testStations));
+      setTestDataEnabled(true);
+      console.log('✅ Testdaten aktiviert');
+    } else {
+      setTestDataEnabled(false);
+      setOwnerRentals([]);
+      await fetchStations(false, true);
+      console.log('✅ Testdaten deaktiviert - echte Daten geladen');
+    }
+  };
+
+  // Aktualisiere Testdaten regelmäßig wenn aktiviert
   useEffect(() => {
-    if (activeTab === 'users' && users.length === 0) {
+    if (!testDataEnabled || originalStations.length === 0) return;
+    
+    const interval = setInterval(() => {
+      setStations(prev => {
+        // Verwende Original-Stationen als Basis für konsistente Testdaten
+        const testStations = generateTestData(originalStations);
+        return testStations;
+      });
+      setLastUpdate(new Date());
+    }, 2000); // Alle 2 Sekunden aktualisieren
+    
+    return () => clearInterval(interval);
+  }, [testDataEnabled, originalStations.length]);
+  
+  // Lade Users wenn Users-Tab geöffnet wird (erster Besuch oder bei Wechsel)
+  useEffect(() => {
+    if (activeTab === 'users') {
       fetchUsers();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab]); // fetchUsers nicht in deps, um Endlosschleife zu vermeiden
+
+  // Lade Rentals für Statistiken wenn Statistik-Tab geöffnet wird
+  useEffect(() => {
+    if (activeTab !== 'stats' || stations.length === 0) return;
+    if (testDataEnabled) {
+      setStatsLoading(false);
+      setOwnerRentals(generateTestRentals(originalStations.length > 0 ? originalStations : stations));
+    } else {
+      fetchOwnerRentals();
+    }
+  }, [activeTab, stations.length, testDataEnabled, originalStations, fetchOwnerRentals]);
 
   // Automatische Updates: ROBUSTES System mit Realtime + Polling Backup
   useEffect(() => {
@@ -818,6 +1043,28 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     let channel: any = null;
     let reconnectAttempts = 0;
     const MAX_RECONNECT_ATTEMPTS = 5;
+    let pollingInterval: NodeJS.Timeout | null = null;
+    let realtimeIsActive = false;
+
+    // Funktion zum Starten/Stoppen des Pollings
+    const startPolling = () => {
+      if (pollingInterval || realtimeIsActive) return;
+      console.log('⏱️ Starte Polling-Fallback (alle 30 Sekunden) - Realtime inaktiv');
+      pollingInterval = setInterval(() => {
+        if (isSubscribed && !realtimeIsActive) {
+          console.log('🔄 Polling-Update (Realtime inaktiv)...');
+          fetchStations(true, true); // Silent refresh
+        }
+      }, 30000); // 30 Sekunden statt 8 - reduziert Egress um ~87%
+    };
+
+    const stopPolling = () => {
+      if (pollingInterval) {
+        console.log('⏸️ Stoppe Polling (Realtime aktiv)');
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+      }
+    };
 
     // Funktion zum Starten/Neustarten der Realtime-Verbindung
     const startRealtimeSubscription = () => {
@@ -884,12 +1131,16 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           console.log('📡 Realtime Status:', status);
           
           if (status === 'SUBSCRIBED') {
-            console.log('✅ Realtime aktiv');
+            console.log('✅ Realtime aktiv - Polling wird gestoppt');
+            realtimeIsActive = true;
             setRealtimeActive(true);
             reconnectAttempts = 0;
+            stopPolling(); // Stoppe Polling wenn Realtime aktiv ist
           } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
             console.warn('⚠️ Realtime Fehler:', status);
+            realtimeIsActive = false;
             setRealtimeActive(false);
+            startPolling(); // Starte Polling wenn Realtime nicht funktioniert
             
             // Auto-Reconnect mit exponential backoff
             if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
@@ -902,7 +1153,9 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
             }
           } else if (status === 'CLOSED') {
             console.log('🔌 Realtime geschlossen');
+            realtimeIsActive = false;
             setRealtimeActive(false);
+            startPolling(); // Starte Polling wenn Realtime geschlossen ist
           }
         });
     };
@@ -910,14 +1163,8 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     // Starte Realtime
     startRealtimeSubscription();
 
-    // IMMER Polling als Backup (unabhängig von Realtime-Status)
-    console.log('⏱️ Starte Polling-Backup (alle 8 Sekunden)...');
-    const pollingInterval = setInterval(() => {
-      if (isSubscribed) {
-        console.log('🔄 Polling-Update...');
-        fetchStations(true, true); // Silent refresh
-      }
-    }, 8000); // 8 Sekunden - garantiert Updates
+    // Starte Polling initial als Fallback (wird gestoppt sobald Realtime aktiv ist)
+    startPolling();
 
     // Cleanup
     return () => {
@@ -926,7 +1173,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       if (channel) {
         supabase.removeChannel(channel);
       }
-      clearInterval(pollingInterval);
+      stopPolling();
       setRealtimeActive(false);
     };
   }, [hasInitialLoad, fetchStations]);
@@ -1064,6 +1311,83 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       : null;
   const utilizationPercentage =
     totalCapacity > 0 ? Math.round((totalOccupiedUnits / totalCapacity) * 100) : 0;
+
+  // Rentals im gewählten Zeitraum (Enddatum innerhalb der letzten N Tage)
+  const rentalsInRange = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - statsTimeRangeDays);
+    cutoff.setHours(0, 0, 0, 0);
+    return ownerRentals.filter((r) => {
+      const d = r.ended_at ? new Date(r.ended_at) : new Date(r.started_at);
+      return d >= cutoff && r.status === "finished";
+    });
+  }, [ownerRentals, statsTimeRangeDays]);
+
+  // Einnahmen-Statistiken aus Rentals (nur gewählter Zeitraum)
+  const statsRevenue = useMemo(() => {
+    const finished = rentalsInRange.filter((r) => r.total_price != null && r.total_price > 0);
+    const total = finished.reduce((sum, r) => sum + (r.total_price ?? 0), 0);
+    const now = new Date();
+    const thisMonth = finished.filter((r) => {
+      const d = r.ended_at ? new Date(r.ended_at) : new Date(r.started_at);
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    });
+    const monthTotal = thisMonth.reduce((sum, r) => sum + (r.total_price ?? 0), 0);
+    const count = finished.length;
+    const avg = count > 0 ? total / count : 0;
+    const avgPerDay = statsTimeRangeDays > 0 && count > 0 ? total / statsTimeRangeDays : 0;
+    return { total, monthTotal, count, avg, avgPerDay };
+  }, [rentalsInRange, statsTimeRangeDays]);
+
+  const revenueByDayData = useMemo(() => {
+    const finished = rentalsInRange.filter((r) => r.total_price != null);
+    const byDay: Record<string, number> = {};
+    const days = statsTimeRangeDays;
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      byDay[key] = 0;
+    }
+    finished.forEach((r) => {
+      const dateStr = (r.ended_at ? new Date(r.ended_at) : new Date(r.started_at)).toISOString().slice(0, 10);
+      if (byDay[dateStr] !== undefined) byDay[dateStr] += r.total_price ?? 0;
+    });
+    return Object.entries(byDay)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, value]) => ({ date: date.slice(5), revenue: Math.round(value * 100) / 100 }));
+  }, [rentalsInRange, statsTimeRangeDays]);
+
+  const revenueByStationData = useMemo(() => {
+    const finished = rentalsInRange.filter((r) => r.total_price != null);
+    const byStation: Record<string, number> = {};
+    finished.forEach((r) => {
+      byStation[r.station_id] = (byStation[r.station_id] ?? 0) + (r.total_price ?? 0);
+    });
+    return Object.entries(byStation).map(([stationId, revenue]) => ({
+      name: stations.find((s) => s.id === stationId)?.name ?? stationId.slice(0, 8),
+      revenue: Math.round(revenue * 100) / 100,
+    })).sort((a, b) => b.revenue - a.revenue);
+  }, [rentalsInRange, stations]);
+
+  const rentalsByDayData = useMemo(() => {
+    const finished = rentalsInRange;
+    const byDay: Record<string, number> = {};
+    const days = statsTimeRangeDays;
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      byDay[d.toISOString().slice(0, 10)] = 0;
+    }
+    finished.forEach((r) => {
+      const dateStr = (r.ended_at ? new Date(r.ended_at) : new Date(r.started_at)).toISOString().slice(0, 10);
+      if (byDay[dateStr] !== undefined) byDay[dateStr] += 1;
+    });
+    return Object.entries(byDay)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, count]) => ({ date: date.slice(5), anzahl: count }));
+  }, [rentalsInRange, statsTimeRangeDays]);
+
   const transactionsData = stations.length > 0
     ? stations.slice(0, 8).map((station, index) => ({
         id: station.id ?? `tx-${index}`,
@@ -1138,9 +1462,49 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               <h2 className="text-2xl font-bold leading-tight">Owner Dashboard</h2>
             </div>
           </div>
-          {/* Rechte Seite des Headers - leer für cleanes Design */}
-          <div className="hidden md:flex items-center gap-3">
-            {/* Automatische Updates laufen im Hintergrund - kein UI-Element nötig */}
+          {/* Rechte Seite des Headers - Testdaten Switch */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg border transition-colors ${
+              testDataEnabled
+                ? 'bg-yellow-500/10 border-yellow-500/30'
+                : isDarkMode
+                  ? 'bg-gray-800/50 border-gray-700'
+                  : 'bg-gray-100 border-gray-200'
+            }`}>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={testDataEnabled}
+                  onChange={toggleTestData}
+                  className="sr-only"
+                />
+                <div className={`relative w-10 h-6 rounded-full transition-colors ${
+                  testDataEnabled ? 'bg-yellow-500' : isDarkMode ? 'bg-gray-600' : 'bg-gray-300'
+                }`}>
+                  <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                    testDataEnabled ? 'transform translate-x-4' : ''
+                  }`} />
+                </div>
+                <span className={`text-xs font-medium hidden sm:inline ${
+                  testDataEnabled
+                    ? 'text-yellow-500'
+                    : isDarkMode
+                      ? 'text-gray-400'
+                      : 'text-gray-600'
+                }`}>
+                  {testDataEnabled ? 'Testdaten' : 'Test'}
+                </span>
+              </label>
+            </div>
+            {testDataEnabled && (
+              <span className={`text-xs px-2 py-1 rounded-full hidden sm:inline ${
+                isDarkMode
+                  ? 'bg-yellow-500/20 text-yellow-400'
+                  : 'bg-yellow-100 text-yellow-700'
+              }`}>
+                Demo-Modus
+              </span>
+            )}
           </div>
         </div>
 
@@ -1238,6 +1602,36 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           {/* Content */}
           <div className="flex-1 overflow-y-auto min-h-0 overscroll-contain">
             <div className={`flex h-full flex-col ${isStandalone ? `${contentPadding} pb-8` : ''}`}>
+              {testDataEnabled && (
+                <div
+                  className={`m-4 rounded-2xl border px-4 py-3 ${
+                    isDarkMode
+                      ? 'border-yellow-900/60 bg-yellow-900/10 text-yellow-300'
+                      : 'border-yellow-200 bg-yellow-50 text-yellow-700'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" className="flex-shrink-0 mt-0.5">
+                      <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+                    </svg>
+                    <div className="flex-1">
+                      <p className="font-semibold mb-1">Testdaten-Modus aktiv</p>
+                      <p className="text-sm">Die angezeigten Daten sind simuliert und werden nicht in die Datenbank geschrieben. Alle 2 Sekunden werden neue Testdaten generiert.</p>
+                    </div>
+                    <button
+                      onClick={toggleTestData}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                        isDarkMode
+                          ? 'bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30'
+                          : 'bg-yellow-200 text-yellow-700 hover:bg-yellow-300'
+                      }`}
+                    >
+                      Deaktivieren
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {error && (
                 <div
                   className={`m-4 rounded-2xl border px-4 py-3 ${
@@ -1382,107 +1776,178 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               )}
 
               {activeTab === 'stats' && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  <div className="flex flex-wrap gap-4">
-                    <div
-                      className={`flex-1 min-w-[220px] rounded-2xl border p-4 ${
-                        isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Auslastung</p>
-                      <div className="flex items-end gap-2">
-                        <span className={`text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{utilizationPercentage}%</span>
-                        <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>genutzt</span>
-                      </div>
-                      <div className={`mt-3 h-3 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
-                        <div
-                          className="h-full rounded-full bg-emerald-500 transition-all"
-                          style={{ width: `${utilizationPercentage}%` }}
-                        />
-                      </div>
-                    </div>
-                    <div
-                      className={`flex-1 min-w-[220px] rounded-2xl border p-4 ${
-                        isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Durchschnitt Energie</p>
-                      <div className={`text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                        {averageBattery !== null ? `${averageBattery}%` : 'Keine Daten'}
-                      </div>
-                      <p className={`text-sm mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Batterie aller Stationen</p>
-                    </div>
-                  </div>
-
+                <div className="flex-1 overflow-y-auto p-4 space-y-6">
                   {stations.length === 0 ? (
                     <div className={`rounded-2xl border p-6 text-center text-sm ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
                       Keine Statistiken verfügbar. Bitte füge Stationen hinzu.
                     </div>
                   ) : (
-                    <div className="space-y-3">
-                      {stations.map((station) => {
-                        const hasBatteryData = 
-                          station.battery_voltage !== undefined && 
-                          station.battery_voltage !== null &&
-                          station.battery_percentage !== undefined && 
-                          station.battery_percentage !== null;
-                        const occupiedSlots = hasBatteryData ? 1 : 0;
-                        const utilization =
-                          station.total_units && station.total_units > 0
-                            ? Math.round((occupiedSlots / station.total_units) * 100)
-                            : 0;
-                        return (
-                          <div
-                            key={station.id}
-                            className={`rounded-2xl border p-4 ${
-                              isDarkMode ? 'bg-white/5 border-white/10' : 'border-slate-200 bg-white'
-                            }`}
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{station.name}</p>
-                                <p className={`text-xs uppercase tracking-[0.2em] ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                                  {hasBatteryData ? 1 : 0} / {station.total_units ?? 0} belegt
-                                </p>
-                              </div>
-                              <span
-                                className={`text-xs px-3 py-1 rounded-full ${
-                                  station.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                                }`}
-                              >
-                                {station.is_active ? 'Aktiv' : 'Pausiert'}
-                              </span>
-                            </div>
-                            <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                              <div>
-                                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Auslastung</p>
-                                <p className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{utilization}%</p>
-                                <div className={`mt-1 h-2 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
-                                  <div
-                                    className="h-full rounded-full bg-emerald-500"
-                                    style={{ width: `${utilization}%` }}
+                    <>
+                      {/* Zeitraum-Auswahl */}
+                      <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                        <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Zeitraum</p>
+                        <div className="flex flex-wrap gap-2">
+                          {([7, 14, 30, 90] as const).map((days) => (
+                            <button
+                              key={days}
+                              onClick={() => setStatsTimeRangeDays(days)}
+                              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                                statsTimeRangeDays === days
+                                  ? 'bg-emerald-600 text-white shadow-md'
+                                  : isDarkMode
+                                    ? 'bg-white/10 text-gray-300 hover:bg-white/20'
+                                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                              }`}
+                            >
+                              {days === 7 ? '7 Tage' : days === 14 ? '14 Tage' : days === 30 ? '30 Tage' : '90 Tage'}
+                            </button>
+                          ))}
+                        </div>
+                        <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
+                          Alle Kennzahlen und Graphen beziehen sich auf die letzten {statsTimeRangeDays} Tage.
+                        </p>
+                      </div>
+
+                      {/* Einnahmen-KPIs */}
+                      <div>
+                        <h3 className={`text-sm font-semibold uppercase tracking-wider mb-3 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                          Einnahmen & Ausleihen
+                        </h3>
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Gesamteinnahmen</p>
+                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                              {statsLoading ? '…' : `${statsRevenue.total.toFixed(2)} €`}
+                            </p>
+                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Im gewählten Zeitraum</p>
+                          </div>
+                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Ø pro Tag</p>
+                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {statsLoading ? '…' : `${statsRevenue.avgPerDay.toFixed(2)} €`}
+                            </p>
+                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Durchschnitt pro Tag im Zeitraum</p>
+                          </div>
+                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Anzahl Ausleihen</p>
+                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {statsLoading ? '…' : statsRevenue.count}
+                            </p>
+                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Im gewählten Zeitraum</p>
+                          </div>
+                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Ø pro Ausleihe</p>
+                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {statsLoading ? '…' : statsRevenue.count > 0 ? `${statsRevenue.avg.toFixed(2)} €` : '—'}
+                            </p>
+                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Durchschnittlicher Umsatz pro Ausleihe</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Graphen */}
+                      <div className="grid gap-6 lg:grid-cols-2">
+                        <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
+                          <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Einnahmen im Zeitverlauf ({statsTimeRangeDays} Tage)</p>
+                          {revenueByDayData.some((d) => d.revenue > 0) ? (
+                            <div className="h-[240px] w-full">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={revenueByDayData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'} />
+                                  <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} />
+                                  <YAxis tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} tickFormatter={(v) => `${v} €`} />
+                                  <Tooltip
+                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
+                                    formatter={(value: number | undefined) => [`${value != null ? value.toFixed(2) : '0'} €`, 'Einnahmen']}
+                                    labelFormatter={(label) => `Datum: ${label}`}
                                   />
-                                </div>
-                              </div>
-                              <div>
-                                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Batterie</p>
-                                <p className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                                  {station.battery_percentage !== undefined && station.battery_percentage !== null
-                                    ? `${station.battery_percentage}%`
-                                    : '—'}
-                                </p>
-                              </div>
-                              <div>
-                                <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Letzte Änderung</p>
-                                <p className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                                  {station.updated_at ? new Date(station.updated_at).toLocaleDateString() : '—'}
-                                </p>
-                              </div>
+                                  <Line type="monotone" dataKey="revenue" name="Einnahmen" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 3 }} />
+                                </LineChart>
+                              </ResponsiveContainer>
+                            </div>
+                          ) : (
+                            <div className={`h-[240px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
+                              <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Keine Einnahmen im gewählten Zeitraum</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
+                          <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Einnahmen pro Station</p>
+                          {revenueByStationData.length > 0 ? (
+                            <div className="h-[240px] w-full">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={revenueByStationData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'} />
+                                  <XAxis type="number" tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} tickFormatter={(v) => `${v} €`} />
+                                  <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} />
+                                  <Tooltip
+                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
+                                    formatter={(value: number | undefined) => [`${value != null ? value.toFixed(2) : '0'} €`, 'Einnahmen']}
+                                  />
+                                  <Bar dataKey="revenue" name="Einnahmen" fill="#10b981" radius={[0, 4, 4, 0]} />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            </div>
+                          ) : (
+                            <div className={`h-[240px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
+                              <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Noch keine Einnahmen pro Station</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Ausleihen pro Tag */}
+                      <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
+                        <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Ausleihen pro Tag ({statsTimeRangeDays} Tage)</p>
+                        {rentalsByDayData.some((d) => d.anzahl > 0) ? (
+                          <div className="h-[220px] w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={rentalsByDayData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'} />
+                                <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} />
+                                <YAxis tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} allowDecimals={false} />
+                                <Tooltip
+                                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
+                                  formatter={(value) => [value ?? 0, 'Ausleihen']}
+                                  labelFormatter={(label) => `Datum: ${label}`}
+                                />
+                                <Bar dataKey="anzahl" name="Ausleihen" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        ) : (
+                          <div className={`h-[220px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
+                            <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Keine Ausleihen im gewählten Zeitraum</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Technik-KPIs (Auslastung & Batterie) */}
+                      <div>
+                        <h3 className={`text-sm font-semibold uppercase tracking-wider mb-3 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                          Technik & Auslastung
+                        </h3>
+                        <div className="flex flex-wrap gap-4">
+                          <div className={`flex-1 min-w-[200px] rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Auslastung</p>
+                            <div className="flex items-end gap-2">
+                              <span className={`text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{utilizationPercentage}%</span>
+                              <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>genutzt</span>
+                            </div>
+                            <div className={`mt-3 h-3 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
+                              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${utilizationPercentage}%` }} />
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                          <div className={`flex-1 min-w-[200px] rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
+                            <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Durchschnitt Energie</p>
+                            <div className={`text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {averageBattery !== null ? `${averageBattery}%` : '—'}
+                            </div>
+                            <p className={`text-sm mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Batterie aller Stationen</p>
+                          </div>
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -2026,48 +2491,148 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
           {activeTab === 'users' && (
             <div className="h-full flex flex-col">
-              {/* Benutzer Header */}
+              {/* Benutzer Header + Suche + Pagination */}
               <div className={`${sectionHeaderWrapper} p-4 border ${sectionHeaderClasses}`}>
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <h3 className={`text-lg font-semibold ${
-                    isDarkMode ? 'text-white' : 'text-gray-900'
-                  }`}>
-                    Benutzer ({users.length})
-                  </h3>
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      Benutzer
+                      {usersTotalCount != null && (
+                        <span className={`ml-2 text-sm font-normal ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                          ({usersTotalCount} {usersTotalCount === 1 ? 'Eintrag' : 'Einträge'})
+                        </span>
+                      )}
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative flex-1 sm:flex-initial min-w-[180px]">
+                        <input
+                          type="search"
+                          value={usersSearchQuery}
+                          onChange={(e) => setUsersSearchQuery(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && fetchUsers({ search: usersSearchQuery, page: 1 })}
+                          placeholder="E-Mail durchsuchen…"
+                          className={`w-full sm:w-56 px-3 py-2 pl-9 rounded-lg border text-sm ${
+                            isDarkMode
+                              ? 'bg-white/10 border-white/20 text-white placeholder-gray-500 focus:border-emerald-500'
+                              : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 focus:border-emerald-500'
+                          } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                        />
+                        <span className={`absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`} aria-hidden>
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                          </svg>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => fetchUsers({ search: usersSearchQuery, page: 1 })}
+                        disabled={usersLoading}
+                        className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                      >
+                        Suchen
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`flex flex-wrap items-center justify-between gap-2 border-t pt-3 mt-1 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+                    <div className={`flex items-center gap-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                      <span>Pro Seite:</span>
+                      <select
+                        value={usersPageSize}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          setUsersPageSize(v);
+                          setUsersPage(1);
+                          fetchUsers({ pageSize: v, page: 1 });
+                        }}
+                        className={`px-2 py-1 rounded border text-sm ${
+                          isDarkMode ? 'bg-white/10 border-white/20 text-white' : 'bg-white border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                      {usersTotalCount != null && (
+                        <span>
+                          Zeige {(usersPage - 1) * usersPageSize + 1}–{Math.min(usersPage * usersPageSize, usersTotalCount)} von {usersTotalCount}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => fetchUsers({ page: usersPage - 1 })}
+                        disabled={usersLoading || usersPage <= 1}
+                        className={`p-2 rounded-lg transition-colors disabled:opacity-40 ${
+                          isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
+                        }`}
+                        aria-label="Vorherige Seite"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M15 18l-6-6 6-6"/>
+                        </svg>
+                      </button>
+                      <span className={`min-w-[100px] text-center text-sm ${isDarkMode ? 'text-gray-300' : 'text-slate-600'}`}>
+                        Seite {usersPage}
+                        {usersTotalCount != null && usersPageSize > 0 && (
+                          <> von {Math.ceil(usersTotalCount / usersPageSize) || 1}</>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => fetchUsers({ page: usersPage + 1 })}
+                        disabled={usersLoading || (usersTotalCount != null && usersPage * usersPageSize >= usersTotalCount)}
+                        className={`p-2 rounded-lg transition-colors disabled:opacity-40 ${
+                          isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
+                        }`}
+                        aria-label="Nächste Seite"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M9 18l6-6-6-6"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
               {/* Benutzer Liste */}
               <div className="flex-1 overflow-y-auto p-4">
-                  {loading ? (
-                    <div className="flex items-center justify-center h-32">
-                      <div className="animate-spin rounded-full h-8 w-8 border-2 border-emerald-600 border-t-transparent"></div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {users.map((user) => (
+                {usersLoading ? (
+                  <div className="flex items-center justify-center min-h-[200px]">
+                    <div className="animate-spin rounded-full h-10 w-10 border-2 border-emerald-600 border-t-transparent" />
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {users.length === 0 ? (
+                      <div className={`rounded-xl border p-6 text-center ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+                        {usersSearchQuery.trim()
+                          ? 'Keine Benutzer passen zur Suche. Versuchen Sie einen anderen Suchbegriff.'
+                          : 'Noch keine Benutzer vorhanden.'}
+                      </div>
+                    ) : (
+                      users.map((user) => (
                         <div
                           key={user.user_id}
-                          className={`p-4 rounded-lg border ${
-                            isDarkMode
-                              ? 'bg-white/5 border-white/10'
-                              : 'bg-slate-50 border-slate-200'
+                          className={`p-4 rounded-xl border ${
+                            isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'
                           }`}
                         >
-                          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                            <div>
-                              <h4 className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{user.email}</h4>
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
+                              <h4 className={`font-semibold truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{user.email}</h4>
                               <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
                                 Registriert: {new Date(user.created_at).toLocaleDateString()}
                               </p>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span className={`px-3 py-1 rounded text-sm ${
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <span className={`px-3 py-1 rounded-lg text-sm ${
                                 user.role === 'owner'
                                   ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'
                                   : user.role === 'admin'
-                                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                                  : 'bg-gray-100 text-gray-700 dark:bg-gray-600 dark:text-gray-300'
+                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
+                                    : 'bg-gray-100 text-gray-700 dark:bg-gray-600 dark:text-gray-300'
                               }`}>
                                 {user.role}
                               </span>
@@ -2090,11 +2655,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             </div>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
+            </div>
             )}
           </div>
         </div>

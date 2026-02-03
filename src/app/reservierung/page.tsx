@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
 
 interface Station {
   id: string;
@@ -903,8 +904,8 @@ function ReservierungContent() {
                       <div className="flex items-center gap-3 mb-2">
                         {!imageErrors.has(station.id) ? (
                           <img
-                            src="/Powerbank.png"
-                            alt="Powerbank"
+                            src={station.photo_url ? getAbsoluteStationPhotoUrl(station.photo_url) : "/Powerbank.png"}
+                            alt={station.name}
                             className={`h-10 w-10 rounded-xl object-cover transition-all duration-300 flex-shrink-0 ${
                               selectedStationId === station.id ? 'scale-110' : ''
                             }`}

@@ -45,69 +45,46 @@ function RentPageContent() {
       }
 
       try {
-        // Debug: Log die empfangene Station-ID
-        console.log('🔍 Station-ID empfangen:', stationId);
-        
-        // Sanitize and validate stationId
         const sanitizedStationId = stationId.trim();
         if (!sanitizedStationId || sanitizedStationId.length > 100) {
           setError("Ungültige Station-ID");
           setLoading(false);
           return;
         }
-        
-        // Prüfe ob es ein 4-stelliger Short-Code ist (alphanumeric only)
+
         const isShortCode = /^[A-Z0-9]{4}$/i.test(sanitizedStationId);
-        console.log('📝 Ist Short-Code?', isShortCode);
-        
         let query = supabase
           .from('stations')
           .select('*')
           .eq('is_active', true);
-        
-        // Suche nach Short-Code oder UUID (with validation)
+
         if (isShortCode) {
-          console.log('🔎 Suche nach Short-Code:', sanitizedStationId);
-          // Use exact match for short codes (case-insensitive)
           query = query.ilike('short_code', sanitizedStationId);
         } else {
-          // Validate UUID format to prevent injection
           const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
           if (!uuidPattern.test(sanitizedStationId)) {
-            setError("Ungültige Station-ID Format");
+            setError("Ungültige Station-ID");
             setLoading(false);
             return;
           }
-          console.log('🔎 Suche nach UUID:', sanitizedStationId);
           query = query.eq('id', sanitizedStationId);
         }
-        
+
         const { data, error: fetchError } = await query.single();
 
         if (fetchError) {
-          console.error('❌ Fehler beim Laden der Station:', fetchError);
-          console.error('❌ Fehler-Details:', {
-            message: fetchError.message,
-            details: fetchError.details,
-            hint: fetchError.hint,
-            code: fetchError.code
-          });
-          
-          // Bessere Fehlermeldung basierend auf dem Fehlertyp
           if (fetchError.code === 'PGRST116') {
-            setError(`Station mit ${isShortCode ? 'Code' : 'ID'} "${stationId}" nicht gefunden oder nicht aktiv`);
+            setError(`Station „${stationId}" nicht gefunden`);
           } else {
-            setError(`Station konnte nicht geladen werden: ${fetchError.message}`);
+            setError("Station konnte nicht geladen werden.");
           }
           setLoading(false);
           return;
         }
 
-        console.log('✅ Station gefunden:', data);
         setStation(data);
-      } catch (err) {
-        console.error('❌ Unerwarteter Fehler:', err);
-        setError('Ein unerwarteter Fehler ist aufgetreten');
+      } catch {
+        setError('Station konnte nicht geladen werden.');
       } finally {
         setLoading(false);
       }
@@ -118,73 +95,51 @@ function RentPageContent() {
 
   if (loading) {
     return (
-      <div className={`min-h-screen flex items-center justify-center ${
-        isDarkMode ? 'bg-gray-900' : 'bg-gray-50'
+      <div className={`min-h-screen flex flex-col items-center justify-center gap-4 ${
+        isDarkMode ? "bg-[#0f1419]" : "bg-slate-50"
       }`}>
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-4 border-emerald-600 border-t-transparent mx-auto mb-4"></div>
-          <p className={`text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-            Station wird geladen...
-          </p>
-        </div>
+        <div className="size-12 rounded-full border-[3px] border-emerald-500/30 border-t-emerald-500 animate-spin" />
+        <p className={`text-base font-medium ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>
+          Station wird geladen…
+        </p>
       </div>
     );
   }
 
   if (error || !station) {
     return (
-      <div className={`min-h-screen flex items-center justify-center p-4 ${
-        isDarkMode ? 'bg-gray-900' : 'bg-gray-50'
+      <div className={`min-h-screen flex flex-col items-center justify-center gap-6 p-6 ${
+        isDarkMode ? "bg-[#0f1419]" : "bg-slate-50"
       }`}>
-        <div className={`max-w-md w-full p-8 rounded-2xl shadow-xl ${
-          isDarkMode ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'
+        <div className={`w-full max-w-sm rounded-2xl p-6 text-center shadow-lg ${
+          isDarkMode ? "bg-slate-800/80 text-white" : "bg-white text-slate-900"
         }`}>
-          <div className="text-center">
-            <div className="mb-4">
-              <svg 
-                xmlns="http://www.w3.org/2000/svg" 
-                viewBox="0 0 24 24" 
-                width="64" 
-                height="64" 
-                fill="none" 
-                stroke="currentColor" 
-                strokeWidth="2" 
-                className="mx-auto text-red-500"
-              >
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="15" y1="9" x2="9" y2="15"/>
-                <line x1="9" y1="9" x2="15" y2="15"/>
-              </svg>
-            </div>
-            <h1 className="text-2xl font-bold mb-2">Station nicht gefunden</h1>
-            <p className={`mb-6 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-              {error || 'Die angegebene Station existiert nicht oder ist nicht aktiv.'}
-            </p>
-            <button
-              onClick={() => router.push('/')}
-              className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-medium transition-colors"
-            >
-              Zur Startseite
-            </button>
+          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-full bg-red-500/10">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-500">
+              <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
           </div>
+          <h1 className="text-xl font-semibold mb-1">Station nicht gefunden</h1>
+          <p className={`text-sm mb-6 ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+            {error}
+          </p>
+          <button
+            onClick={() => router.push("/")}
+            className="w-full rounded-xl bg-emerald-600 py-3 font-medium text-white hover:bg-emerald-700 transition-colors"
+          >
+            Zur Startseite
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+    <div className={`min-h-screen ${isDarkMode ? "bg-[#0f1419]" : "bg-slate-50"}`}>
       <RentalConfirmationModal
         station={station}
         onClose={() => router.push('/')}
         onConfirm={async (userEmail?: string, userName?: string) => {
-          console.log('✅ Ausleihe bestätigt:', { 
-            stationId: station.id, 
-            stationName: station.name,
-            userEmail, 
-            userName 
-          });
-          
           try {
             // Hole aktuellen User
             const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -230,15 +185,80 @@ function RentPageContent() {
               throw new Error('Station ist derzeit nicht aktiv.');
             }
 
-            // Erstelle die Ausleihe über die Datenbankfunktion (with validated inputs)
+            // Hole aktuelle Wallet-Balance für Mindest-Guthaben-Check (5 €)
+            const { data: walletData, error: walletError } = await supabase
+              .from('wallets')
+              .select('balance')
+              .eq('user_id', user.id)
+              .single();
+
+            if (walletError || !walletData) {
+              throw new Error('Wallet konnte nicht geladen werden.');
+            }
+
+            const currentBalance = parseFloat(walletData.balance);
+            if (isNaN(currentBalance) || currentBalance < 5) {
+              throw new Error('Du benötigst mindestens 5,00 € Guthaben, um eine Powerbank auszuleihen.');
+            }
+
+            // Hole aktuelle Benutzer-Position (für 100m-Radius-Check)
+            const getPosition = () =>
+              new Promise<GeolocationPosition>((resolve, reject) => {
+                if (!navigator.geolocation) {
+                  reject(new Error('Geolocation wird von deinem Gerät/Browser nicht unterstützt.'));
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => resolve(pos),
+                  (err) => reject(err),
+                  { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+              });
+
+            let userLat: number;
+            let userLng: number;
+
+            try {
+              const position = await getPosition();
+              userLat = position.coords.latitude;
+              userLng = position.coords.longitude;
+            } catch (geoError) {
+              console.error('Geolocation Error:', geoError);
+              throw new Error('Standort konnte nicht ermittelt werden. Bitte Standortzugriff erlauben und erneut versuchen.');
+            }
+
+            // Erstelle die Ausleihe über die Datenbankfunktion (mit Geo- und Guthaben-Check im Backend)
             const { data: rentalData, error: rentalError } = await supabase.rpc('create_rental', {
               p_user_id: user.id,
-              p_station_id: station.id
+              p_station_id: station.id,
+              p_user_lat: userLat,
+              p_user_lng: userLng,
             });
 
             if (rentalError) {
               console.error('Error creating rental:', rentalError);
-              // Don't leak specific database errors
+              const msg = rentalError.message || '';
+
+              // Freundliche Fehlermeldungen basierend auf den Exceptions aus der DB-Funktion
+              if (msg.includes('MIN_BALANCE')) {
+                throw new Error('Du benötigst mindestens 5,00 € Guthaben, um eine Powerbank auszuleihen.');
+              }
+              if (msg.includes('OUT_OF_RANGE')) {
+                throw new Error('Du bist zu weit von der Station entfernt (max. 100m). Bitte näher an die Station gehen.');
+              }
+              if (msg.includes('STATION_NOT_FOUND')) {
+                throw new Error('Station wurde nicht gefunden.');
+              }
+              if (msg.includes('STATION_INACTIVE')) {
+                throw new Error('Diese Station ist derzeit nicht aktiv.');
+              }
+              if (msg.includes('NO_UNITS_AVAILABLE')) {
+                throw new Error('Leider sind an dieser Station aktuell keine Powerbanks verfügbar.');
+              }
+              if (msg.includes('HAS_ACTIVE_RENTAL')) {
+                throw new Error('Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurück.');
+              }
+
               throw new Error('Fehler beim Erstellen der Ausleihe. Bitte versuchen Sie es erneut.');
             }
 
@@ -246,8 +266,6 @@ function RentPageContent() {
               throw new Error('Ausleihe konnte nicht erstellt werden.');
             }
 
-            console.log('✅ Ausleihe erfolgreich erstellt:', rentalData);
-            
             // Push-Benachrichtigung senden
             await notifyRentalSuccess(station.name, '/');
             
@@ -272,11 +290,9 @@ function RentPageContent() {
 export default function RentPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gray-900">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-16 w-16 border-4 border-emerald-600 border-t-transparent mx-auto mb-4"></div>
-          <p className="text-lg text-white">Lädt...</p>
-        </div>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-[#0f1419]">
+        <div className="size-12 rounded-full border-[3px] border-emerald-500/30 border-t-emerald-500 animate-spin" />
+        <p className="text-base font-medium text-slate-300">Station wird geladen…</p>
       </div>
     }>
       <RentPageContent />

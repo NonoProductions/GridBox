@@ -120,12 +120,25 @@ export async function GET(request: Request) {
       );
     }
 
-    // Fetch users with pagination to prevent large responses
-    const { data, error } = await supabaseServer
+    const { searchParams } = new URL(request.url);
+    const search = (searchParams.get("search") || "").trim().slice(0, 200);
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+    const pageSize = Math.min(100, Math.max(10, parseInt(searchParams.get("pageSize") || "20", 10)));
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabaseServer
       .from("profiles")
-      .select("id, email, role, created_at")
+      .select("id, email, role, created_at", { count: "exact" })
       .order("created_at", { ascending: false })
-      .limit(1000); // Reasonable limit
+      .range(from, to);
+
+    if (search.length > 0) {
+      const escaped = search.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+      query = query.ilike("email", `%${escaped}%`);
+    }
+
+    const { data, error, count } = await query;
 
     if (error) {
       console.error("Error loading users:", error);
@@ -135,15 +148,20 @@ export async function GET(request: Request) {
       );
     }
 
-    // Sanitize and map user data
-    const users = (data || []).map((profile) => ({
+    const users = (data || []).map((profile: { id: string; email: string | null; role: string | null; created_at: string }) => ({
       user_id: profile.id,
-      email: profile.email || "", // Ensure email is always a string
+      email: profile.email || "",
       role: profile.role || "user",
       created_at: profile.created_at,
     }));
 
-    return NextResponse.json({ users });
+    return NextResponse.json({
+      users,
+      total: count ?? users.length,
+      page,
+      pageSize,
+      totalPages: count != null ? Math.ceil(count / pageSize) : 1,
+    });
   } catch (error) {
     console.error("Unexpected error in admin/users route:", error);
     return NextResponse.json(

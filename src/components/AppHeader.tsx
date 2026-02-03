@@ -29,7 +29,7 @@ export default function AppHeader() {
     };
   }, []);
 
-  if (!pathname || HIDE_ON.has(pathname)) return null;
+  if (!pathname || HIDE_ON.has(pathname) || pathname.startsWith("/rent")) return null;
 
   return (
     <header className="flex items-center gap-4 px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900">

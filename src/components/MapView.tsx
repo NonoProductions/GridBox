@@ -8,6 +8,7 @@ import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
+import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
 
 // Legacy Station type for backward compatibility
 type LegacyStation = {
@@ -205,6 +206,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
   // Verwende die Stationen direkt vom StationManager
   const stations = stationManager.stations;
+
+  // Im Panel immer aktuelle Stationsdaten anzeigen (z. B. verfügbare Powerbanks)
+  const panelStation = useMemo(
+    () => (selectedStation ? (stations.find((s) => s.id === selectedStation.id) ?? selectedStation) : null),
+    [stations, selectedStation]
+  );
 
   // Debug: Log stations when they change
   useEffect(() => {
@@ -1030,7 +1037,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               </button>
 
               {/* Station Name - größer */}
-              <h3 className="text-base font-semibold mb-4 pr-10">{selectedStation.name}</h3>
+              <h3 className="text-base font-semibold mb-4 pr-10">{panelStation?.name}</h3>
+
+              {/* Verfügbare Powerbanks */}
+              <div className="flex items-center gap-2 mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                  <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
+                </svg>
+                <span className="text-base">
+                  <span className="font-semibold">{panelStation?.available_units ?? 0}</span> verfügbar
+                </span>
+              </div>
 
               {/* Powerbank Bild */}
               <div className="w-full mb-4">
@@ -1093,7 +1110,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               </div>
 
               {/* Öffnungszeiten */}
-              {selectedStation.opening_hours && (
+              {panelStation?.opening_hours && (
                 <div className="flex items-start gap-3 mb-4">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-gray-500 dark:text-gray-400 mt-0.5">
                     <circle cx="12" cy="12" r="10"/>
@@ -1101,7 +1118,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                   </svg>
                   <div className="flex-1">
                     <div className="text-xs opacity-70 mb-1">🕐 Öffnungszeiten</div>
-                    <div className="text-sm">{selectedStation.opening_hours}</div>
+                    <div className="text-sm">{panelStation.opening_hours}</div>
                   </div>
                 </div>
               )}
@@ -1114,14 +1131,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                     {(() => {
                       // Kombiniere photos Array und photo_url (für Rückwärtskompatibilität)
                       const allPhotos: string[] = [];
-                      if (selectedStation.photos && Array.isArray(selectedStation.photos)) {
-                        allPhotos.push(...selectedStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
+                      if (panelStation?.photos && Array.isArray(panelStation.photos)) {
+                        allPhotos.push(...panelStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
                       }
                       // Falls photo_url existiert und noch nicht in photos enthalten ist
-                      if (selectedStation.photo_url && !allPhotos.includes(selectedStation.photo_url)) {
-                        allPhotos.unshift(selectedStation.photo_url);
+                      if (panelStation?.photo_url && !allPhotos.includes(panelStation.photo_url)) {
+                        allPhotos.unshift(panelStation.photo_url);
                       }
-                      const displayPhotos = allPhotos.slice(0, 3); // Maximal 3 Fotos
+                      const displayPhotos = allPhotos
+                        .slice(0, 3)
+                        .map(getAbsoluteStationPhotoUrl)
+                        .filter(Boolean) as string[];
                       
                       // Zeige Foto-Carousel immer an
                       if (displayPhotos.length > 0) {
@@ -1151,28 +1171,28 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                   </div>
 
                   {/* Adresse */}
-                  {selectedStation.address && (
+                  {panelStation?.address && (
                     <div className={`p-3 rounded-lg ${
                       isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
                     }`}>
                       <div className="text-xs opacity-70 mb-1">📍 Adresse</div>
-                      <div className="text-sm">{selectedStation.address}</div>
+                      <div className="text-sm">{panelStation.address}</div>
                     </div>
                   )}
 
                   {/* Beschreibung */}
-                  {selectedStation.description && (
+                  {panelStation?.description && (
                     <div className={`p-3 rounded-lg ${
                       isDarkMode === true ? 'bg-gray-700/30' : 'bg-gray-50'
                     }`}>
                       <div className="text-xs opacity-70 mb-1">ℹ️ Information</div>
-                      <div className="text-sm">{selectedStation.description}</div>
+                      <div className="text-sm">{panelStation.description}</div>
                     </div>
                   )}
 
                   {/* Navigations-Button */}
                   <button
-                    onClick={() => openExternalNavigation(selectedStation)}
+                    onClick={() => panelStation && openExternalNavigation(panelStation)}
                     className={`w-full px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] shadow-sm ${
                       isDarkMode === true
                         ? 'bg-gray-700 hover:bg-gray-600 text-white'
@@ -1403,15 +1423,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       )}
       {showRentalModal && scannedStation && (
         <RentalConfirmationModal
-          station={scannedStation}
+          station={stations.find((s) => s.id === scannedStation.id) ?? scannedStation}
           onClose={() => {
             setShowRentalModal(false);
             setScannedStation(null);
           }}
           onConfirm={async (userEmail?: string, userName?: string) => {
+            const currentStation = stations.find((s) => s.id === scannedStation.id) ?? scannedStation;
             console.log('✅ Ausleihe bestätigt:', { 
               stationId: scannedStation.id, 
-              stationName: scannedStation.name,
+              stationName: currentStation.name,
               userEmail, 
               userName 
             });
@@ -1423,7 +1444,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 .from('stations')
                 .update({ 
                   dispense_requested: true,
-                  available_units: Math.max(0, (scannedStation.available_units || 1) - 1)
+                  available_units: Math.max(0, (currentStation.available_units ?? 1) - 1)
                 })
                 .eq('id', scannedStation.id);
               

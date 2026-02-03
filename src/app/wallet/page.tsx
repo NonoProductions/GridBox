@@ -13,6 +13,14 @@ interface Transaction {
   station_id?: string;
 }
 
+interface ActiveRental {
+  id: string;
+  station_id: string;
+  started_at: string;
+  start_price: number;
+  price_per_minute: number;
+}
+
 function WalletContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -25,6 +33,8 @@ function WalletContent() {
   const [error, setError] = useState<string | null>(null);
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [activeRental, setActiveRental] = useState<ActiveRental | null>(null);
+  const [now, setNow] = useState<number>(Date.now());
 
   // Initialize theme from localStorage or system preference
   useEffect(() => {
@@ -87,6 +97,15 @@ function WalletContent() {
     loadWalletData();
   }, []);
 
+  // Timer für Live-Counter bei aktiver Ausleihe
+  useEffect(() => {
+    if (!activeRental) return;
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [activeRental]);
+
   const loadWalletData = async () => {
     try {
       setInitialLoading(true);
@@ -113,6 +132,28 @@ function WalletContent() {
         setError("Fehler beim Laden des Wallets");
       } else if (walletData) {
         setBalance(parseFloat(walletData.balance));
+      }
+
+      // Prüfe auf aktive Ausleihe für Live-Counter
+      const { data: rentalData, error: rentalError } = await supabase
+        .from('rentals')
+        .select('id, station_id, started_at, start_price, price_per_minute')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (rentalError) {
+        console.error("Rental Fehler:", rentalError);
+      } else if (rentalData) {
+        setActiveRental({
+          id: rentalData.id,
+          station_id: rentalData.station_id,
+          started_at: rentalData.started_at,
+          start_price: parseFloat(rentalData.start_price),
+          price_per_minute: parseFloat(rentalData.price_per_minute),
+        });
+      } else {
+        setActiveRental(null);
       }
 
       // Lade letzte 3 Transaktionen
@@ -207,6 +248,61 @@ function WalletContent() {
 
   const quickAddAmounts = [5, 10, 20, 50];
 
+  const renderActiveRentalBanner = () => {
+    if (!activeRental) return null;
+
+    const start = new Date(activeRental.started_at).getTime();
+    const diffMs = now - start;
+    const totalSeconds = Math.max(0, Math.floor(diffMs / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    const minutesAsDecimal = diffMs / 60000; // für Preisberechnung
+    const currentPrice =
+      activeRental.start_price +
+      Math.max(0, minutesAsDecimal) * activeRental.price_per_minute;
+
+    return (
+      <div className="px-4 py-3 rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-700/60 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+            Aktive Ausleihe
+          </div>
+          <div className="text-sm text-slate-800 dark:text-white mt-1">
+            Dauer:{" "}
+            <span className="font-semibold">
+              {minutes.toString().padStart(2, "0")}:
+              {seconds.toString().padStart(2, "0")} Min
+            </span>
+          </div>
+          <div className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+            Aktueller Preis:{" "}
+            <span className="font-semibold">
+              €{currentPrice.toFixed(2)}
+            </span>{" "}
+            (inkl. Startpreis)
+          </div>
+        </div>
+        <div className="flex items-center justify-center h-10 w-10 rounded-full bg-emerald-600 text-white">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        </div>
+      </div>
+    );
+  };
+
   if (initialLoading) {
     return (
       <main className="min-h-[calc(100vh-0px)] flex items-center justify-center bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
@@ -275,6 +371,9 @@ function WalletContent() {
             Geld hinzufügen
           </button>
         </div>
+
+        {/* Aktive Ausleihe – Live Counter */}
+        {renderActiveRentalBanner()}
 
         {/* Quick Add Money - Minimalistisch */}
         {showAddMoney && (

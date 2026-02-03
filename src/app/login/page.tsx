@@ -11,16 +11,46 @@ function LoginContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [supabaseConfigured, setSupabaseConfigured] = useState(true);
 
-  // Get return URL from query params
   const returnUrl = searchParams.get('returnUrl') || '/app';
+  const isFromRental = returnUrl.startsWith('/rent/');
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
-  // Save returnUrl to localStorage so auth callback can use it (with validation)
+  // Timer: 10 Min Reserve für Powerbank (nur bei Ausleihe)
+  useEffect(() => {
+    if (!isFromRental || typeof window === 'undefined') return;
+    const KEY = 'rental_reservation_end';
+    let endMs = parseInt(sessionStorage.getItem(KEY) || '0', 10);
+    if (!endMs || endMs <= Date.now()) {
+      endMs = Date.now() + 10 * 60 * 1000;
+      sessionStorage.setItem(KEY, String(endMs));
+    }
+    const tick = () => {
+      setTimeLeft(Math.max(0, Math.floor((endMs - Date.now()) / 1000)));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isFromRental]);
+
+  // Theme aus URL oder System
+  const theme = searchParams.get("theme");
+  const [isDarkMode, setIsDarkMode] = useState(true);
+  
+  useEffect(() => {
+    if (theme === "light") {
+      setIsDarkMode(false);
+    } else if (theme === "dark") {
+      setIsDarkMode(true);
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      setIsDarkMode(prefersDark);
+    }
+  }, [theme]);
+
   useEffect(() => {
     if (returnUrl && returnUrl !== '/app') {
       try {
-        // Validate return URL to prevent open redirect
         const url = new URL(returnUrl, window.location.origin);
-        // Only allow same-origin URLs
         if (url.origin === window.location.origin && url.pathname.startsWith('/')) {
           localStorage.setItem('auth_return_url', url.pathname + url.search);
         }
@@ -33,25 +63,19 @@ function LoginContent() {
   useEffect(() => {
     const checkSession = async () => {
       try {
-        // Check if Supabase is properly configured
         if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-          console.error("⚠️ Supabase not configured - please add environment variables to Vercel");
-          console.error("Missing variables:");
-          console.error("- NEXT_PUBLIC_SUPABASE_URL");
-          console.error("- NEXT_PUBLIC_SUPABASE_ANON_KEY");
+          console.error("⚠️ Supabase not configured");
           setSupabaseConfigured(false);
           setIsLoading(false);
           return;
         }
         
-        // Set a timeout to prevent infinite loading
         const timeoutId = setTimeout(() => {
-          console.warn("⏱️ Session check timeout - continuing anyway");
+          console.warn("⏱️ Session check timeout");
           setIsLoading(false);
-        }, 5000); // 5 seconds timeout
+        }, 5000);
         
         const { data, error } = await supabase.auth.getSession();
-        
         clearTimeout(timeoutId);
         
         if (error) {
@@ -61,7 +85,7 @@ function LoginContent() {
         }
         
         if (data.session) {
-          // Benutzer ist eingeloggt, leite zur gewünschten Seite weiter
+          sessionStorage.removeItem('rental_reservation_end');
           router.replace(returnUrl);
         } else {
           setIsLoading(false);
@@ -74,9 +98,9 @@ function LoginContent() {
 
     checkSession();
 
-    // Auth State Listener - bei Login automatisch zur gewünschten Seite weiterleiten
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
+        sessionStorage.removeItem('rental_reservation_end');
         router.replace(returnUrl);
       }
     });
@@ -88,71 +112,93 @@ function LoginContent() {
 
   if (isLoading) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-50 via-slate-50 to-emerald-50 dark:from-gray-900 dark:via-black dark:to-gray-900">
-        <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-500 border-t-transparent"></div>
-          <div className="text-slate-600 dark:text-slate-400 font-medium">Lädt...</div>
-        </div>
+      <div 
+        className="fixed inset-0 flex items-center justify-center"
+        style={{ backgroundColor: isDarkMode ? '#282828' : 'white' }}
+      >
+        <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
       </div>
     );
   }
 
-  // Show configuration error if Supabase is not configured
   if (!supabaseConfigured) {
     return (
-      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-red-50 via-slate-50 to-red-50 dark:from-gray-900 dark:via-black dark:to-gray-900 overflow-auto py-8">
-        <div className="max-w-md mx-auto p-8 bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-red-200 dark:border-red-800">
-          <div className="text-center">
-            <div className="w-16 h-16 mx-auto mb-4 bg-red-100 dark:bg-red-900 rounded-full flex items-center justify-center">
-              <svg className="w-8 h-8 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L4.268 16.5c-.77.833.192 2.5 1.732 2.5z" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Konfigurationsfehler</h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-              Supabase-Umgebungsvariablen sind nicht konfiguriert. Bitte füge die folgenden Variablen in Vercel hinzu:
-            </p>
-            <div className="bg-gray-100 dark:bg-gray-700 p-3 rounded-lg text-sm font-mono text-left mb-4">
-              <div>NEXT_PUBLIC_SUPABASE_URL</div>
-              <div>NEXT_PUBLIC_SUPABASE_ANON_KEY</div>
-            </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Öffne die Browser-Konsole (F12) für detaillierte Fehlermeldungen.
-            </p>
-          </div>
+      <div 
+        className="fixed inset-0 flex items-center justify-center p-4"
+        style={{ backgroundColor: isDarkMode ? '#282828' : 'white' }}
+      >
+        <div className={`max-w-md p-8 rounded-2xl ${
+          isDarkMode ? 'bg-gray-800/50 text-white' : 'bg-white shadow-xl text-slate-900'
+        }`}>
+          <h2 className="text-xl font-semibold mb-2">Konfigurationsfehler</h2>
+          <p className={`mb-4 ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
+            Supabase-Umgebungsvariablen sind nicht konfiguriert.
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-50 via-slate-50 to-emerald-50 dark:from-gray-900 dark:via-black dark:to-gray-900 overflow-auto py-8">
+    <div 
+      className="fixed inset-0 flex items-start justify-center overflow-auto py-8 pt-16"
+      style={{ backgroundColor: isDarkMode ? '#282828' : 'white' }}
+    >
       {/* Back button */}
-      <div className="absolute top-4 left-4 z-20">
+      <div className="absolute top-5 left-5 z-20">
         <button
           type="button"
-          onClick={() => {
-            const theme = searchParams.get("theme");
-            router.push(`/${theme ? `?theme=${theme}` : ''}`);
-          }}
+          onClick={() => router.push(isFromRental ? returnUrl : `/${theme ? `?theme=${theme}` : ''}`)}
           aria-label="Zurück"
-          className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg"
+          className={`grid place-items-center h-10 w-10 rounded-full transition-colors ${
+            isDarkMode 
+              ? 'bg-gray-700/50 text-white hover:bg-gray-600' 
+              : 'bg-gray-100 text-slate-900 hover:bg-gray-200'
+          }`}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15,18 9,12 15,6" />
           </svg>
         </button>
       </div>
-
-      {/* Animated background elements */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald-400/10 rounded-full blur-3xl animate-pulse delay-700"></div>
-      </div>
       
       {/* Login content */}
-      <div className="relative z-10">
-        <LoginCard />
+      <div className="relative z-10 w-full max-w-md px-5 flex flex-col items-center gap-6">
+        {/* Step-Indikator 1 und 2 + Timer (nur bei Ausleihe) */}
+        {isFromRental && (
+          <div className="flex flex-col items-center gap-3 w-full">
+            <div className="flex items-center justify-center gap-2">
+              <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium bg-emerald-600 text-white">
+                1
+              </div>
+              <div className={`w-8 h-0.5 mx-2 ${isDarkMode ? 'bg-white/20' : 'bg-slate-200'}`} />
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                isDarkMode ? 'bg-white/20 text-white/60' : 'bg-slate-200 text-slate-500'
+              }`}>
+                2
+              </div>
+            </div>
+            {timeLeft !== null && (
+              <div className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium ${
+                timeLeft === 0
+                  ? (isDarkMode ? 'bg-red-900/40 text-red-400' : 'bg-red-100 text-red-700')
+                  : (isDarkMode ? 'bg-emerald-900/40 text-emerald-300' : 'bg-emerald-100 text-emerald-800')
+              }`}>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                {timeLeft === 0 ? (
+                  <span>Reservierung abgelaufen</span>
+                ) : (
+                  <span>{String(Math.floor(timeLeft / 60)).padStart(2, '0')}:{String(timeLeft % 60).padStart(2, '0')} Powerbank reserviert</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        
+        <LoginCard isDarkMode={isDarkMode} isFromRental={isFromRental} />
       </div>
     </div>
   );
@@ -161,11 +207,8 @@ function LoginContent() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-emerald-50 via-slate-50 to-emerald-50 dark:from-gray-900 dark:via-black dark:to-gray-900">
-        <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-500 border-t-transparent"></div>
-          <div className="text-slate-600 dark:text-slate-400 font-medium">Lädt...</div>
-        </div>
+      <div className="fixed inset-0 flex items-center justify-center" style={{ backgroundColor: '#282828' }}>
+        <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
       </div>
     }>
       <LoginContent />
