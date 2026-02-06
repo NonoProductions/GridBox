@@ -305,6 +305,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const navigationSourceRef = useRef<string | null>(null);
   const touchStartY = useRef<number>(0);
   const isDragging = useRef(false);
+  const userLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const orientationThrottleRef = useRef<number>(0);
 
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
   const stationManager = StationManager({ 
@@ -326,15 +328,21 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     console.log('Stations updated:', stations.length, stations);
   }, [stations]);
 
-  // Read theme from initial prop
+  // Read theme from initial prop and sync with document + localStorage (so Light Mode works)
   useEffect(() => {
     if (initialTheme === "light") {
+      document.documentElement.classList.remove("dark");
+      if (typeof localStorage !== "undefined") localStorage.setItem("theme", "light");
       setIsDarkMode(false);
     } else if (initialTheme === "dark") {
+      document.documentElement.classList.add("dark");
+      if (typeof localStorage !== "undefined") localStorage.setItem("theme", "dark");
       setIsDarkMode(true);
     } else {
-      // Default to dark mode if no theme parameter
-      setIsDarkMode(true);
+      // No URL param: use localStorage or current document class (set by ThemeScript)
+      const saved = typeof localStorage !== "undefined" ? localStorage.getItem("theme") : null;
+      const useDark = saved ? saved === "dark" : document.documentElement.classList.contains("dark");
+      setIsDarkMode(useDark);
     }
   }, [initialTheme]);
 
@@ -355,9 +363,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         // Versuche Standort zu erhalten - das triggert die Berechtigungsanfrage
         navigator.geolocation.getCurrentPosition(
-          (position) => {
+            (position) => {
             const { latitude, longitude, heading } = position.coords;
-            setUserLocation({ lat: latitude, lng: longitude });
+            const loc = { lat: latitude, lng: longitude };
+            userLocationRef.current = loc;
+            setUserLocation(loc);
             if (heading !== null && !isNaN(heading)) {
               setUserHeading(heading);
             }
@@ -437,7 +447,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude, heading } = position.coords;
-        setUserLocation({ lat: latitude, lng: longitude });
+        const loc = { lat: latitude, lng: longitude };
+        userLocationRef.current = loc;
+        setUserLocation(loc);
         if (heading !== null && !isNaN(heading)) {
           setUserHeading(heading);
         }
@@ -972,6 +984,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const newLocation = { lat: latitude, lng: longitude };
         
         // Update user location and heading
+        userLocationRef.current = newLocation;
         setUserLocation(newLocation);
         
         // Verbesserte Heading-Verarbeitung für mobile Geräte
@@ -1043,7 +1056,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 500, // Akzeptiere GPS-Daten die bis zu 0.5 Sekunde alt sind
+        maximumAge: 150, // Frische Updates für flüssige Standort-Anzeige beim Bewegen (~alle 1–2 s)
         timeout: 10000
       }
     );
@@ -1062,40 +1075,43 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   };
 
 
-  // Function to update user marker with direction
+  // Function to update user marker with direction (cone shows which way the user is facing)
   const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null, forceNavigationMode?: boolean) => {
     if (!mapRef.current) return;
     
     try {
       const map = mapRef.current;
+      const headingDeg = heading != null && !isNaN(heading) ? heading : 0;
       
-      // Get current map bearing for 3D mode
-      const mapBearing = map.getBearing();
-      const mapPitch = map.getPitch();
-      const isIn3DMode = mapPitch > 30; // Consider 3D mode if pitch > 30 degrees
-      
-      // Check if marker already exists
+      // Marker already exists: update position and rotation of direction cone
       if (userMarkerRef.current) {
-        // Just update position - no direction indicator needed
         userMarkerRef.current.setLngLat([location.lng, location.lat]);
-        return; // Exit early if marker already exists
+        const el = userMarkerRef.current.getElement();
+        const rotatable = el?.querySelector('.user-marker-heading');
+        if (rotatable) {
+          rotatable.setAttribute('transform', `rotate(${headingDeg} 12 12)`);
+        }
+        return;
       }
       
-      // Create new marker
+      // Create new marker with direction cone (oriented to map North = real North)
       const userElement = document.createElement('div');
-      
-      // Always show simple marker - no direction indicator
       userElement.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.25)" />
-          <circle cx="12" cy="12" r="5" fill="#10b981" />
+        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24">
+          <!-- Outer circle (position) -->
+          <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.2)" />
+          <circle cx="12" cy="12" r="6" fill="#10b981" />
+          <!-- Direction cone: points North by default, rotated by heading -->
+          <g class="user-marker-heading" transform="rotate(${headingDeg} 12 12)">
+            <path d="M12 2 L18 14 L12 11 L6 14 Z" fill="rgba(16,185,129,0.85)" stroke="#059669" stroke-width="1" stroke-linejoin="round"/>
+          </g>
         </svg>
       `;
-      userElement.style.width = '28px';
-      userElement.style.height = '28px';
+      userElement.style.width = '40px';
+      userElement.style.height = '40px';
       userElement.style.cursor = 'pointer';
+      userElement.style.pointerEvents = 'auto';
       
-      // Add user marker
       const userMarker = new mapboxgl.Marker({
         element: userElement,
         anchor: 'center'
@@ -1104,7 +1120,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .addTo(map);
       
       userMarkerRef.current = userMarker;
-      console.log('User marker updated: normal mode', 'heading:', heading);
     } catch (error) {
       console.error('Error updating user marker:', error);
     }
@@ -1547,38 +1562,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     setNearbyStations(nearby);
   }, [userLocation, stations]);
 
-  // Device orientation tracking for map rotation
+  // Device orientation tracking for map rotation (Richtung auf der Karte)
   useEffect(() => {
     const handleOrientationChange = (event: DeviceOrientationEvent) => {
-      console.log('Device Orientation Event:', {
-        alpha: event.alpha,
-        beta: event.beta,
-        gamma: event.gamma,
-        absolute: event.absolute
-      });
-      
-      if (event.alpha !== null) {
-        // Device Orientation Event: alpha = rotation around z-axis (compass heading)
-        // 0° = Norden, 90° = Osten, 180° = Süden, 270° = Westen
-        // Für die Karte müssen wir das umkehren: 0° = Norden auf der Karte
-        let compassHeading = event.alpha;
-        
-        // Normalisiere auf 0-360°
-        if (compassHeading < 0) {
-          compassHeading += 360;
-        }
-        
-        setDeviceOrientation(compassHeading);
-        
-        // Update user heading with compass data for better accuracy
-        setUserHeading(compassHeading);
-        
-        // Update user marker with new compass orientation
-        if (userLocation) {
-          updateUserMarker(userLocation, compassHeading, isNavigating);
-        }
-        
-        console.log('Compass heading updated:', compassHeading, 'degrees');
+      if (event.alpha === null) return;
+      const now = Date.now();
+      if (now - orientationThrottleRef.current < 50) return; // ~20 Updates/s für flüssige Drehung
+      orientationThrottleRef.current = now;
+
+      // alpha = Kompass: 0° Norden, 90° Osten, 180° Süden, 270° Westen (entspricht Karte)
+      let compassHeading = event.alpha;
+      if (compassHeading < 0) compassHeading += 360;
+
+      setDeviceOrientation(compassHeading);
+      setUserHeading(compassHeading);
+
+      const latestLocation = userLocationRef.current ?? userLocation;
+      if (latestLocation) {
+        updateUserMarker(latestLocation, compassHeading, isNavigating);
       }
     };
 
@@ -1674,7 +1675,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         });
 
         mapRef.current = map;
-        console.log('Mapbox map initialized successfully:', map);
+        // Wichtig: Map-Instanz nicht direkt loggen, sonst wirft der Browser bei Next.js/Turbopack
+        // einen SecurityError wegen cross-origin Properties (z.B. toJSON auf Window).
+        console.log('Mapbox map initialized successfully');
         console.log('Map center set to:', center);
 
         // Add event listeners for map interactions
@@ -1727,6 +1730,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           // Use updateUserMarker function to get proper direction display
           updateUserMarker(userLocation, userHeading, false);
           console.log('User marker added at:', userLocation, 'with heading:', userHeading);
+        }
+
+        // Standort fortlaufend aktualisieren für flüssige Bewegung auf der Karte
+        if (watchId === null && navigator.geolocation) {
+          startLocationTracking();
         }
 
         // Force map to invalidate size and render
@@ -1818,10 +1826,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           essential: true
         });
       }
-    } else if (!isFollowingLocation && !isNavigating && watchId !== null) {
-      // Following-Modus deaktiviert - stoppe Location Tracking nur wenn es läuft
-      console.log('Following mode deactivated - stopping location tracking');
-      stopLocationTracking();
+    } else if (!isFollowingLocation && !isNavigating) {
+      // Following deaktiviert – Standort-Updates laufen weiter für flüssige Marker-Bewegung
+      // Watch wird nur beim Unmount gestoppt
       
       // Zurück zur 2D-Ansicht
       if (mapRef.current) {
@@ -2250,7 +2257,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           type="button"
           onClick={() => setMenuOpen(true)}
           aria-label="Account & Einstellungen"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
+          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-transform duration-200 hover:scale-105 active:scale-95 pointer-events-auto ${
             isDarkMode === true
               ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
               : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
@@ -2467,49 +2474,26 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               {/* Erweiterte Informationen - nur wenn Panel erweitert ist */}
               {isPanelExpanded && (
                 <div className="mt-4 space-y-3">
-                  {/* FOTO-CAROUSEL BEREICH */}
-                  <div className="w-full">
-                    {(() => {
-                      // Kombiniere photos Array und photo_url (für Rückwärtskompatibilität)
-                      const allPhotos: string[] = [];
-                      if (panelStation?.photos && Array.isArray(panelStation.photos)) {
-                        allPhotos.push(...panelStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
-                      }
-                      // Falls photo_url existiert und noch nicht in photos enthalten ist
-                      if (panelStation?.photo_url && !allPhotos.includes(panelStation.photo_url)) {
-                        allPhotos.unshift(panelStation.photo_url);
-                      }
-                      const displayPhotos = allPhotos
-                        .slice(0, 3)
-                        .map(getAbsoluteStationPhotoUrl)
-                        .filter(Boolean) as string[];
-                      
-                      // Zeige Foto-Carousel immer an
-                      if (displayPhotos.length > 0) {
-                        return <PhotoCarousel photos={displayPhotos} isDarkMode={isDarkMode === true} />;
-                      } else {
-                        return (
-                          <div className={`w-full h-64 rounded-xl flex items-center justify-center border-2 border-dashed ${
-                            isDarkMode === true ? 'bg-gray-700/30 border-gray-600' : 'bg-gray-50 border-gray-300'
-                          }`}>
-                            <div className="text-center">
-                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={`mx-auto mb-2 ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                                <circle cx="8.5" cy="8.5" r="1.5"/>
-                                <polyline points="21 15 16 10 5 21"/>
-                              </svg>
-                              <p className={`text-sm font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                Noch keine Fotos vorhanden
-                              </p>
-                              <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                Fotos können im Dashboard hinzugefügt werden
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      }
-                    })()}
-                  </div>
+                  {/* FOTO-CAROUSEL – nur anzeigen, wenn der Owner Fotos hinzugefügt hat */}
+                  {(() => {
+                    const allPhotos: string[] = [];
+                    if (panelStation?.photos && Array.isArray(panelStation.photos)) {
+                      allPhotos.push(...panelStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
+                    }
+                    if (panelStation?.photo_url && !allPhotos.includes(panelStation.photo_url)) {
+                      allPhotos.unshift(panelStation.photo_url);
+                    }
+                    const displayPhotos = allPhotos
+                      .slice(0, 3)
+                      .map(getAbsoluteStationPhotoUrl)
+                      .filter(Boolean) as string[];
+                    if (displayPhotos.length === 0) return null;
+                    return (
+                      <div className="w-full">
+                        <PhotoCarousel photos={displayPhotos} isDarkMode={isDarkMode === true} />
+                      </div>
+                    );
+                  })()}
 
                   {/* Öffnungszeiten */}
                   {panelStation?.opening_hours && (
@@ -3121,6 +3105,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         isDarkMode={isDarkMode === true}
         onToggleTheme={() => {
           const newTheme = isDarkMode === false ? "dark" : "light";
+          if (typeof localStorage !== "undefined") localStorage.setItem("theme", newTheme);
+          if (newTheme === "light") document.documentElement.classList.remove("dark");
+          else document.documentElement.classList.add("dark");
           const url = new URL(window.location.href);
           url.searchParams.set("theme", newTheme);
           window.location.href = url.toString();

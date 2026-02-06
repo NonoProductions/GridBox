@@ -2,95 +2,13 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { usePageTheme } from "@/lib/usePageTheme";
 
 function HilfeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [expandedFAQ, setExpandedFAQ] = useState<number | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-
-  // Initialize theme from localStorage or system preference
-  useEffect(() => {
-    const initializeTheme = () => {
-      if (typeof window === "undefined") return;
-      
-      // Check URL parameter first (for navigation from other pages)
-      const themeParam = searchParams.get("theme");
-      if (themeParam === "light" || themeParam === "dark") {
-        const shouldBeDark = themeParam === "dark";
-        setIsDarkMode(shouldBeDark);
-        if (shouldBeDark) {
-          document.documentElement.classList.add("dark");
-        } else {
-          document.documentElement.classList.remove("dark");
-        }
-        localStorage.setItem("theme", themeParam);
-        return;
-      }
-      
-      // First check current DOM state (set by ThemeScript in layout)
-      const currentlyDark = document.documentElement.classList.contains("dark");
-      
-      // Then check localStorage
-      const saved = localStorage.getItem("theme");
-      
-      // Determine what theme should be
-      let shouldBeDark: boolean;
-      if (saved) {
-        shouldBeDark = saved === "dark";
-      } else {
-        // If no saved preference, use current DOM state (which was set by ThemeScript)
-        shouldBeDark = currentlyDark;
-      }
-      
-      setIsDarkMode(shouldBeDark);
-      // Explicitly set the class instead of toggle
-      if (shouldBeDark) {
-        document.documentElement.classList.add("dark");
-      } else {
-        document.documentElement.classList.remove("dark");
-      }
-    };
-
-    initializeTheme();
-
-    // Listen for storage changes (e.g., from other tabs)
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "theme") {
-        const newTheme = e.newValue;
-        const shouldBeDark = newTheme === "dark";
-        setIsDarkMode(shouldBeDark);
-        if (shouldBeDark) {
-          document.documentElement.classList.add("dark");
-        } else {
-          document.documentElement.classList.remove("dark");
-        }
-      }
-    };
-
-    // Listen for system theme changes
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleMediaChange = (e: MediaQueryListEvent) => {
-      const saved = localStorage.getItem("theme");
-      // Only update if no manual preference is saved
-      if (!saved) {
-        setIsDarkMode(e.matches);
-        if (e.matches) {
-          document.documentElement.classList.add("dark");
-        } else {
-          document.documentElement.classList.remove("dark");
-        }
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    mediaQuery.addEventListener("change", handleMediaChange);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      mediaQuery.removeEventListener("change", handleMediaChange);
-    };
-  }, [searchParams]);
+  const isDarkMode = usePageTheme(searchParams);
 
   const faqs = [
     {

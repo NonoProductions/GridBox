@@ -1,7 +1,9 @@
 import "./globals.css";
+import { Suspense } from "react";
 import AuthGate from "@/components/AuthGate";
 import AppHeader from "@/components/AppHeader";
 import NotificationManager from "@/components/NotificationManager";
+import ThemeSync from "@/components/ThemeSync";
 
 export const metadata = { 
   title: "GridBox - Powerbank ausleihen",
@@ -36,22 +38,22 @@ const ThemeScript = () => (
       __html: `
 (function(){
   try {
-    const saved = localStorage.getItem('theme');
-    // Validate saved theme value to prevent XSS
-    const validThemes = ['dark', 'light'];
-    const isValidTheme = saved && validThemes.includes(saved);
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const useDark = isValidTheme ? saved === 'dark' : prefersDark;
-    
-    // Entferne alle dark classes und setze sie explizit
-    document.documentElement.classList.remove('dark');
-    if (useDark) {
-      document.documentElement.classList.add('dark');
+    var q = window.location.search || '';
+    var match = /[?&]theme=(light|dark)/i.exec(q);
+    var fromUrl = match ? match[1].toLowerCase() : null;
+    var useDark;
+    if (fromUrl === 'light') { useDark = false; localStorage.setItem('theme','light'); }
+    else if (fromUrl === 'dark') { useDark = true; localStorage.setItem('theme','dark'); }
+    else {
+      var saved = localStorage.getItem('theme');
+      var validThemes = ['dark', 'light'];
+      var isValidTheme = saved && validThemes.indexOf(saved) !== -1;
+      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      useDark = isValidTheme ? saved === 'dark' : prefersDark;
     }
-  } catch (e) {
-    // Silently fail - don't expose errors
-    console.error('Theme initialization error');
-  }
+    document.documentElement.classList.remove('dark');
+    if (useDark) document.documentElement.classList.add('dark');
+  } catch (e) { console.error('Theme init'); }
 })();
 `,
     }}
@@ -78,7 +80,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
         <ThemeScript />
       </head>
-      <body className="bg-slate-50 text-slate-900 dark:bg-black dark:text-slate-100">
+      <body className="bg-slate-50 text-slate-900 dark:bg-[#0f1419] dark:text-slate-100">
+        <Suspense fallback={null}>
+          <ThemeSync />
+        </Suspense>
         <NotificationManager />
         <AppHeader />
         <AuthGate />

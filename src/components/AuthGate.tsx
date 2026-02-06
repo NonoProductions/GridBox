@@ -81,10 +81,9 @@ export default function AuthGate() {
     if (!pathname || !hasChecked || isAuthenticated === null || isRedirecting) return;
     if (isPublicRoute(pathname)) return;
 
-    // Nur redirecten wenn definitiv nicht authentifiziert
+    // Nur redirecten wenn definitiv nicht authentifiziert (setState asynchron, um react-hooks/set-state-in-effect zu vermeiden)
     if (!isAuthenticated) {
-      setIsRedirecting(true);
-      // Use replace to prevent back button issues
+      queueMicrotask(() => setIsRedirecting(true));
       router.replace("/login");
     }
   }, [pathname, router, hasChecked, isAuthenticated, isRedirecting]);

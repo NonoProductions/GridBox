@@ -1,12 +1,16 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import CameraOverlay from '@/components/CameraOverlay';
 import StationQRCode from '@/components/StationQRCode';
 import { supabase } from '@/lib/supabaseClient';
 import { Station } from '@/components/StationManager';
+import { usePageTheme } from '@/lib/usePageTheme';
 
-export default function QRTestPage() {
+function QRTestContent() {
+  const searchParams = useSearchParams();
+  usePageTheme(searchParams);
   const [showCamera, setShowCamera] = useState(false);
   const [scannedStationId, setScannedStationId] = useState<string | null>(null);
   const [scannedStation, setScannedStation] = useState<Station | null>(null);
@@ -213,3 +217,10 @@ export default function QRTestPage() {
   );
 }
 
+export default function QRTestPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">Lädt...</div>}>
+      <QRTestContent />
+    </Suspense>
+  );
+}

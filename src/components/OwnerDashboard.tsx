@@ -1654,8 +1654,8 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                         <div className="mt-2 space-y-2">
                           <p>1. Öffne die Browser-Konsole (F12) und suche nach Fehlermeldungen</p>
                           <p>2. Prüfe ob du eingeloggt bist</p>
-                          <p>3. Führe die SQL-Datei "supabase_diagnose_stations.sql" in Supabase aus</p>
-                          <p>4. Siehe "DASHBOARD_STATIONEN_FIX.md" für Details</p>
+                          <p>3. Führe die SQL-Datei &quot;supabase_diagnose_stations.sql&quot; in Supabase aus</p>
+                          <p>4. Siehe &quot;DASHBOARD_STATIONEN_FIX.md&quot; für Details</p>
                         </div>
                       </details>
                     </div>
@@ -2213,7 +2213,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                           Slot-Status & Powerbank-Daten
                         </h5>
                         <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          Powerbanks werden nur als "eingelegt" angezeigt wenn ESP32 Batterie-Daten sendet
+                          Powerbanks werden nur als &quot;eingelegt&quot; angezeigt wenn ESP32 Batterie-Daten sendet
                         </p>
                       </div>
                       <div className="overflow-x-auto">

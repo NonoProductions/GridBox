@@ -1,16 +1,13 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
+import { createRequire } from "module";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const require = createRequire(import.meta.url);
 
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-});
+// eslint-config-next liefert ab v16 eine native Flat-Config.
+// Direkt laden vermeidet den "Converting circular structure to JSON"-Fehler von FlatCompat.
+const nextConfig = require("eslint-config-next/core-web-vitals");
 
-const eslintConfig = [
-  ...compat.extends("next/core-web-vitals", "next/typescript"),
+export default [
+  ...nextConfig,
   {
     ignores: [
       "node_modules/**",
@@ -21,5 +18,3 @@ const eslintConfig = [
     ],
   },
 ];
-
-export default eslintConfig;

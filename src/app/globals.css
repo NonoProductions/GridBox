@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Tailwind v4: dark-Variant per .dark-Klasse statt prefers-color-scheme.
+   So funktioniert ?theme=light überall (Wallet, Profil, Verlauf, etc.) */
+@custom-variant dark (&&:where(.dark, .dark *));
+
 /* Base styles for better mobile rendering */
 html {
   font-size: 16px; /* Basis-Schriftgröße */
@@ -102,6 +106,22 @@ a,
 
 .animate-slide-down {
   animation: slideDown 0.3s ease-out;
+}
+
+/* Side-Menu: von links reinsliden */
+@keyframes slideInFromLeft {
+  from {
+    transform: translateX(-100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-left {
+  animation: slideInFromLeft 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards;
 }
 
 /* QR Code Scan Animation */

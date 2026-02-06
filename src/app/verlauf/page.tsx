@@ -3,6 +3,7 @@
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { usePageTheme } from "@/lib/usePageTheme";
 
 interface Transaction {
   id: string;
@@ -19,63 +20,7 @@ function VerlaufContent() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-
-  // Initialize theme from localStorage or system preference
-  useEffect(() => {
-    const initializeTheme = () => {
-      if (typeof window === "undefined") return;
-      
-      // Check URL parameter first (for navigation from other pages)
-      const themeParam = searchParams.get("theme");
-      if (themeParam === "light" || themeParam === "dark") {
-        const shouldBeDark = themeParam === "dark";
-        setIsDarkMode(shouldBeDark);
-        document.documentElement.classList.toggle("dark", shouldBeDark);
-        localStorage.setItem("theme", themeParam);
-        return;
-      }
-      
-      // Otherwise use localStorage or system preference
-      const saved = localStorage.getItem("theme");
-      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      const shouldBeDark = saved ? saved === "dark" : prefersDark;
-      
-      setIsDarkMode(shouldBeDark);
-      document.documentElement.classList.toggle("dark", shouldBeDark);
-    };
-
-    initializeTheme();
-
-    // Listen for storage changes (e.g., from other tabs)
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === "theme") {
-        const newTheme = e.newValue;
-        const shouldBeDark = newTheme === "dark";
-        setIsDarkMode(shouldBeDark);
-        document.documentElement.classList.toggle("dark", shouldBeDark);
-      }
-    };
-
-    // Listen for system theme changes
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleMediaChange = (e: MediaQueryListEvent) => {
-      const saved = localStorage.getItem("theme");
-      // Only update if no manual preference is saved
-      if (!saved) {
-        setIsDarkMode(e.matches);
-        document.documentElement.classList.toggle("dark", e.matches);
-      }
-    };
-
-    window.addEventListener("storage", handleStorageChange);
-    mediaQuery.addEventListener("change", handleMediaChange);
-
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      mediaQuery.removeEventListener("change", handleMediaChange);
-    };
-  }, [searchParams]);
+  const isDarkMode = usePageTheme(searchParams);
 
   useEffect(() => {
     loadTransactions();

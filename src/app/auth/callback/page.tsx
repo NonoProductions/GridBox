@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { usePageTheme } from "@/lib/usePageTheme";
 
-export default function AuthCallbackPage() {
+function AuthCallbackContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  usePageTheme(searchParams);
 
   useEffect(() => {
     let isMounted = true;
@@ -84,5 +87,13 @@ export default function AuthCallbackPage() {
     };
   }, [router]);
 
-  return <p className="p-6">Login wird abgeschlossen …</p>;
+  return <p className="p-6 text-slate-900 dark:text-slate-100">Login wird abgeschlossen …</p>;
+}
+
+export default function AuthCallbackPage() {
+  return (
+    <Suspense fallback={<p className="p-6">Lädt…</p>}>
+      <AuthCallbackContent />
+    </Suspense>
+  );
 }

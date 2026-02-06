@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import LoginCard from "@/components/LoginCard";
+import { usePageTheme } from "@/lib/usePageTheme";
 
 function LoginContent() {
   const router = useRouter();
@@ -11,8 +12,14 @@ function LoginContent() {
   const [isLoading, setIsLoading] = useState(true);
   const [supabaseConfigured, setSupabaseConfigured] = useState(true);
 
-  const returnUrl = searchParams.get('returnUrl') || '/app';
-  const isFromRental = returnUrl.startsWith('/rent/');
+  // returnUrl aus echter URL (useSearchParams kann beim ersten Paint noch leer sein)
+  const returnUrl =
+    (typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("returnUrl") || "/app"
+      : "/app") ||
+    searchParams.get("returnUrl") ||
+    "/app";
+  const isFromRental = returnUrl.startsWith("/rent/");
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
 
   // Timer: 10 Min Reserve für Powerbank (nur bei Ausleihe)
@@ -32,20 +39,9 @@ function LoginContent() {
     return () => clearInterval(id);
   }, [isFromRental]);
 
-  // Theme aus URL oder System
   const theme = searchParams.get("theme");
-  const [isDarkMode, setIsDarkMode] = useState(true);
-  
-  useEffect(() => {
-    if (theme === "light") {
-      setIsDarkMode(false);
-    } else if (theme === "dark") {
-      setIsDarkMode(true);
-    } else {
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      setIsDarkMode(prefersDark);
-    }
-  }, [theme]);
+  // Von Ausleihseite: Standardmäßig Dark Mode (sieht besser aus); später folgt die Seite den Einstellungen (localStorage).
+  const isDarkMode = usePageTheme(searchParams, { defaultDark: isFromRental });
 
   useEffect(() => {
     if (returnUrl && returnUrl !== '/app') {
@@ -113,8 +109,7 @@ function LoginContent() {
   if (isLoading) {
     return (
       <div 
-        className="fixed inset-0 flex items-center justify-center"
-        style={{ backgroundColor: isDarkMode ? '#282828' : 'white' }}
+        className={`fixed inset-0 flex items-center justify-center ${isDarkMode ? "bg-[#282828]" : "bg-white"}`}
       >
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
       </div>
@@ -124,14 +119,13 @@ function LoginContent() {
   if (!supabaseConfigured) {
     return (
       <div 
-        className="fixed inset-0 flex items-center justify-center p-4"
-        style={{ backgroundColor: isDarkMode ? '#282828' : 'white' }}
+        className={`fixed inset-0 flex items-center justify-center p-4 ${isDarkMode ? "bg-[#282828]" : "bg-white"}`}
       >
         <div className={`max-w-md p-8 rounded-2xl ${
-          isDarkMode ? 'bg-gray-800/50 text-white' : 'bg-white shadow-xl text-slate-900'
+          isDarkMode ? 'bg-white/5 text-white border border-white/10' : 'bg-white shadow-xl text-slate-900'
         }`}>
           <h2 className="text-xl font-semibold mb-2">Konfigurationsfehler</h2>
-          <p className={`mb-4 ${isDarkMode ? 'text-gray-400' : 'text-slate-600'}`}>
+          <p className={`mb-4 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
             Supabase-Umgebungsvariablen sind nicht konfiguriert.
           </p>
         </div>
@@ -141,8 +135,7 @@ function LoginContent() {
 
   return (
     <div 
-      className="fixed inset-0 flex items-start justify-center overflow-auto py-8 pt-16"
-      style={{ backgroundColor: isDarkMode ? '#282828' : 'white' }}
+      className={`fixed inset-0 flex items-start justify-center overflow-auto py-8 pt-16 ${isDarkMode ? "bg-[#282828] text-white" : "bg-white text-slate-900"}`}
     >
       {/* Back button */}
       <div className="absolute top-5 left-5 z-20">
@@ -150,11 +143,7 @@ function LoginContent() {
           type="button"
           onClick={() => router.push(isFromRental ? returnUrl : `/${theme ? `?theme=${theme}` : ''}`)}
           aria-label="Zurück"
-          className={`grid place-items-center h-10 w-10 rounded-full transition-colors ${
-            isDarkMode 
-              ? 'bg-gray-700/50 text-white hover:bg-gray-600' 
-              : 'bg-gray-100 text-slate-900 hover:bg-gray-200'
-          }`}
+          className="grid place-items-center h-10 w-10 rounded-full transition-colors bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15,18 9,12 15,6" />
@@ -173,7 +162,7 @@ function LoginContent() {
               </div>
               <div className={`w-8 h-0.5 mx-2 ${isDarkMode ? 'bg-white/20' : 'bg-slate-200'}`} />
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                isDarkMode ? 'bg-white/20 text-white/60' : 'bg-slate-200 text-slate-500'
+                isDarkMode ? 'bg-white/10 text-white/60' : 'bg-slate-200 text-slate-500'
               }`}>
                 2
               </div>
@@ -207,7 +196,7 @@ function LoginContent() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="fixed inset-0 flex items-center justify-center" style={{ backgroundColor: '#282828' }}>
+      <div className="fixed inset-0 flex items-center justify-center bg-white dark:bg-[#282828]">
         <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
       </div>
     }>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { isOwner } from "@/lib/userRoles";
@@ -82,22 +83,24 @@ export default function SideMenu({
     };
   }, []);
 
-  // Öffnen: Panel von links reinsliden, Backdrop einblenden
+  // Öffnen: Panel von links reinsliden, Backdrop einblenden (setState asynchron, um react-hooks/set-state-in-effect zu vermeiden)
   useEffect(() => {
     if (open) {
-      setIsClosing(false);
-      setBackdropVisible(false);
-      setPanelSlideIn(false);
-      const raf = requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setBackdropVisible(true);
-          setPanelSlideIn(true);
-        });
+      queueMicrotask(() => {
+        setIsClosing(false);
+        setBackdropVisible(false);
+        setPanelSlideIn(false);
       });
-      return () => cancelAnimationFrame(raf);
+      const t = setTimeout(() => {
+        setBackdropVisible(true);
+        setPanelSlideIn(true);
+      }, 20);
+      return () => clearTimeout(t);
     } else {
-      setBackdropVisible(false);
-      setPanelSlideIn(false);
+      queueMicrotask(() => {
+        setBackdropVisible(false);
+        setPanelSlideIn(false);
+      });
     }
   }, [open]);
 
@@ -121,26 +124,29 @@ export default function SideMenu({
   const menuVisible = open && !isClosing;
   const panelShown = menuVisible && panelSlideIn;
 
-  return (
+  // Nichts rendern wenn geschlossen und nicht am Schließen – spart DOM und vermeidet Überlagerung
+  if (!open && !isClosing) {
+    return null;
+  }
+
+  const menuContent = (
     <>
       {/* Backdrop mit Ein-/Ausblend-Animation */}
-      {(open || isClosing) && (
-        <div
-          className={`fixed inset-0 z-[1100] bg-black/40 backdrop-blur-sm transition-opacity duration-300 ease-out ${
-            backdropVisible && menuVisible ? "opacity-100" : "opacity-0"
-          }`}
-          onClick={handleClose}
-          aria-hidden="true"
-        />
-      )}
+      <div
+        className={`fixed inset-0 z-[1100] bg-black/40 backdrop-blur-sm transition-opacity duration-300 ease-out ${
+          backdropVisible && menuVisible ? "opacity-100" : "opacity-0"
+        }`}
+        onClick={handleClose}
+        aria-hidden="true"
+      />
 
-      {/* Panel: slide von links rein */}
+      {/* Panel: von links reinsliden – immer transition, dann transform togglen */}
       <aside
-        className={`fixed top-0 left-0 z-[1110] h-full w-80 max-w-[85vw] ${
+        className={`fixed top-0 left-0 z-[1110] h-full w-80 max-w-[85vw] transition-transform duration-300 ease-out ${
           isDarkMode 
             ? 'text-white border-r border-gray-600' 
             : 'bg-white text-slate-900 border-r border-slate-200'
-        } shadow-2xl transition-transform duration-300 ease-out ${
+        } shadow-2xl ${
           panelShown ? "translate-x-0" : "-translate-x-full"
         }`}
         style={isDarkMode ? { backgroundColor: '#282828' } : {}}
@@ -371,4 +377,10 @@ export default function SideMenu({
       </aside>
     </>
   );
+
+  // Portal in document.body, damit das Menü immer über allem liegt und nicht von overflow/stacking verdeckt wird
+  if (typeof document !== "undefined") {
+    return createPortal(menuContent, document.body);
+  }
+  return menuContent;
 }

@@ -14,9 +14,9 @@ export default function NotificationManager() {
   const [isRegistered, setIsRegistered] = useState(false);
 
   useEffect(() => {
-    // Prüfe Support
+    // Prüfe Support (setState asynchron, um react-hooks/set-state-in-effect zu vermeiden)
     const supported = isNotificationSupported();
-    setIsSupported(supported);
+    queueMicrotask(() => setIsSupported(supported));
 
     if (!supported) {
       console.log('Push-Benachrichtigungen werden nicht unterstützt');

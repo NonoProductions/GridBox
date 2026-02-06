@@ -1,13 +1,31 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useLayoutEffect, useState, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { useTheme } from "@/lib/useTheme";
 
 function ProfileContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isDark: isDarkMode, toggleTheme } = useTheme();
+
+  // Theme aus URL oder localStorage VOR dem ersten Paint setzen, damit Profil sofort hell/dunkel stimmt
+  useLayoutEffect(() => {
+    const theme = searchParams.get("theme");
+    if (theme === "light" || theme === "dark") {
+      document.documentElement.classList.toggle("dark", theme === "dark");
+      if (typeof localStorage !== "undefined") localStorage.setItem("theme", theme);
+      window.dispatchEvent(new Event("themechange"));
+    } else if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("theme");
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const dark = saved ? saved === "dark" : prefersDark;
+      document.documentElement.classList.toggle("dark", dark);
+      if (typeof localStorage !== "undefined") localStorage.setItem("theme", dark ? "dark" : "light");
+      window.dispatchEvent(new Event("themechange"));
+    }
+  }, [searchParams]);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -57,7 +75,7 @@ function ProfileContent() {
       <div className="absolute top-4 left-4 z-10">
         <button
           type="button"
-          onClick={() => router.push("/app")}
+          onClick={() => router.push(`/app?theme=${isDarkMode ? "dark" : "light"}`)}
           aria-label="Zurück"
           className="grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm bg-white/80 dark:bg-gray-800/80 text-slate-900 dark:text-white hover:bg-white dark:hover:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-lg transition-colors mt-[15px] mb-[15px]"
         >
@@ -198,7 +216,7 @@ function ProfileContent() {
             onClick={async () => {
               try {
                 await supabase.auth.signOut();
-                router.push("/");
+                router.push(`/?theme=${isDarkMode ? "dark" : "light"}`);
               } catch (error) {
                 console.error("Error signing out:", error);
               }

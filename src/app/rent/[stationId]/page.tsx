@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { usePageTheme } from "@/lib/usePageTheme";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import { Station } from "@/components/StationManager";
 import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
@@ -19,21 +20,7 @@ function RentPageContent() {
   const [station, setStation] = useState<Station | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(true);
-
-  // Theme aus URL-Parameter oder System
-  useEffect(() => {
-    const themeParam = searchParams.get("theme");
-    if (themeParam === "light") {
-      setIsDarkMode(false);
-    } else if (themeParam === "dark") {
-      setIsDarkMode(true);
-    } else {
-      // Prüfe System-Theme
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      setIsDarkMode(prefersDark);
-    }
-  }, [searchParams]);
+  const isDarkMode = usePageTheme(searchParams);
 
   // Lade Station-Daten
   useEffect(() => {
@@ -124,7 +111,7 @@ function RentPageContent() {
             {error}
           </p>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push(`/?theme=${isDarkMode ? "dark" : "light"}`)}
             className="w-full rounded-xl bg-emerald-600 py-3 font-medium text-white hover:bg-emerald-700 transition-colors"
           >
             Zur Startseite
@@ -273,7 +260,7 @@ function RentPageContent() {
             alert(`Powerbank erfolgreich an Station "${station.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
             
             // Zur Startseite navigieren
-            router.push('/');
+            router.push(`/?theme=${isDarkMode ? "dark" : "light"}`);
           } catch (error) {
             console.error('Fehler bei der Ausleihe:', error);
             const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';

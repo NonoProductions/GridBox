@@ -218,15 +218,21 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     console.log('Stations updated:', stations.length, stations);
   }, [stations]);
 
-  // Read theme from initial prop
+  // Read theme from initial prop and sync with document + localStorage (so Light Mode works)
   useEffect(() => {
     if (initialTheme === "light") {
+      document.documentElement.classList.remove("dark");
+      if (typeof localStorage !== "undefined") localStorage.setItem("theme", "light");
       setIsDarkMode(false);
     } else if (initialTheme === "dark") {
+      document.documentElement.classList.add("dark");
+      if (typeof localStorage !== "undefined") localStorage.setItem("theme", "dark");
       setIsDarkMode(true);
     } else {
-      // Default to dark mode if no theme parameter
-      setIsDarkMode(true);
+      // No URL param: use localStorage or current document class (set by ThemeScript)
+      const saved = typeof localStorage !== "undefined" ? localStorage.getItem("theme") : null;
+      const useDark = saved ? saved === "dark" : document.documentElement.classList.contains("dark");
+      setIsDarkMode(useDark);
     }
   }, [initialTheme]);
 
@@ -930,7 +936,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           type="button"
           onClick={() => setMenuOpen(true)}
           aria-label="Account & Einstellungen"
-          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 pointer-events-auto ${
+          className={`grid place-items-center h-10 w-10 rounded-full backdrop-blur-sm transition-transform duration-200 hover:scale-105 active:scale-95 pointer-events-auto ${
             isDarkMode === true
               ? 'bg-black/20 text-white border border-white/20 hover:bg-black/30' 
               : 'bg-white/20 text-slate-900 border border-slate-300/30 hover:bg-white/30 shadow-lg'
@@ -1126,49 +1132,26 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               {/* Erweiterte Informationen - nur wenn Panel erweitert ist */}
               {isPanelExpanded && (
                 <div className="mt-4 space-y-3">
-                  {/* FOTO-CAROUSEL BEREICH - Powerbanks-Liste wurde komplett entfernt */}
-                  <div className="w-full">
-                    {(() => {
-                      // Kombiniere photos Array und photo_url (für Rückwärtskompatibilität)
-                      const allPhotos: string[] = [];
-                      if (panelStation?.photos && Array.isArray(panelStation.photos)) {
-                        allPhotos.push(...panelStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
-                      }
-                      // Falls photo_url existiert und noch nicht in photos enthalten ist
-                      if (panelStation?.photo_url && !allPhotos.includes(panelStation.photo_url)) {
-                        allPhotos.unshift(panelStation.photo_url);
-                      }
-                      const displayPhotos = allPhotos
-                        .slice(0, 3)
-                        .map(getAbsoluteStationPhotoUrl)
-                        .filter(Boolean) as string[];
-                      
-                      // Zeige Foto-Carousel immer an
-                      if (displayPhotos.length > 0) {
-                        return <PhotoCarousel photos={displayPhotos} isDarkMode={isDarkMode === true} />;
-                      } else {
-                        return (
-                          <div className={`w-full h-64 rounded-xl flex items-center justify-center border-2 border-dashed ${
-                            isDarkMode === true ? 'bg-gray-700/30 border-gray-600' : 'bg-gray-50 border-gray-300'
-                          }`}>
-                            <div className="text-center">
-                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={`mx-auto mb-2 ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                                <circle cx="8.5" cy="8.5" r="1.5"/>
-                                <polyline points="21 15 16 10 5 21"/>
-                              </svg>
-                              <p className={`text-sm font-medium ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                Noch keine Fotos vorhanden
-                              </p>
-                              <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                Fotos können im Dashboard hinzugefügt werden
-                              </p>
-                            </div>
-                          </div>
-                        );
-                      }
-                    })()}
-                  </div>
+                  {/* FOTO-CAROUSEL – nur anzeigen, wenn der Owner Fotos hinzugefügt hat */}
+                  {(() => {
+                    const allPhotos: string[] = [];
+                    if (panelStation?.photos && Array.isArray(panelStation.photos)) {
+                      allPhotos.push(...panelStation.photos.filter((url): url is string => typeof url === 'string' && url.length > 0));
+                    }
+                    if (panelStation?.photo_url && !allPhotos.includes(panelStation.photo_url)) {
+                      allPhotos.unshift(panelStation.photo_url);
+                    }
+                    const displayPhotos = allPhotos
+                      .slice(0, 3)
+                      .map(getAbsoluteStationPhotoUrl)
+                      .filter(Boolean) as string[];
+                    if (displayPhotos.length === 0) return null;
+                    return (
+                      <div className="w-full">
+                        <PhotoCarousel photos={displayPhotos} isDarkMode={isDarkMode === true} />
+                      </div>
+                    );
+                  })()}
 
                   {/* Adresse */}
                   {panelStation?.address && (
@@ -1487,6 +1470,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         isDarkMode={isDarkMode === true}
         onToggleTheme={() => {
           const newTheme = isDarkMode === false ? "dark" : "light";
+          if (typeof localStorage !== "undefined") localStorage.setItem("theme", newTheme);
+          if (newTheme === "light") document.documentElement.classList.remove("dark");
+          else document.documentElement.classList.add("dark");
           const url = new URL(window.location.href);
           url.searchParams.set("theme", newTheme);
           window.location.href = url.toString();

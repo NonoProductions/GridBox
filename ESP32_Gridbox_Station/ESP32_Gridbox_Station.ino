@@ -4,6 +4,14 @@
 #include <Wire.h>
 #include <ESP32Servo.h>
 
+// Realtime: 1 = Updates per WebSocket (nur bei Änderung), 0 = HTTP-Polling. Bei 1: Bibliothek "WebSockets" (Links2004) + STATION_ID nötig.
+#define USE_SUPABASE_REALTIME 1
+
+#if USE_SUPABASE_REALTIME
+#include <WebSocketsClient.h>
+#include <WiFiClientSecure.h>
+#endif
+
 // ===== WLAN Konfiguration =====
 const char* WIFI_SSID = "FRITZ!Box Lamborelle";
 const char* WIFI_PASSWORD = "88929669398610508392";
@@ -59,7 +67,7 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define ENABLE_STATUS_BLINK false    // false = Kein Status-Blinken (nur bei Ausgabe), true = Normales Blinken
 #define ENABLE_DISPENSE_LED false    // Deaktiviert das Blinksignal bei Ausleihe (war nur ein Test)
 #define DISPENSE_LED_DURATION 5000   // LED leuchtet 5 Sekunden bei Ausgabe
-#define DISPENSE_POLL_INTERVAL 15000  // Prüfe alle 15 Sekunden auf Ausgabe-Anfrage (reduziert Egress um ~87%)
+#define DISPENSE_POLL_INTERVAL 15000  // Nur bei USE_SUPABASE_REALTIME=0: Intervall für Ausgabe-Check (Sekunden)
 
 // Relais & Button Konfiguration
 #define RELAY_PIN 5                 // Kontrolliert das Lade-Relais (Pin 17 = funktionierender Relais-Pin aus Testskript)
@@ -100,12 +108,25 @@ unsigned long lastBatteryUpdate = 0;
 float batteryVoltage = 0.0;
 int batteryPercentage = 0;
 bool batteryInitialized = false;
+bool lastReportedBatteryPresent = false;  // Zuletzt an Supabase gemeldeter Zustand (Powerbank da/weg)
+bool batteryStateEverReported = false;    // Einmal initial melden, danach nur bei Änderung
 
 // Servo-Objekt
 Servo dispenseServo;
 
 // EEPROM: pro Kanal erkannter I2C-Adresse (0 = noch nicht erkannt). Kanal 0: 0x55 = Fuel Gauge, überspringen!
 uint8_t eepromAddressByChannel[8] = {0};
+
+#if USE_SUPABASE_REALTIME
+WiFiClientSecure realtimeSecureClient;
+WebSocketsClient realtimeWebSocket;
+unsigned long lastRealtimeHeartbeat = 0;
+const unsigned long REALTIME_HEARTBEAT_MS = 20000;  // unter 25 s
+volatile bool realtimeDispenseRequested = false;
+void realtimeWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
+void realtimeSendJoin();
+void realtimeSendHeartbeat();
+#endif
 
 // Funktionsprototypen
 void handleChargeButton();
@@ -211,6 +232,21 @@ void setup() {
   // WLAN verbinden
   connectWiFi();
   
+  #if USE_SUPABASE_REALTIME
+  if (isConnected) {
+    String host = String(SUPABASE_URL);
+    host.replace("https://", "");
+    int slash = host.indexOf('/');
+    if (slash > 0) host = host.substring(0, slash);
+    String path = "/realtime/v1/websocket?apikey=" + String(SUPABASE_KEY) + "&vsn=1.0.0";
+    realtimeSecureClient.setInsecure();
+    realtimeWebSocket.begin(realtimeSecureClient, host.c_str(), 443, path.c_str());
+    realtimeWebSocket.onEvent(realtimeWebSocketEvent);
+    realtimeWebSocket.setReconnectInterval(5000);
+    Serial.println("Realtime: WebSocket-Verbindung wird aufgebaut...");
+  }
+  #endif
+  
   // Initiale Station-Daten abrufen
   if (isConnected) {
     getStationData();
@@ -224,7 +260,9 @@ void setup() {
         readBatteryData();
       #endif
       updateBatteryData();
-      lastBatteryUpdate = millis(); // Setze Timer zurück
+      lastReportedBatteryPresent = batteryPresent;
+      batteryStateEverReported = true;
+      lastBatteryUpdate = millis();
     }
   }
   
@@ -293,11 +331,30 @@ void loop() {
     digitalWrite(LED_PIN, LOW);
   #endif
   
-  // === PRÜFE AUF AUSGABE-ANFRAGE ===
+  // === AUSGABE-ANFRAGE: Realtime (Push) oder Polling ===
+  #if USE_SUPABASE_REALTIME
+  realtimeWebSocket.loop();
+  if (millis() - lastRealtimeHeartbeat > REALTIME_HEARTBEAT_MS) {
+    realtimeSendHeartbeat();
+    lastRealtimeHeartbeat = millis();
+  }
+  if (realtimeDispenseRequested) {
+    realtimeDispenseRequested = false;
+    unsigned long timeSinceLastDispense = millis() - lastDispenseTime;
+    if (timeSinceLastDispense > 10000) {
+      lastDispenseTime = millis();
+      Serial.println("Supabase Realtime: Powerbank-Ausgabe angefordert.");
+      resetDispenseFlag();
+      dispensePowerbank();
+      activateDispenseLED();
+    }
+  }
+  #else
   if (millis() - lastDispenseCheck > DISPENSE_POLL_INTERVAL) {
     checkDispenseRequest();
     lastDispenseCheck = millis();
   }
+  #endif
   
   // SENSOREN DEAKTIVIERT - Keine automatischen Updates
   // Die Anzahl wird nur durch die Web-App geändert (bei Ausleihe)
@@ -309,7 +366,7 @@ void loop() {
     lastUpdate = millis();
   }
   
-  // Batteriedaten regelmäßig aktualisieren
+  // Batteriedaten lesen (Intervall); an Supabase nur bei Zustandsänderung senden (Powerbank rein/raus)
   if (millis() - lastBatteryUpdate > BATTERY_UPDATE_INTERVAL) {
     if (batteryInitialized) {
       #if BATTERY_TEST_MODE
@@ -322,7 +379,16 @@ void loop() {
       #else
         readBatteryData();
       #endif
-      updateBatteryData();
+      // Nur senden wenn: erstes Mal (Initialzustand) oder Powerbank ein-/ausgesteckt
+      if (!batteryStateEverReported) {
+        updateBatteryData();
+        lastReportedBatteryPresent = batteryPresent;
+        batteryStateEverReported = true;
+      } else if (batteryPresent != lastReportedBatteryPresent) {
+        updateBatteryData();
+        lastReportedBatteryPresent = batteryPresent;
+        Serial.println(batteryPresent ? "Powerbank erkannt → Daten gesendet." : "Powerbank entfernt → NULL gesendet.");
+      }
     } else {
       if (initBatterySystem()) {
         batteryInitialized = true;
@@ -602,6 +668,72 @@ void resetDispenseFlag() {
   // Kurze Pause damit Datenbank Zeit hat zu aktualisieren
   delay(500);
 }
+
+#if USE_SUPABASE_REALTIME
+void realtimeWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      Serial.println("Realtime: WebSocket verbunden, sende phx_join...");
+      realtimeSendJoin();
+      break;
+    case WStype_DISCONNECTED:
+      Serial.println("Realtime: WebSocket getrennt.");
+      break;
+    case WStype_TEXT: {
+      if (length == 0) break;
+      DynamicJsonDocument doc(1024);
+      DeserializationError err = deserializeJson(doc, payload, length);
+      if (err) break;
+      const char* event = doc["event"];
+      if (event && strcmp(event, "postgres_changes") == 0) {
+        JsonObject data = doc["payload"]["data"];
+        if (!data.isNull()) {
+          JsonObject record = data["record"];
+          if (!record.isNull() && record["dispense_requested"] == true) {
+            realtimeDispenseRequested = true;
+          }
+        }
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+void realtimeSendJoin() {
+  const char* topic = "realtime:public:stations";
+  StaticJsonDocument<512> doc;
+  doc["topic"] = topic;
+  doc["event"] = "phx_join";
+  doc["ref"] = "1";
+  doc["join_ref"] = "1";
+  JsonObject payload = doc.createNestedObject("payload");
+  JsonObject config = payload.createNestedObject("config");
+  JsonArray changes = config.createNestedArray("postgres_changes");
+  JsonObject sub = changes.add<JsonObject>();
+  sub["event"] = "UPDATE";
+  sub["schema"] = "public";
+  sub["table"] = "stations";
+  sub["filter"] = String("id=eq.") + String(STATION_ID);
+  config["private"] = false;
+  String msg;
+  serializeJson(doc, msg);
+  realtimeWebSocket.sendTXT(msg);
+}
+
+void realtimeSendHeartbeat() {
+  StaticJsonDocument<128> doc;
+  doc["topic"] = "phoenix";
+  doc["event"] = "heartbeat";
+  doc["ref"] = "2";
+  doc["join_ref"] = "2";
+  doc["payload"] = JsonObject();
+  String msg;
+  serializeJson(doc, msg);
+  realtimeWebSocket.sendTXT(msg);
+}
+#endif
 
 // ===== LADE-STEUERUNG (RELAIS & BUTTON) =====
 
