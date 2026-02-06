@@ -313,6 +313,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const animationFrameRef = useRef<number | null>(null);
   const headingElementRef = useRef<HTMLDivElement | null>(null);
   const locationUpdateThrottleRef = useRef<number>(0);
+  const hasCompassDataRef = useRef(false);
+  const orientationListenerAddedRef = useRef(false);
+  const orientationThrottleRef = useRef(0);
   // Refs that mirror state to avoid stale closures inside watchPosition callback
   const isNavigatingRef = useRef(false);
   const isFollowingLocationRef = useRef(false);
@@ -431,9 +434,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
 
     requestLocationPermission();
-    
-    // Kompass-Berechtigung anfragen
-    requestCompassPermission();
+    // Compass permission is requested from locateMe() (user gesture) for iOS
+    // For Android, it's added automatically in the orientation useEffect
   }, []);
 
   // Explizite Berechtigungsanfrage beim ersten Laden
@@ -498,31 +500,88 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     );
   };
 
-  // Funktion um Kompass-Berechtigung anzufragen
-  const requestCompassPermission = async () => {
+  // Shared orientation event handler - used by both automatic and user-gesture flows
+  const handleOrientationEvent = (event: DeviceOrientationEvent) => {
+    let compassHeading: number | null = null;
+    
+    // iOS: webkitCompassHeading gives true north heading directly (most reliable)
+    if ((event as any).webkitCompassHeading !== undefined && (event as any).webkitCompassHeading !== null) {
+      compassHeading = (event as any).webkitCompassHeading as number;
+    } else if (event.alpha !== null) {
+      // Android / other browsers
+      if (event.absolute) {
+        // Absolute orientation: convert alpha to compass heading
+        // alpha goes counterclockwise, compass heading goes clockwise
+        compassHeading = (360 - event.alpha) % 360;
+      } else {
+        // Non-absolute: alpha is relative to arbitrary reference, less useful
+        // but still use it as best effort
+        compassHeading = event.alpha;
+      }
+    }
+    
+    if (compassHeading === null || isNaN(compassHeading)) return;
+    
+    // Normalize to 0-360
+    compassHeading = ((compassHeading % 360) + 360) % 360;
+    
+    // Mark that we have valid compass data (shows the cone)
+    hasCompassDataRef.current = true;
+    
+    // Update heading target for smooth animation
+    targetHeadingRef.current = compassHeading;
+    
+    // Throttle React state updates (~5/sec)
+    const now = Date.now();
+    if (now - orientationThrottleRef.current > 200) {
+      orientationThrottleRef.current = now;
+      setDeviceOrientation(compassHeading);
+      deviceOrientationRef.current = compassHeading;
+      setUserHeading(compassHeading);
+    }
+  };
+
+  // Add orientation event listeners (idempotent - safe to call multiple times)
+  const addOrientationListeners = () => {
+    if (orientationListenerAddedRef.current) return;
+    orientationListenerAddedRef.current = true;
+    
+    window.addEventListener('deviceorientation', handleOrientationEvent, { passive: true });
+    window.addEventListener('deviceorientationabsolute', handleOrientationEvent as any, { passive: true });
+    setCompassPermissionGranted(true);
+    compassPermissionGrantedRef.current = true;
+    console.log('Orientation listeners added');
+  };
+
+  // Request compass permission - works from user gesture (iOS) or automatically (Android)
+  // MUST be called from a user gesture on iOS 13+
+  const requestCompassPermission = async (): Promise<boolean> => {
+    // Already set up? Skip
+    if (orientationListenerAddedRef.current) return true;
+    
     try {
-      console.log('Requesting compass permission...');
-      
+      // iOS 13+: requires explicit permission via user gesture
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
         const response = await (DeviceOrientationEvent as any).requestPermission();
-        console.log('Compass permission response:', response);
-        
         if (response === 'granted') {
-          setCompassPermissionGranted(true);
-          console.log('Compass permission granted');
+          addOrientationListeners();
+          return true;
         } else {
           setCompassPermissionGranted(false);
-          console.warn('Compass permission denied');
+          compassPermissionGrantedRef.current = false;
+          console.warn('Compass permission denied by user');
+          return false;
         }
       } else {
-        // Fallback für Browser ohne Permission API
-        setCompassPermissionGranted(true);
-        console.log('Compass permission not required - using fallback');
+        // Android / desktop: no permission needed, just add listeners
+        addOrientationListeners();
+        return true;
       }
     } catch (error) {
       console.error('Compass permission error:', error);
-      // Fallback: Versuche trotzdem zu funktionieren
-      setCompassPermissionGranted(true);
+      // Try adding listeners anyway (works on some Android browsers)
+      addOrientationListeners();
+      return true;
     }
   };
 
@@ -545,6 +604,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Function to start navigation to station
   const startNavigation = async (station: Station) => {
     if (!mapRef.current || !userLocation) return;
+    
+    // Ensure compass is enabled (user gesture context)
+    if (!orientationListenerAddedRef.current) {
+      await requestCompassPermission();
+    }
     
     try {
       const map = mapRef.current;
@@ -1188,18 +1252,21 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       const mapBearing = map.getBearing();
       const visualRotation = initialHeading - mapBearing;
       
+      // Cone starts hidden until we receive real compass data
+      const coneVisible = hasCompassDataRef.current;
+      
       userElement.innerHTML = `
         <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:160px;height:160px;">
-          <!-- Direction cone / heading fan -->
-          <div id="gridbox-heading-cone" style="position:absolute;top:0;left:0;width:160px;height:160px;transform:rotate(${visualRotation}deg);will-change:transform;">
+          <!-- Direction cone / heading fan - hidden until compass data arrives -->
+          <div id="gridbox-heading-cone" style="position:absolute;top:0;left:0;width:160px;height:160px;transform:rotate(${visualRotation}deg);will-change:transform;opacity:${coneVisible ? 1 : 0};transition:opacity 0.5s ease;">
             <svg width="160" height="160" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
               <defs>
-                <radialGradient id="gridbox-cone-rg" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
-                  <stop offset="40%" stop-color="#4285F4" stop-opacity="0.30"/>
-                  <stop offset="100%" stop-color="#4285F4" stop-opacity="0.0"/>
-                </radialGradient>
+                <linearGradient id="gridbox-cone-lg" x1="50%" y1="0%" x2="50%" y2="50%">
+                  <stop offset="0%" stop-color="#4285F4" stop-opacity="0.0"/>
+                  <stop offset="100%" stop-color="#4285F4" stop-opacity="0.35"/>
+                </linearGradient>
               </defs>
-              <path d="M 80 80 L 48 10 Q 64 0 80 0 Q 96 0 112 10 Z" fill="url(#gridbox-cone-rg)" opacity="0.85"/>
+              <path d="M 80 80 L 48 8 Q 64 0 80 0 Q 96 0 112 8 Z" fill="url(#gridbox-cone-lg)"/>
             </svg>
           </div>
           <!-- Pulse ring (expanding) -->
@@ -1262,16 +1329,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // --- Smooth heading interpolation ---
       if (headingElementRef.current && mapRef.current) {
+        // Show/hide cone based on whether we have compass data
+        if (hasCompassDataRef.current) {
+          if (headingElementRef.current.style.opacity !== '1') {
+            headingElementRef.current.style.opacity = '1';
+          }
+        }
+        
         const currentHeading = animatedHeadingRef.current;
         const targetHeading = targetHeadingRef.current;
         
-        // Shortest path rotation (handle 0°/360° wrap-around)
+        // Shortest path rotation (handle 0/360 wrap-around)
         let diff = targetHeading - currentHeading;
         if (diff > 180) diff -= 360;
         if (diff < -180) diff += 360;
         
         if (Math.abs(diff) > 0.15) {
-          animatedHeadingRef.current = ((currentHeading + diff * 0.1) + 360) % 360;
+          animatedHeadingRef.current = ((currentHeading + diff * 0.12) + 360) % 360;
         }
         
         // Account for map bearing so cone always points correctly in real-world direction
@@ -1731,83 +1805,31 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     setNearbyStations(nearby);
   }, [userLocation, stations]);
 
-  // Device orientation tracking for compass heading & direction cone
-  // Optimized: only updates refs for the animation loop, avoids excessive React re-renders
+  // Device orientation setup on mount
+  // On Android: adds listeners automatically (no permission needed)
+  // On iOS: tries automatic request, but this usually fails (needs user gesture)
+  //         The actual grant happens in locateMe() which IS a user gesture
   useEffect(() => {
-    let lastOrientationUpdate = 0;
-    
-    const handleOrientationChange = (event: DeviceOrientationEvent) => {
-      let compassHeading: number | null = null;
-      
-      // iOS: webkitCompassHeading gives true north heading directly (most accurate)
-      if ((event as any).webkitCompassHeading !== undefined && (event as any).webkitCompassHeading !== null) {
-        compassHeading = (event as any).webkitCompassHeading as number;
-      } else if (event.alpha !== null) {
-        // Android / other: alpha is z-axis rotation
-        if (event.absolute) {
-          // Absolute orientation: alpha is relative to earth coordinate frame
-          compassHeading = (360 - event.alpha) % 360;
-        } else {
-          compassHeading = event.alpha;
-        }
+    // Try automatic setup (works on Android, fails silently on iOS)
+    const tryAutoSetup = async () => {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+        // iOS: Don't try automatic - it will fail without user gesture
+        // We'll request in locateMe() instead
+        console.log('iOS detected: compass permission will be requested on user interaction');
+        return;
       }
-      
-      if (compassHeading === null || isNaN(compassHeading)) return;
-      
-      // Normalize to 0-360°
-      compassHeading = ((compassHeading % 360) + 360) % 360;
-      
-      // Update heading target immediately (animation loop picks it up smoothly)
-      targetHeadingRef.current = compassHeading;
-      
-      // Throttle React state updates (max ~5 times/sec to avoid re-render storms)
-      const now = Date.now();
-      if (now - lastOrientationUpdate > 200) {
-        lastOrientationUpdate = now;
-        setDeviceOrientation(compassHeading);
-        setUserHeading(compassHeading);
-      }
-    };
-
-    // Request permission for device orientation (iOS 13+ requires explicit permission)
-    const requestDeviceOrientationPermission = async () => {
-      try {
-        if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-          const response = await (DeviceOrientationEvent as any).requestPermission();
-          if (response === 'granted') {
-            setCompassPermissionGranted(true);
-            window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
-          } else {
-            setCompassPermissionGranted(false);
-            // Try adding listener anyway as fallback
-            window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
-          }
-        } else {
-          // Browser doesn't require permission
-          setCompassPermissionGranted(true);
-          window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
-        }
-      } catch (error) {
-        console.error('Device orientation permission error:', error);
-        setCompassPermissionGranted(true);
-        window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
-      }
-    };
-
-    // Also try absoluteorientation for better Android support
-    const handleAbsoluteOrientation = (event: DeviceOrientationEvent) => {
-      if (event.alpha !== null) {
-        const compassHeading = (360 - event.alpha) % 360;
-        targetHeadingRef.current = ((compassHeading % 360) + 360) % 360;
-      }
+      // Android / desktop: just add listeners
+      addOrientationListeners();
     };
     
-    requestDeviceOrientationPermission();
-    window.addEventListener('deviceorientationabsolute', handleAbsoluteOrientation as any, { passive: true });
-
+    tryAutoSetup();
+    
     return () => {
-      window.removeEventListener('deviceorientation', handleOrientationChange);
-      window.removeEventListener('deviceorientationabsolute', handleAbsoluteOrientation as any);
+      if (orientationListenerAddedRef.current) {
+        window.removeEventListener('deviceorientation', handleOrientationEvent);
+        window.removeEventListener('deviceorientationabsolute', handleOrientationEvent as any);
+        orientationListenerAddedRef.current = false;
+      }
     };
   }, []);
 
@@ -2096,17 +2118,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       return;
     }
 
+    // Request compass permission from user gesture context (required for iOS)
+    // This is the ONLY reliable way to get compass on iOS 13+
+    if (!orientationListenerAddedRef.current) {
+      await requestCompassPermission();
+    }
+
     // Explizite Berechtigungsanfrage für Standort
     try {
-      console.log('Requesting location permission for locateMe...');
-      
-      // Prüfe ob Permission API verfügbar ist
       if ('permissions' in navigator) {
         const permission = await navigator.permissions.query({ name: 'geolocation' });
-        console.log('Geolocation permission status in locateMe:', permission.state);
-        
         if (permission.state === 'denied') {
-          console.warn('Geolocation permission denied in locateMe');
           alert('Standortberechtigung wurde verweigert. Bitte erlauben Sie den Zugriff auf Ihren Standort in den Browser-Einstellungen.');
           return;
         }
