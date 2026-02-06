@@ -305,9 +305,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const navigationSourceRef = useRef<string | null>(null);
   const touchStartY = useRef<number>(0);
   const isDragging = useRef(false);
-  const userLocationRef = useRef<{ lat: number; lng: number } | null>(null);
-  const orientationThrottleRef = useRef<number>(0);
-
+  // Smooth animation refs for Google Maps-style location tracking
+  const animatedLocationRef = useRef<{lat: number, lng: number} | null>(null);
+  const targetLocationRef = useRef<{lat: number, lng: number} | null>(null);
+  const animatedHeadingRef = useRef<number>(0);
+  const targetHeadingRef = useRef<number>(0);
+  const animationFrameRef = useRef<number | null>(null);
+  const headingElementRef = useRef<HTMLDivElement | null>(null);
+  const locationUpdateThrottleRef = useRef<number>(0);
+  // Refs that mirror state to avoid stale closures inside watchPosition callback
+  const isNavigatingRef = useRef(false);
+  const isFollowingLocationRef = useRef(false);
+  const is3DFollowingRef = useRef(false);
+  const deviceOrientationRef = useRef(0);
+  const compassPermissionGrantedRef = useRef(false);
+  const selectedStationRef = useRef<Station | null>(null);
+  const lastLocationRef = useRef<{lat: number, lng: number} | null>(null);
+  const isLocationFixedRef = useRef(false);
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
   const stationManager = StationManager({ 
     onStationsUpdate: () => {}, // Leere Funktion, wir verwenden stationManager.stations direkt
@@ -322,6 +336,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     () => (selectedStation ? (stations.find((s) => s.id === selectedStation.id) ?? selectedStation) : null),
     [stations, selectedStation]
   );
+
+  // Keep refs in sync with state (avoids stale closures in watchPosition callback)
+  useEffect(() => { isNavigatingRef.current = isNavigating; }, [isNavigating]);
+  useEffect(() => { isFollowingLocationRef.current = isFollowingLocation; }, [isFollowingLocation]);
+  useEffect(() => { is3DFollowingRef.current = is3DFollowing; }, [is3DFollowing]);
+  useEffect(() => { deviceOrientationRef.current = deviceOrientation; }, [deviceOrientation]);
+  useEffect(() => { compassPermissionGrantedRef.current = compassPermissionGranted; }, [compassPermissionGranted]);
+  useEffect(() => { selectedStationRef.current = selectedStation; }, [selectedStation]);
+  useEffect(() => { lastLocationRef.current = lastLocation; }, [lastLocation]);
+  useEffect(() => { isLocationFixedRef.current = isLocationFixed; }, [isLocationFixed]);
 
   // Debug: Log stations when they change
   useEffect(() => {
@@ -366,16 +390,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             (position) => {
             const { latitude, longitude, heading } = position.coords;
             const loc = { lat: latitude, lng: longitude };
-            userLocationRef.current = loc;
             setUserLocation(loc);
+            // Initialize animation refs with first known position
+            targetLocationRef.current = { ...loc };
+            animatedLocationRef.current = { ...loc };
             if (heading !== null && !isNaN(heading)) {
               setUserHeading(heading);
+              targetHeadingRef.current = heading;
+              animatedHeadingRef.current = heading;
             }
             setLocationLoading(false);
             setLocationPermissionGranted(true);
             setShowPermissionModal(false);
-            
-            console.log('User location obtained:', { lat: latitude, lng: longitude, heading });
           },
           (error) => {
             console.error('Geolocation error:', error);
@@ -448,15 +474,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       (position) => {
         const { latitude, longitude, heading } = position.coords;
         const loc = { lat: latitude, lng: longitude };
-        userLocationRef.current = loc;
         setUserLocation(loc);
+        targetLocationRef.current = { ...loc };
+        animatedLocationRef.current = { ...loc };
         if (heading !== null && !isNaN(heading)) {
           setUserHeading(heading);
+          targetHeadingRef.current = heading;
         }
         setLocationPermissionGranted(true);
         setShowPermissionModal(false);
         setLocationLoading(false);
-        console.log('Location permission granted:', { lat: latitude, lng: longitude, heading });
       },
       (error) => {
         console.error('Location permission still denied:', error);
@@ -971,98 +998,132 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     }
   };
 
-  // Function to start location tracking during navigation
+  // Function to start location tracking - optimized for smooth tracking
+  // IMPORTANT: Reads from refs (not state) inside callback to avoid stale closures
   const startLocationTracking = () => {
     if (!navigator.geolocation) {
       console.warn('Geolocation is not supported by this browser');
       return;
     }
 
-    const watchId = navigator.geolocation.watchPosition(
+    const newWatchId = navigator.geolocation.watchPosition(
       (position) => {
-        const { latitude, longitude, heading, speed, accuracy } = position.coords;
+        const { latitude, longitude, heading, speed } = position.coords;
         const newLocation = { lat: latitude, lng: longitude };
         
-        // Update user location and heading
-        userLocationRef.current = newLocation;
-        setUserLocation(newLocation);
+        // Set target for smooth animation (immediate, no throttle)
+        targetLocationRef.current = { ...newLocation };
+        if (!animatedLocationRef.current) {
+          animatedLocationRef.current = { ...newLocation };
+        }
         
-        // Verbesserte Heading-Verarbeitung für mobile Geräte
-        let calculatedHeading = userHeading; // Fallback auf aktuellen Heading
+        // Throttle React state updates to avoid excessive re-renders (max every 500ms)
+        const now = Date.now();
+        if (now - locationUpdateThrottleRef.current > 500) {
+          setUserLocation(newLocation);
+          locationUpdateThrottleRef.current = now;
+        }
+        
+        // Heading calculation using refs for current values
+        let calculatedHeading = animatedHeadingRef.current;
+        const prevLocation = lastLocationRef.current;
         
         if (heading !== null && !isNaN(heading) && heading >= 0) {
-          // GPS Heading ist verfügbar
           calculatedHeading = heading;
           setUserHeading(heading);
-        } else if (lastLocation && speed && speed > 0.5) {
-          // Fallback: Berechne Heading basierend auf Bewegungsrichtung
-          const deltaLat = newLocation.lat - lastLocation.lat;
-          const deltaLng = newLocation.lng - lastLocation.lng;
+          targetHeadingRef.current = heading;
+        } else if (prevLocation && speed && speed > 0.5) {
+          const deltaLat = newLocation.lat - prevLocation.lat;
+          const deltaLng = newLocation.lng - prevLocation.lng;
           const bearing = Math.atan2(deltaLng, deltaLat) * 180 / Math.PI;
-          calculatedHeading = (bearing + 360) % 360; // Normalisiere auf 0-360°
+          calculatedHeading = (bearing + 360) % 360;
           setUserHeading(calculatedHeading);
+          targetHeadingRef.current = calculatedHeading;
         }
         
-        // Kompass-Richtung für Location Tracking - verwende Device Orientation direkt
-        if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
-          // Device Orientation Event: alpha = rotation around z-axis (compass heading)
-          calculatedHeading = deviceOrientation;
+        // Use device orientation compass if available (reads from ref, always current)
+        const currentDeviceOrientation = deviceOrientationRef.current;
+        const hasCompass = compassPermissionGrantedRef.current;
+        if (currentDeviceOrientation !== null && !isNaN(currentDeviceOrientation) && hasCompass) {
+          calculatedHeading = currentDeviceOrientation;
+          targetHeadingRef.current = calculatedHeading;
         }
         
-        // Update user marker on map with direction - always show direction if available
-        updateUserMarker(newLocation, calculatedHeading, isNavigating);
-        
-        // Update navigation if active
-        if (isNavigating && selectedStation) {
-          updateNavigationProgress(newLocation, selectedStation);
+        // Update navigation if active (reads from refs, always current)
+        const navActive = isNavigatingRef.current;
+        const navStation = selectedStationRef.current;
+        if (navActive && navStation && mapRef.current) {
+          // Inline navigation progress update to avoid stale function closure
+          const distance = calculateDistance(
+            newLocation.lat, newLocation.lng,
+            navStation.lat, navStation.lng
+          );
+          setDistanceToDestination(Math.round(distance));
+          
+          // Camera following during navigation
+          if (!isLocationFixedRef.current) {
+            const map = mapRef.current;
+            const currentZoom = map.getZoom();
+            const targetZoom = currentZoom < 18 ? 19 : currentZoom;
+            const targetBearing = (currentDeviceOrientation !== 0 && !isNaN(currentDeviceOrientation))
+              ? -currentDeviceOrientation + 180
+              : map.getBearing();
+            
+            map.easeTo({
+              center: [newLocation.lng, newLocation.lat],
+              zoom: targetZoom,
+              bearing: targetBearing,
+              duration: 800,
+              essential: true
+            });
+          }
+          
+          // Check arrival
+          if (distance < 10) {
+            console.log('User has arrived at destination!');
+          }
         }
         
-        // Following-Modus: Karte folgt der Position
-        if (isFollowingLocation && mapRef.current && !isNavigating) {
+        // Following mode: camera follows position smoothly (reads from refs)
+        const following = isFollowingLocationRef.current;
+        const following3D = is3DFollowingRef.current;
+        if (following && mapRef.current && !navActive) {
           const map = mapRef.current;
           
-          // Berechne Bearing basierend auf Geräteausrichtung oder Bewegungsrichtung
           let targetBearing = 0;
-          if (is3DFollowing) {
-            if (deviceOrientation !== null && !isNaN(deviceOrientation) && compassPermissionGranted) {
-              targetBearing = -deviceOrientation + 180;
+          if (following3D) {
+            if (currentDeviceOrientation !== null && !isNaN(currentDeviceOrientation) && hasCompass) {
+              targetBearing = -currentDeviceOrientation + 180;
             } else if (calculatedHeading !== null && !isNaN(calculatedHeading)) {
               targetBearing = -calculatedHeading;
             }
           }
           
-          // Einfache Kartenaktualisierung
           map.easeTo({
             center: [newLocation.lng, newLocation.lat],
             bearing: targetBearing,
-            pitch: is3DFollowing ? 60 : 0,
-            duration: 500,
+            pitch: following3D ? 60 : 0,
+            duration: 800,
             essential: true
           });
         }
         
-        // Speichere aktuelle Position für nächste Heading-Berechnung
+        // Save current position for next heading calculation (via ref)
+        lastLocationRef.current = newLocation;
         setLastLocation(newLocation);
-        
-        console.log('Location updated:', {
-          location: newLocation,
-          heading: calculatedHeading,
-          speed,
-          accuracy
-        });
       },
       (error) => {
-        console.error('Geolocation error during navigation:', error);
+        console.error('Geolocation error during tracking:', error);
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 150, // Frische Updates für flüssige Standort-Anzeige beim Bewegen (~alle 1–2 s)
-        timeout: 10000
+        maximumAge: 0,
+        timeout: 8000
       }
     );
     
-    setWatchId(watchId);
-    console.log('Location tracking started for navigation');
+    setWatchId(newWatchId);
+    console.log('Location tracking started');
   };
 
   // Function to stop location tracking
@@ -1075,43 +1136,83 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   };
 
 
-  // Function to update user marker with direction (cone shows which way the user is facing)
-  const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null, forceNavigationMode?: boolean) => {
+  // Function to update user marker with direction - Google Maps / Apple Maps style
+  const updateUserMarker = (location: {lat: number, lng: number}, heading?: number | null, _forceNavigationMode?: boolean) => {
     if (!mapRef.current) return;
     
     try {
       const map = mapRef.current;
-      const headingDeg = heading != null && !isNaN(heading) ? heading : 0;
       
-      // Marker already exists: update position and rotation of direction cone
+      // Set target for smooth animation
+      targetLocationRef.current = { ...location };
+      if (heading !== null && heading !== undefined && !isNaN(heading)) {
+        targetHeadingRef.current = heading;
+      }
+      
+      // Initialize animated position if not set
+      if (!animatedLocationRef.current) {
+        animatedLocationRef.current = { ...location };
+      }
+      
+      // If marker already exists, targets are set - animation loop handles movement
       if (userMarkerRef.current) {
-        userMarkerRef.current.setLngLat([location.lng, location.lat]);
-        const el = userMarkerRef.current.getElement();
-        const rotatable = el?.querySelector('.user-marker-heading');
-        if (rotatable) {
-          rotatable.setAttribute('transform', `rotate(${headingDeg} 12 12)`);
-        }
         return;
       }
       
-      // Create new marker with direction cone (oriented to map North = real North)
-      const userElement = document.createElement('div');
-      userElement.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24">
-          <!-- Outer circle (position) -->
-          <circle cx="12" cy="12" r="10" fill="rgba(16,185,129,0.2)" />
-          <circle cx="12" cy="12" r="6" fill="#10b981" />
-          <!-- Direction cone: points North by default, rotated by heading -->
-          <g class="user-marker-heading" transform="rotate(${headingDeg} 12 12)">
-            <path d="M12 2 L18 14 L12 11 L6 14 Z" fill="rgba(16,185,129,0.85)" stroke="#059669" stroke-width="1" stroke-linejoin="round"/>
-          </g>
-        </svg>
-      `;
-      userElement.style.width = '40px';
-      userElement.style.height = '40px';
-      userElement.style.cursor = 'pointer';
-      userElement.style.pointerEvents = 'auto';
+      // Inject CSS animations for pulse effects (once)
+      if (!document.getElementById('gridbox-location-pulse-css')) {
+        const style = document.createElement('style');
+        style.id = 'gridbox-location-pulse-css';
+        style.textContent = `
+          @keyframes gridbox-loc-pulse {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.6; }
+            100% { transform: translate(-50%, -50%) scale(3.5); opacity: 0; }
+          }
+          @keyframes gridbox-loc-glow {
+            0% { box-shadow: 0 0 6px 2px rgba(66,133,244,0.45); }
+            50% { box-shadow: 0 0 10px 4px rgba(66,133,244,0.25); }
+            100% { box-shadow: 0 0 6px 2px rgba(66,133,244,0.45); }
+          }
+        `;
+        document.head.appendChild(style);
+      }
       
+      // Create Google Maps / Apple Maps-style location indicator
+      const userElement = document.createElement('div');
+      userElement.style.width = '160px';
+      userElement.style.height = '160px';
+      userElement.style.position = 'relative';
+      userElement.style.pointerEvents = 'none';
+      
+      const initialHeading = heading || 0;
+      const mapBearing = map.getBearing();
+      const visualRotation = initialHeading - mapBearing;
+      
+      userElement.innerHTML = `
+        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:160px;height:160px;">
+          <!-- Direction cone / heading fan -->
+          <div id="gridbox-heading-cone" style="position:absolute;top:0;left:0;width:160px;height:160px;transform:rotate(${visualRotation}deg);will-change:transform;">
+            <svg width="160" height="160" viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <radialGradient id="gridbox-cone-rg" cx="50%" cy="50%" r="50%" fx="50%" fy="50%">
+                  <stop offset="40%" stop-color="#4285F4" stop-opacity="0.30"/>
+                  <stop offset="100%" stop-color="#4285F4" stop-opacity="0.0"/>
+                </radialGradient>
+              </defs>
+              <path d="M 80 80 L 48 10 Q 64 0 80 0 Q 96 0 112 10 Z" fill="url(#gridbox-cone-rg)" opacity="0.85"/>
+            </svg>
+          </div>
+          <!-- Pulse ring (expanding) -->
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:18px;height:18px;border-radius:50%;background:rgba(66,133,244,0.15);animation:gridbox-loc-pulse 2.5s ease-out infinite;"></div>
+          <!-- Blue dot with white border -->
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:17px;height:17px;border-radius:50%;background:#4285F4;border:2.5px solid white;animation:gridbox-loc-glow 3s ease-in-out infinite;"></div>
+        </div>
+      `;
+      
+      // Store reference to heading cone element for smooth rotation
+      headingElementRef.current = userElement.querySelector('#gridbox-heading-cone') as HTMLDivElement;
+      
+      // Create the mapbox marker
       const userMarker = new mapboxgl.Marker({
         element: userElement,
         anchor: 'center'
@@ -1120,10 +1221,78 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .addTo(map);
       
       userMarkerRef.current = userMarker;
+      animatedLocationRef.current = { ...location };
+      animatedHeadingRef.current = initialHeading;
     } catch (error) {
       console.error('Error updating user marker:', error);
     }
   };
+  
+  // Smooth animation loop for fluid location & heading tracking (requestAnimationFrame)
+  // This runs continuously and interpolates position/heading for a Google Maps-like experience
+  useEffect(() => {
+    let running = true;
+    
+    const animate = () => {
+      if (!running) return;
+      
+      // --- Smooth position interpolation (lerp) ---
+      if (animatedLocationRef.current && targetLocationRef.current && userMarkerRef.current) {
+        const prevLat = animatedLocationRef.current.lat;
+        const prevLng = animatedLocationRef.current.lng;
+        const targetLat = targetLocationRef.current.lat;
+        const targetLng = targetLocationRef.current.lng;
+        
+        const latDiff = targetLat - prevLat;
+        const lngDiff = targetLng - prevLng;
+        
+        // Only interpolate if there's a meaningful difference (avoids jitter at rest)
+        if (Math.abs(latDiff) > 1e-8 || Math.abs(lngDiff) > 1e-8) {
+          // Adaptive smoothing: faster when far, slower when close
+          const distance = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
+          const smoothFactor = distance > 0.0005 ? 0.15 : 0.08; // ~50m threshold
+          
+          animatedLocationRef.current = {
+            lat: prevLat + latDiff * smoothFactor,
+            lng: prevLng + lngDiff * smoothFactor,
+          };
+          userMarkerRef.current.setLngLat([animatedLocationRef.current.lng, animatedLocationRef.current.lat]);
+        }
+      }
+      
+      // --- Smooth heading interpolation ---
+      if (headingElementRef.current && mapRef.current) {
+        const currentHeading = animatedHeadingRef.current;
+        const targetHeading = targetHeadingRef.current;
+        
+        // Shortest path rotation (handle 0°/360° wrap-around)
+        let diff = targetHeading - currentHeading;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+        
+        if (Math.abs(diff) > 0.15) {
+          animatedHeadingRef.current = ((currentHeading + diff * 0.1) + 360) % 360;
+        }
+        
+        // Account for map bearing so cone always points correctly in real-world direction
+        const mapBearing = mapRef.current.getBearing();
+        const visualRotation = animatedHeadingRef.current - mapBearing;
+        headingElementRef.current.style.transform = `rotate(${visualRotation}deg)`;
+      }
+      
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+    
+    animationFrameRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      running = false;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, []);
 
   // Function to center map on user and start following
   const centerMapOnUserAndFollow = () => {
@@ -1562,65 +1731,85 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     setNearbyStations(nearby);
   }, [userLocation, stations]);
 
-  // Device orientation tracking for map rotation (Richtung auf der Karte)
+  // Device orientation tracking for compass heading & direction cone
+  // Optimized: only updates refs for the animation loop, avoids excessive React re-renders
   useEffect(() => {
+    let lastOrientationUpdate = 0;
+    
     const handleOrientationChange = (event: DeviceOrientationEvent) => {
-      if (event.alpha === null) return;
+      let compassHeading: number | null = null;
+      
+      // iOS: webkitCompassHeading gives true north heading directly (most accurate)
+      if ((event as any).webkitCompassHeading !== undefined && (event as any).webkitCompassHeading !== null) {
+        compassHeading = (event as any).webkitCompassHeading as number;
+      } else if (event.alpha !== null) {
+        // Android / other: alpha is z-axis rotation
+        if (event.absolute) {
+          // Absolute orientation: alpha is relative to earth coordinate frame
+          compassHeading = (360 - event.alpha) % 360;
+        } else {
+          compassHeading = event.alpha;
+        }
+      }
+      
+      if (compassHeading === null || isNaN(compassHeading)) return;
+      
+      // Normalize to 0-360°
+      compassHeading = ((compassHeading % 360) + 360) % 360;
+      
+      // Update heading target immediately (animation loop picks it up smoothly)
+      targetHeadingRef.current = compassHeading;
+      
+      // Throttle React state updates (max ~5 times/sec to avoid re-render storms)
       const now = Date.now();
-      if (now - orientationThrottleRef.current < 50) return; // ~20 Updates/s für flüssige Drehung
-      orientationThrottleRef.current = now;
-
-      // alpha = Kompass: 0° Norden, 90° Osten, 180° Süden, 270° Westen (entspricht Karte)
-      let compassHeading = event.alpha;
-      if (compassHeading < 0) compassHeading += 360;
-
-      setDeviceOrientation(compassHeading);
-      setUserHeading(compassHeading);
-
-      const latestLocation = userLocationRef.current ?? userLocation;
-      if (latestLocation) {
-        updateUserMarker(latestLocation, compassHeading, isNavigating);
+      if (now - lastOrientationUpdate > 200) {
+        lastOrientationUpdate = now;
+        setDeviceOrientation(compassHeading);
+        setUserHeading(compassHeading);
       }
     };
 
-    // Request permission for device orientation
+    // Request permission for device orientation (iOS 13+ requires explicit permission)
     const requestDeviceOrientationPermission = async () => {
       try {
         if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-          console.log('Requesting device orientation permission...');
           const response = await (DeviceOrientationEvent as any).requestPermission();
-          console.log('Device orientation permission response:', response);
-          
           if (response === 'granted') {
             setCompassPermissionGranted(true);
-            window.addEventListener('deviceorientation', handleOrientationChange);
-            console.log('Device orientation permission granted - listener added');
+            window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
           } else {
-            console.warn('Device orientation permission denied - trying fallback');
             setCompassPermissionGranted(false);
-            // Versuche trotzdem den Listener hinzuzufügen
-            window.addEventListener('deviceorientation', handleOrientationChange);
+            // Try adding listener anyway as fallback
+            window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
           }
         } else {
-          // Fallback for browsers that don't require permission
-          console.log('Device orientation permission not required - adding listener');
+          // Browser doesn't require permission
           setCompassPermissionGranted(true);
-          window.addEventListener('deviceorientation', handleOrientationChange);
+          window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
         }
       } catch (error) {
         console.error('Device orientation permission error:', error);
-        // Fallback: try to add listener anyway
         setCompassPermissionGranted(true);
-        window.addEventListener('deviceorientation', handleOrientationChange);
+        window.addEventListener('deviceorientation', handleOrientationChange, { passive: true });
       }
     };
 
+    // Also try absoluteorientation for better Android support
+    const handleAbsoluteOrientation = (event: DeviceOrientationEvent) => {
+      if (event.alpha !== null) {
+        const compassHeading = (360 - event.alpha) % 360;
+        targetHeadingRef.current = ((compassHeading % 360) + 360) % 360;
+      }
+    };
+    
     requestDeviceOrientationPermission();
+    window.addEventListener('deviceorientationabsolute', handleAbsoluteOrientation as any, { passive: true });
 
     return () => {
       window.removeEventListener('deviceorientation', handleOrientationChange);
+      window.removeEventListener('deviceorientationabsolute', handleAbsoluteOrientation as any);
     };
-  }, [isNavigating, isLocationFixed]);
+  }, []);
 
   // Cleanup location tracking on unmount
   useEffect(() => {
@@ -1675,8 +1864,6 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         });
 
         mapRef.current = map;
-        // Wichtig: Map-Instanz nicht direkt loggen, sonst wirft der Browser bei Next.js/Turbopack
-        // einen SecurityError wegen cross-origin Properties (z.B. toJSON auf Window).
         console.log('Mapbox map initialized successfully');
         console.log('Map center set to:', center);
 
@@ -1717,13 +1904,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
         });
 
-        // Update user marker when map bearing changes in 3D mode
-        map.on('rotate', () => {
-          if (userLocation && map.getPitch() > 30) {
-            // Update marker direction in 3D mode when map rotates
-            updateUserMarker(userLocation, userHeading, false);
-          }
-        });
+        // Heading cone rotation is handled by animation loop (reads map bearing every frame)
+        // No need for manual rotation event handler
 
         // Add user location marker if we have the location
         if (userLocation) {
@@ -1761,6 +1943,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   useEffect(() => {
     return () => {
       stopLocationTracking();
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -1826,9 +2012,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           essential: true
         });
       }
-    } else if (!isFollowingLocation && !isNavigating) {
-      // Following deaktiviert – Standort-Updates laufen weiter für flüssige Marker-Bewegung
-      // Watch wird nur beim Unmount gestoppt
+    } else if (!isFollowingLocation && !isNavigating && watchId !== null) {
+      // Following-Modus deaktiviert - stoppe Location Tracking nur wenn es läuft
+      console.log('Following mode deactivated - stopping location tracking');
+      stopLocationTracking();
       
       // Zurück zur 2D-Ansicht
       if (mapRef.current) {

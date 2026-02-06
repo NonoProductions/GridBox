@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { isOwner } from "@/lib/userRoles";
 
-const MENU_ANIMATION_MS = 300;
+const MENU_ANIMATION_MS = 400;
 
 export default function SideMenu({ 
   open, 
@@ -83,24 +83,29 @@ export default function SideMenu({
     };
   }, []);
 
-  // Öffnen: Panel von links reinsliden, Backdrop einblenden (setState asynchron, um react-hooks/set-state-in-effect zu vermeiden)
+  // Öffnen: Panel von links reinsliden, Backdrop einblenden
+  // Double-requestAnimationFrame stellt sicher, dass der Browser den Ausgangszustand (-translate-x-full) tatsächlich gerendert hat,
+  // bevor die Transition zu translate-x-0 gestartet wird.
   useEffect(() => {
     if (open) {
-      queueMicrotask(() => {
-        setIsClosing(false);
-        setBackdropVisible(false);
-        setPanelSlideIn(false);
+      setIsClosing(false);
+      setBackdropVisible(false);
+      setPanelSlideIn(false);
+      let rafId1: number;
+      let rafId2: number;
+      rafId1 = requestAnimationFrame(() => {
+        rafId2 = requestAnimationFrame(() => {
+          setBackdropVisible(true);
+          setPanelSlideIn(true);
+        });
       });
-      const t = setTimeout(() => {
-        setBackdropVisible(true);
-        setPanelSlideIn(true);
-      }, 20);
-      return () => clearTimeout(t);
+      return () => {
+        cancelAnimationFrame(rafId1);
+        cancelAnimationFrame(rafId2);
+      };
     } else {
-      queueMicrotask(() => {
-        setBackdropVisible(false);
-        setPanelSlideIn(false);
-      });
+      setBackdropVisible(false);
+      setPanelSlideIn(false);
     }
   }, [open]);
 
@@ -133,24 +138,29 @@ export default function SideMenu({
     <>
       {/* Backdrop mit Ein-/Ausblend-Animation */}
       <div
-        className={`fixed inset-0 z-[1100] bg-black/40 backdrop-blur-sm transition-opacity duration-300 ease-out ${
+        className={`fixed inset-0 z-[1100] bg-black/40 backdrop-blur-sm ${
           backdropVisible && menuVisible ? "opacity-100" : "opacity-0"
         }`}
+        style={{ transition: 'opacity 400ms cubic-bezier(0.16, 1, 0.3, 1)' }}
         onClick={handleClose}
         aria-hidden="true"
       />
 
       {/* Panel: von links reinsliden – immer transition, dann transform togglen */}
       <aside
-        className={`fixed top-0 left-0 z-[1110] h-full w-80 max-w-[85vw] transition-transform duration-300 ease-out ${
+        className={`fixed top-0 left-0 z-[1110] h-full w-80 max-w-[85vw] will-change-transform ${
           isDarkMode 
             ? 'text-white border-r border-gray-600' 
             : 'bg-white text-slate-900 border-r border-slate-200'
         } shadow-2xl ${
           panelShown ? "translate-x-0" : "-translate-x-full"
         }`}
-        style={isDarkMode ? { backgroundColor: '#282828' } : {}}
+        style={{
+          ...(isDarkMode ? { backgroundColor: '#282828' } : {}),
+          transition: 'transform 400ms cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
       >
+        <div className="h-full overflow-y-auto">
         {!isAuthenticated ? (
           // Nicht angemeldete Nutzer
           <>
@@ -374,6 +384,7 @@ export default function SideMenu({
             </div>
           </>
         )}
+        </div>
       </aside>
     </>
   );
