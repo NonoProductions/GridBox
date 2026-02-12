@@ -53,7 +53,7 @@ const ThemeScript = () => (
     }
     document.documentElement.classList.remove('dark');
     if (useDark) document.documentElement.classList.add('dark');
-  } catch (e) { console.error('Theme init'); }
+  } catch (_) { /* theme init optional */ }
 })();
 `,
     }}

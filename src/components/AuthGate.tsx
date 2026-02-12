@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { logger } from "@/lib/logger";
 
 const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding", "/login", "/hilfe"]);
 
@@ -41,7 +42,7 @@ export default function AuthGate() {
           setHasChecked(true);
         }
       } catch (error) {
-        console.error("Auth check error:", error);
+        logger.error("Auth check error:", String(error));
         // On error, assume not authenticated for security
         if (isMounted) {
           setIsAuthenticated(false);
@@ -65,7 +66,7 @@ export default function AuthGate() {
       });
       subscription = authSubscription;
     } catch (error) {
-      console.error("Error setting up auth listener:", error);
+      logger.error("Error setting up auth listener:", String(error));
     }
 
     return () => {

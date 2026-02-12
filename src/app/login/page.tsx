@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import LoginCard from "@/components/LoginCard";
 import { usePageTheme } from "@/lib/usePageTheme";
+import { logger } from "@/lib/logger";
 
 function LoginContent() {
   const router = useRouter();
@@ -60,14 +61,14 @@ function LoginContent() {
     const checkSession = async () => {
       try {
         if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-          console.error("⚠️ Supabase not configured");
+          logger.error("Supabase not configured");
           setSupabaseConfigured(false);
           setIsLoading(false);
           return;
         }
         
         const timeoutId = setTimeout(() => {
-          console.warn("⏱️ Session check timeout");
+          logger.warn("Session check timeout");
           setIsLoading(false);
         }, 5000);
         
@@ -75,7 +76,7 @@ function LoginContent() {
         clearTimeout(timeoutId);
         
         if (error) {
-          console.error("Session check error:", error);
+          logger.error("Session check error:", String(error));
           setIsLoading(false);
           return;
         }
@@ -87,7 +88,7 @@ function LoginContent() {
           setIsLoading(false);
         }
       } catch (error) {
-        console.error("Session check error:", error);
+        logger.error("Session check error:", String(error));
         setIsLoading(false);
       }
     };

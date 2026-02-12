@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, type JSX } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { logger } from "@/lib/logger";
 import { Station } from "./StationManager";
 import AddStationForm from "./AddStationForm";
 import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
@@ -134,7 +135,7 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
             });
 
           if (error) {
-            console.error('Upload error:', error);
+            logger.error('Upload error:', error);
             throw new Error('Fehler beim Hochladen der Datei.');
           }
 
@@ -153,7 +154,7 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
           
           uploadedUrls.push(urlData.publicUrl);
         } catch (uploadError) {
-          console.error('Upload error:', uploadError);
+          logger.error('Upload error:', uploadError);
           // Don't use Data URL fallback - it's a security risk and can cause memory issues
           alert(`Fehler beim Hochladen: ${uploadError instanceof Error ? uploadError.message : 'Unbekannter Fehler'}`);
           continue;
@@ -166,7 +167,7 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
         onUpdate(newPhotos);
       }
     } catch (error) {
-      console.error('Error uploading photos:', error);
+      logger.error('Error uploading photos:', error);
       alert('Fehler beim Hochladen der Fotos. Bitte versuchen Sie es erneut.');
     } finally {
       setUploading(false);
@@ -375,7 +376,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       // Debug: Prüfe Authentifizierung (nur beim ersten Mal)
       if (!hasInitialLoad || forceRefresh) {
         const { data: { session } } = await supabase.auth.getSession();
-        console.log('📊 Lade Stationen... (Session vorhanden:', !!session, ')');
+        logger.dev('📊 Lade Stationen... (Session vorhanden:', !!session, ')');
       }
       
       const { data, error } = await supabase
@@ -384,13 +385,13 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('❌ Supabase Fehler beim Laden der Stationen:', error);
+        logger.error('❌ Supabase Fehler beim Laden der Stationen:', error);
         throw error;
       }
       
       const stationsData = data || [];
       if (!silent || !hasInitialLoad) {
-        console.log('✅ Stationen geladen:', stationsData.length, 'Stationen', silent ? '(silent)' : '');
+        logger.dev('✅ Stationen geladen:', stationsData.length, 'Stationen', silent ? '(silent)' : '');
       }
       
       setStations(stationsData);
@@ -409,10 +410,10 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       
       if (!hasInitialLoad) {
         setHasInitialLoad(true);
-        console.log('✅ Initial Load abgeschlossen - Cache aktiviert');
+        logger.dev('✅ Initial Load abgeschlossen - Cache aktiviert');
       }
     } catch (err) {
-      console.error('❌ Fehler beim Laden der Stationen:', err);
+      logger.error('❌ Fehler beim Laden der Stationen:', err);
       // Don't leak specific error details to prevent information disclosure
       if (!silent) {
         setError('Fehler beim Laden der Stationen. Bitte versuchen Sie es erneut.');
@@ -445,7 +446,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .order("started_at", { ascending: false });
 
       if (error) {
-        console.warn("Rentals für Statistiken (optional):", error.message);
+        logger.warn("Rentals für Statistiken (optional):", error.message);
         setOwnerRentals([]);
         return;
       }
@@ -459,7 +460,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       }));
       setOwnerRentals(list);
     } catch (e) {
-      console.warn("Rentals laden:", e);
+      logger.warn("Rentals laden:", e);
       setOwnerRentals([]);
     } finally {
       setStatsLoading(false);
@@ -513,7 +514,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       if (opts?.pageSize != null) setUsersPageSize(opts.pageSize);
       if (opts?.search !== undefined) setUsersSearchQuery(opts.search);
     } catch (err) {
-      console.error('Fehler beim Laden der Benutzer:', err);
+      logger.error('Fehler beim Laden der Benutzer:', err);
       setError('Fehler beim Laden der Benutzer. Bitte versuchen Sie es erneut.');
       setUsers([]);
       setUsersCount(null);
@@ -530,7 +531,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       if (!confirm('Sind Sie sicher, dass Sie diese Station löschen möchten? (Testdaten-Modus: Nur lokale Löschung)')) return;
       setStations(prev => prev.filter(station => station.id !== id));
       setSelectedStationId(null);
-      console.log('⚠️ Testdaten-Modus: Löschung nur lokal (keine DB-Änderung)');
+      logger.dev('⚠️ Testdaten-Modus: Löschung nur lokal (keine DB-Änderung)');
       return;
     }
 
@@ -575,7 +576,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .eq('id', id);
 
       if (error) {
-        console.error('Delete error:', error);
+        logger.error('Delete error:', error);
         throw error;
       }
       
@@ -584,7 +585,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       setSelectedStationId(null);
       setError(null);
     } catch (err) {
-      console.error('Fehler beim Löschen der Station:', err);
+      logger.error('Fehler beim Löschen der Station:', err);
       setError('Fehler beim Löschen der Station. Bitte versuchen Sie es erneut.');
       // Bei Fehler: Hole Daten erneut mit Force-Refresh
       fetchStations(true, true);
@@ -598,7 +599,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       setStations(prev => prev.map(station => 
         station.id === id ? { ...station, ...updates } : station
       ));
-      console.log('⚠️ Testdaten-Modus: Update nur lokal (keine DB-Änderung)');
+      logger.dev('⚠️ Testdaten-Modus: Update nur lokal (keine DB-Änderung)');
       return;
     }
 
@@ -704,14 +705,14 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .eq('id', id);
 
       if (error) {
-        console.error('Supabase Update Fehler:', error);
+        logger.error('Supabase Update Fehler:', error);
         throw error;
       }
       
-      console.log('✅ Station erfolgreich aktualisiert:', id);
+      logger.dev('✅ Station erfolgreich aktualisiert:', id);
       setError(null);
     } catch (err) {
-      console.error('❌ Fehler beim Aktualisieren der Station:', err);
+      logger.error('❌ Fehler beim Aktualisieren der Station:', err);
       // Don't leak specific error details
       setError('Fehler beim Aktualisieren der Station. Bitte versuchen Sie es erneut.');
       // Bei Fehler: Stelle alten Zustand wieder her mit Force-Refresh
@@ -736,7 +737,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       };
       setStations(prev => [newStation, ...prev]);
       setShowAddStationForm(false);
-      console.log('⚠️ Testdaten-Modus: Station nur lokal hinzugefügt (keine DB-Änderung)');
+      logger.dev('⚠️ Testdaten-Modus: Station nur lokal hinzugefügt (keine DB-Änderung)');
       return;
     }
 
@@ -788,7 +789,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .select();
 
       if (error) {
-        console.error('Supabase Fehler:', error);
+        logger.error('Supabase Fehler:', error);
         // Don't leak specific database errors
         throw new Error('Fehler beim Hinzufügen der Station. Bitte versuchen Sie es erneut.');
       }
@@ -797,12 +798,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         throw new Error('Station konnte nicht erstellt werden');
       }
       
-      console.log('Station erfolgreich hinzugefügt');
+      logger.dev('Station erfolgreich hinzugefügt');
       // Realtime macht das Update automatisch
       setShowAddStationForm(false);
       setError(null);
     } catch (err: unknown) {
-      console.error('Fehler beim Hinzufügen der Station:', err);
+      logger.error('Fehler beim Hinzufügen der Station:', err);
       const errorMessage = err instanceof Error ? err.message : 'Fehler beim Hinzufügen der Station';
       setError(errorMessage);
       throw err;
@@ -854,14 +855,14 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         .eq('id', userId);
 
       if (error) {
-        console.error('Role assignment error:', error);
+        logger.error('Role assignment error:', error);
         throw error;
       }
       
       await fetchUsers();
       setError(null);
     } catch (err) {
-      console.error('Fehler beim Zuweisen der Rolle:', err);
+      logger.error('Fehler beim Zuweisen der Rolle:', err);
       setError('Fehler beim Zuweisen der Rolle. Bitte versuchen Sie es erneut.');
     }
   };
@@ -877,7 +878,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       if (error) throw error;
       await fetchUsers();
     } catch (err) {
-      console.error('Fehler beim Entfernen der Rolle:', err);
+      logger.error('Fehler beim Entfernen der Rolle:', err);
       setError('Fehler beim Entfernen der Rolle');
     }
   };
@@ -885,7 +886,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   // Hole Benutzerstandort
   useEffect(() => {
     if (!navigator.geolocation) {
-      console.warn('Geolocation wird von diesem Browser nicht unterstützt');
+      logger.warn('Geolocation wird von diesem Browser nicht unterstützt');
       setUserLocation({ lat: 52.52, lng: 13.405 });
       return;
     }
@@ -894,10 +895,10 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       (position) => {
         const { latitude, longitude } = position.coords;
         setUserLocation({ lat: latitude, lng: longitude });
-        console.log('Benutzerstandort erhalten:', { lat: latitude, lng: longitude });
+        logger.dev('Benutzerstandort erhalten:', { lat: latitude, lng: longitude });
       },
       (error) => {
-        console.error('Geolocation Fehler:', error);
+        logger.error('Geolocation Fehler:', error);
         setUserLocation({ lat: 52.52, lng: 13.405 });
       },
       { 
@@ -911,7 +912,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   // Initial Load nur einmal beim ersten Öffnen
   useEffect(() => {
     if (!hasInitialLoad) {
-      console.log('🚀 Initialer Ladevorgang...');
+      logger.dev('🚀 Initialer Ladevorgang...');
       fetchStations(false, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -987,12 +988,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       setStations(testStations);
       setOwnerRentals(generateTestRentals(testStations));
       setTestDataEnabled(true);
-      console.log('✅ Testdaten aktiviert');
+      logger.dev('✅ Testdaten aktiviert');
     } else {
       setTestDataEnabled(false);
       setOwnerRentals([]);
       await fetchStations(false, true);
-      console.log('✅ Testdaten deaktiviert - echte Daten geladen');
+      logger.dev('✅ Testdaten deaktiviert - echte Daten geladen');
     }
   };
 
@@ -1037,7 +1038,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       return;
     }
 
-    console.log('🔄 Aktiviere robuste Hintergrund-Updates...');
+    logger.dev('🔄 Aktiviere robuste Hintergrund-Updates...');
     
     let isSubscribed = true;
     let channel: any = null;
@@ -1049,10 +1050,10 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     // Funktion zum Starten/Stoppen des Pollings
     const startPolling = () => {
       if (pollingInterval || realtimeIsActive) return;
-      console.log('⏱️ Starte Polling-Fallback (alle 30 Sekunden) - Realtime inaktiv');
+      logger.dev('⏱️ Starte Polling-Fallback (alle 30 Sekunden) - Realtime inaktiv');
       pollingInterval = setInterval(() => {
         if (isSubscribed && !realtimeIsActive) {
-          console.log('🔄 Polling-Update (Realtime inaktiv)...');
+          logger.dev('🔄 Polling-Update (Realtime inaktiv)...');
           fetchStations(true, true); // Silent refresh
         }
       }, 30000); // 30 Sekunden statt 8 - reduziert Egress um ~87%
@@ -1060,7 +1061,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
     const stopPolling = () => {
       if (pollingInterval) {
-        console.log('⏸️ Stoppe Polling (Realtime aktiv)');
+        logger.dev('⏸️ Stoppe Polling (Realtime aktiv)');
         clearInterval(pollingInterval);
         pollingInterval = null;
       }
@@ -1075,7 +1076,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         supabase.removeChannel(channel);
       }
 
-      console.log('🔌 Starte Realtime-Subscription...');
+      logger.dev('🔌 Starte Realtime-Subscription...');
       
       // Erstelle neue Realtime-Verbindung
       channel = supabase
@@ -1090,7 +1091,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           (payload: { eventType: string; new?: Station | null; old?: Station | null }) => {
             const newStation = payload.new as Station | null | undefined;
             const oldStation = payload.old as Station | null | undefined;
-            console.log('📡 Realtime Update:', payload.eventType, newStation?.name || oldStation?.name);
+            logger.dev('📡 Realtime Update:', payload.eventType, newStation?.name || oldStation?.name);
             
             // Optimistische Update-Strategie
             if (payload.eventType === 'UPDATE' && newStation) {
@@ -1104,8 +1105,8 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                     .map(key => `${key}: ${station[key as keyof Station]} → ${newStation[key as keyof Station]}`);
                   
                   if (changedFields.length > 0) {
-                    console.log('✅ Station aktualisiert:', updated.name);
-                    console.log('   Änderungen:', changedFields.join(', '));
+                    logger.dev('✅ Station aktualisiert:', updated.name);
+                    logger.dev('   Änderungen:', changedFields.join(', '));
                   }
                   
                   return updated;
@@ -1115,12 +1116,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               setLastUpdate(new Date());
               reconnectAttempts = 0; // Reset bei erfolgreicher Nachricht
             } else if (payload.eventType === 'INSERT' && newStation) {
-              console.log('➕ Neue Station:', newStation.name);
+              logger.dev('➕ Neue Station:', newStation.name);
               setStations(prev => [newStation, ...prev]);
               setLastUpdate(new Date());
               reconnectAttempts = 0;
             } else if (payload.eventType === 'DELETE' && oldStation) {
-              console.log('➖ Station entfernt:', oldStation.name);
+              logger.dev('➖ Station entfernt:', oldStation.name);
               setStations(prev => prev.filter(s => s.id !== oldStation.id));
               setLastUpdate(new Date());
               reconnectAttempts = 0;
@@ -1128,16 +1129,16 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           }
         )
         .subscribe((status) => {
-          console.log('📡 Realtime Status:', status);
+          logger.dev('📡 Realtime Status:', status);
           
           if (status === 'SUBSCRIBED') {
-            console.log('✅ Realtime aktiv - Polling wird gestoppt');
+            logger.dev('✅ Realtime aktiv - Polling wird gestoppt');
             realtimeIsActive = true;
             setRealtimeActive(true);
             reconnectAttempts = 0;
             stopPolling(); // Stoppe Polling wenn Realtime aktiv ist
           } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            console.warn('⚠️ Realtime Fehler:', status);
+            logger.warn('⚠️ Realtime Fehler:', status);
             realtimeIsActive = false;
             setRealtimeActive(false);
             startPolling(); // Starte Polling wenn Realtime nicht funktioniert
@@ -1146,13 +1147,13 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
             if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
               const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
               reconnectAttempts++;
-              console.log(`🔄 Reconnect Versuch ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`);
+              logger.dev(`🔄 Reconnect Versuch ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`);
               setTimeout(() => startRealtimeSubscription(), delay);
             } else {
-              console.warn('❌ Max Reconnect-Versuche erreicht, nutze nur Polling');
+              logger.warn('❌ Max Reconnect-Versuche erreicht, nutze nur Polling');
             }
           } else if (status === 'CLOSED') {
-            console.log('🔌 Realtime geschlossen');
+            logger.dev('🔌 Realtime geschlossen');
             realtimeIsActive = false;
             setRealtimeActive(false);
             startPolling(); // Starte Polling wenn Realtime geschlossen ist
@@ -1168,7 +1169,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
     // Cleanup
     return () => {
-      console.log('🛑 Stoppe alle Hintergrund-Updates');
+      logger.dev('🛑 Stoppe alle Hintergrund-Updates');
       isSubscribed = false;
       if (channel) {
         supabase.removeChannel(channel);
@@ -1259,7 +1260,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       
       // Prüfe ob Datum valid ist
       if (isNaN(lastContact.getTime())) {
-        console.warn('Ungültiges updated_at für Station:', station.name, station.updated_at);
+        logger.warn('Ungültiges updated_at für Station:', station.name, station.updated_at);
         return false;
       }
       
@@ -1269,7 +1270,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       // 60 Sekunden statt 30 für mehr Toleranz bei Netzwerk-Latenzen
       return diffSeconds < 60;
     } catch (error) {
-      console.error('Fehler beim Prüfen der Station-Verbindung:', error, station.name);
+      logger.error('Fehler beim Prüfen der Station-Verbindung:', error, station.name);
       return false;
     }
   };

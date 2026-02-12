@@ -7,6 +7,7 @@ import {
   requestNotificationPermission,
   registerServiceWorker,
 } from '@/lib/notifications';
+import { logger } from '@/lib/logger';
 
 export default function NotificationManager() {
   const [isSupported, setIsSupported] = useState(false);
@@ -19,7 +20,7 @@ export default function NotificationManager() {
     queueMicrotask(() => setIsSupported(supported));
 
     if (!supported) {
-      console.log('Push-Benachrichtigungen werden nicht unterstützt');
+      logger.dev('Push-Benachrichtigungen werden nicht unterstützt');
       return;
     }
 
@@ -33,16 +34,16 @@ export default function NotificationManager() {
       .then((registration) => {
         if (registration) {
           setIsRegistered(true);
-          console.log('Service Worker erfolgreich registriert');
+          logger.dev('Service Worker erfolgreich registriert');
 
           // Prüfe auf Updates
           registration.addEventListener('updatefound', () => {
-            console.log('Service Worker Update gefunden');
+            logger.dev('Service Worker Update gefunden');
             const newWorker = registration.installing;
             if (newWorker) {
               newWorker.addEventListener('statechange', () => {
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  console.log('Neue Service Worker Version verfügbar');
+                  logger.dev('Neue Service Worker Version verfügbar');
                   // Optional: Benutzer über Update informieren
                 }
               });
@@ -51,12 +52,12 @@ export default function NotificationManager() {
         }
       })
       .catch((error) => {
-        console.error('Fehler bei Service Worker Registrierung:', error);
+        logger.error('Fehler bei Service Worker Registrierung:', String(error));
       });
 
     // Service Worker Controller Changes
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      console.log('Service Worker Controller geändert - Seite neu laden empfohlen');
+      logger.dev('Service Worker Controller geändert - Seite neu laden empfohlen');
       // Optional: Automatisch neu laden
       // window.location.reload();
     });

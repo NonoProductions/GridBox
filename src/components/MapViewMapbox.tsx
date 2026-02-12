@@ -10,6 +10,7 @@ import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import mapboxgl from "mapbox-gl";
 import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
 import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
+import { logger } from "@/lib/logger";
 
 // Legacy Station type for backward compatibility
 type LegacyStation = {
@@ -352,7 +353,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
   // Debug: Log stations when they change
   useEffect(() => {
-    console.log('Stations updated:', stations.length, stations);
+    logger.dev('Stations updated:', stations.length, stations);
   }, [stations]);
 
   // Read theme from initial prop and sync with document + localStorage (so Light Mode works)
@@ -376,7 +377,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Get user's current location - nur einmal beim Laden
   useEffect(() => {
     if (!navigator.geolocation) {
-      console.warn('Geolocation is not supported by this browser');
+      logger.warn('Geolocation is not supported by this browser');
       // Fallback to Berlin coordinates
       setUserLocation({ lat: 52.52, lng: 13.405 });
       setLocationLoading(false);
@@ -386,7 +387,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     // Explizite Berechtigungsanfrage für Standort
     const requestLocationPermission = async () => {
       try {
-        console.log('Requesting location permission...');
+        logger.dev('Requesting location permission...');
         
         // Versuche Standort zu erhalten - das triggert die Berechtigungsanfrage
         navigator.geolocation.getCurrentPosition(
@@ -407,9 +408,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             setShowPermissionModal(false);
           },
           (error) => {
-            console.error('Geolocation error:', error);
+            logger.error('Geolocation error:', error);
             if (error.code === error.PERMISSION_DENIED) {
-              console.warn('Location permission denied by user');
+              logger.warn('Location permission denied by user');
               setLocationPermissionGranted(false);
               setShowPermissionModal(true);
               setLocationLoading(false);
@@ -427,7 +428,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
         );
       } catch (error) {
-        console.error('Permission request error:', error);
+        logger.error('Permission request error:', error);
         setUserLocation({ lat: 52.52, lng: 13.405 });
         setLocationLoading(false);
       }
@@ -442,17 +443,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   useEffect(() => {
     if (!permissionRequested && navigator.geolocation) {
       setPermissionRequested(true);
-      console.log('Requesting explicit location permission...');
+      logger.dev('Requesting explicit location permission...');
       
       // Explizite Berechtigungsanfrage
       navigator.geolocation.getCurrentPosition(
         (position) => {
-          console.log('Location permission granted');
+          logger.dev('Location permission granted');
           setLocationPermissionGranted(true);
           setShowPermissionModal(false);
         },
         (error) => {
-          console.log('Location permission denied or error:', error);
+          logger.dev('Location permission denied or error:', error);
           setLocationPermissionGranted(false);
           setShowPermissionModal(true);
         },
@@ -471,7 +472,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const requestLocationPermissionAgain = () => {
     if (!navigator.geolocation) return;
     
-    console.log('Requesting location permission again...');
+    logger.dev('Requesting location permission again...');
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude, heading } = position.coords;
@@ -488,7 +489,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setLocationLoading(false);
       },
       (error) => {
-        console.error('Location permission still denied:', error);
+        logger.error('Location permission still denied:', error);
         setLocationPermissionGranted(false);
         setShowPermissionModal(true);
       },
@@ -550,7 +551,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     window.addEventListener('deviceorientationabsolute', handleOrientationEvent as any, { passive: true });
     setCompassPermissionGranted(true);
     compassPermissionGrantedRef.current = true;
-    console.log('Orientation listeners added');
+    logger.dev('Orientation listeners added');
   };
 
   // Request compass permission - works from user gesture (iOS) or automatically (Android)
@@ -569,7 +570,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         } else {
           setCompassPermissionGranted(false);
           compassPermissionGrantedRef.current = false;
-          console.warn('Compass permission denied by user');
+          logger.warn('Compass permission denied by user');
           return false;
         }
       } else {
@@ -578,7 +579,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         return true;
       }
     } catch (error) {
-      console.error('Compass permission error:', error);
+      logger.error('Compass permission error:', error);
       // Try adding listeners anyway (works on some Android browsers)
       addOrientationListeners();
       return true;
@@ -616,7 +617,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Beende Following-Modus und Zentrierung wenn Navigation gestartet wird
       setIsCentered(false);
       if (isFollowingLocation) {
-        console.log('Navigation started - deactivating following mode');
+        logger.dev('Navigation started - deactivating following mode');
         setIsFollowingLocation(false);
         setIs3DFollowing(false);
         stopLocationTracking();
@@ -625,7 +626,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Get Mapbox access token
       const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
       if (!accessToken) {
-        console.error('Mapbox access token not found');
+        logger.error('Mapbox access token not found');
         return;
       }
       
@@ -667,7 +668,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               map.removeSource('walking-route');
             }
           } catch (error) {
-            console.log('Error removing existing walking route:', error instanceof Error ? error.message : String(error));
+            logger.dev('Error removing existing walking route:', error instanceof Error ? error.message : String(error));
           }
           routeLayerRef.current = null;
         }
@@ -677,7 +678,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           try {
             walkingTimeLabelRef.current.remove();
           } catch (error) {
-            console.log('Error removing walking time label:', error instanceof Error ? error.message : String(error));
+            logger.dev('Error removing walking time label:', error instanceof Error ? error.message : String(error));
           }
           walkingTimeLabelRef.current = null;
         }
@@ -696,12 +697,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         // Force immediate update of user marker with navigation styling
         // Update marker immediately to show direction arrow
-        console.log('Starting navigation - updating user marker with direction');
+        logger.dev('Starting navigation - updating user marker with direction');
         updateUserMarker(userLocation, userHeading || 0, true);
         
         // Also update after a short delay to ensure state is set
         setTimeout(() => {
-          console.log('Delayed update of user marker for navigation');
+          logger.dev('Delayed update of user marker for navigation');
           updateUserMarker(userLocation, userHeading || 0, true);
         }, 100);
         
@@ -767,10 +768,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Add destination marker (commented out to remove target window)
         // addDestinationMarker(station);
         
-        console.log('Navigation started to:', station.name);
+        logger.dev('Navigation started to:', station.name);
       }
     } catch (error) {
-      console.error('Error starting navigation:', error);
+      logger.error('Error starting navigation:', error);
     }
   };
 
@@ -791,7 +792,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             map.removeSource('walking-route');
           }
         } catch (error) {
-          console.log('Error removing existing route:', error instanceof Error ? error.message : String(error));
+          logger.dev('Error removing existing route:', error instanceof Error ? error.message : String(error));
         }
         routeLayerRef.current = null;
       }
@@ -806,13 +807,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         }
       } catch (error) {
         // Ignore errors if layer/source doesn't exist
-        console.log('Route cleanup - some layers/sources may not exist:', error instanceof Error ? error.message : String(error));
+        logger.dev('Route cleanup - some layers/sources may not exist:', error instanceof Error ? error.message : String(error));
       }
       
       // Get Mapbox access token
       const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
       if (!accessToken) {
-        console.error('Mapbox access token not found');
+        logger.error('Mapbox access token not found');
         return;
       }
       
@@ -863,10 +864,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Add walking time label above the station marker
         addWalkingTimeLabel(station, walkingTimeMinutes);
         
-        console.log('Walking route added to map with time:', walkingTimeMinutes, 'minutes');
+        logger.dev('Walking route added to map with time:', walkingTimeMinutes, 'minutes');
       }
     } catch (error) {
-      console.error('Error adding walking route:', error);
+      logger.error('Error adding walking route:', error);
     }
   };
 
@@ -904,9 +905,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .setLngLat([station.lng, station.lat])
         .addTo(map);
       
-      console.log('Destination marker added for:', station.name);
+      logger.dev('Destination marker added for:', station.name);
     } catch (error) {
-      console.error('Error adding destination marker:', error);
+      logger.error('Error adding destination marker:', error);
     }
   };
 
@@ -948,6 +949,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       setTimeToDestination(0);
       setCurrentInstruction('');
       
+      // Zurück zur normalen Ansicht (Nord oben)
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        duration: 800,
+        essential: true
+      });
+      
       // Update user marker to normal mode but keep direction if available
       if (userLocation) {
         updateUserMarker(userLocation, userHeading, false);
@@ -985,7 +994,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           .addTo(map);
         
         highlightMarkerRef.current = highlightMarker;
-        console.log('Highlight marker re-added for selected station:', selectedStation.name);
+        logger.dev('Highlight marker re-added for selected station:', selectedStation.name);
       }
       
       // Force re-render of station markers by triggering the useEffect
@@ -995,7 +1004,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       // Ensure the panel is in collapsed state for the selected station
       if (selectedStation) {
         setIsPanelExpanded(false);
-        console.log('Panel collapsed for selected station:', selectedStation.name);
+        logger.dev('Panel collapsed for selected station:', selectedStation.name);
         
         // Center map on the selected station (same as when selecting a station normally)
         const map = mapRef.current;
@@ -1011,13 +1020,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             duration: 1000 // Smooth animation
           });
           
-          console.log('Map centered on selected station after navigation:', selectedStation.name);
+          logger.dev('Map centered on selected station after navigation:', selectedStation.name);
         }
       }
       
-      console.log('Navigation cleared');
+      logger.dev('Navigation cleared');
     } catch (error) {
-      console.error('Error clearing navigation:', error);
+      logger.error('Error clearing navigation:', error);
     }
   };
 
@@ -1028,7 +1037,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (userLocation) {
       updateUserMarker(userLocation, userHeading, false);
     }
-    console.log('Navigation stopped');
+    logger.dev('Navigation stopped');
   };
 
   // Function to speak navigation instruction
@@ -1047,10 +1056,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         utterance.volume = 0.8;
         
         window.speechSynthesis.speak(utterance);
-        console.log('Speaking instruction:', text);
+        logger.dev('Speaking instruction:', text);
       }
     } catch (error) {
-      console.error('Error speaking instruction:', error);
+      logger.error('Error speaking instruction:', error);
     }
   };
 
@@ -1066,7 +1075,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // IMPORTANT: Reads from refs (not state) inside callback to avoid stale closures
   const startLocationTracking = () => {
     if (!navigator.geolocation) {
-      console.warn('Geolocation is not supported by this browser');
+      logger.warn('Geolocation is not supported by this browser');
       return;
     }
 
@@ -1125,18 +1134,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           setDistanceToDestination(Math.round(distance));
           
           // Camera following during navigation
+          // Bearing is continuously updated by animation loop (compass-following)
           if (!isLocationFixedRef.current) {
             const map = mapRef.current;
             const currentZoom = map.getZoom();
             const targetZoom = currentZoom < 18 ? 19 : currentZoom;
-            const targetBearing = (currentDeviceOrientation !== 0 && !isNaN(currentDeviceOrientation))
-              ? -currentDeviceOrientation + 180
-              : map.getBearing();
             
             map.easeTo({
               center: [newLocation.lng, newLocation.lat],
               zoom: targetZoom,
-              bearing: targetBearing,
               duration: 800,
               essential: true
             });
@@ -1144,28 +1150,19 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           
           // Check arrival
           if (distance < 10) {
-            console.log('User has arrived at destination!');
+            logger.dev('User has arrived at destination!');
           }
         }
         
         // Following mode: camera follows position smoothly (reads from refs)
+        // Bearing is continuously updated by animation loop (compass-following)
         const following = isFollowingLocationRef.current;
         const following3D = is3DFollowingRef.current;
         if (following && mapRef.current && !navActive) {
           const map = mapRef.current;
           
-          let targetBearing = 0;
-          if (following3D) {
-            if (currentDeviceOrientation !== null && !isNaN(currentDeviceOrientation) && hasCompass) {
-              targetBearing = -currentDeviceOrientation + 180;
-            } else if (calculatedHeading !== null && !isNaN(calculatedHeading)) {
-              targetBearing = -calculatedHeading;
-            }
-          }
-          
           map.easeTo({
             center: [newLocation.lng, newLocation.lat],
-            bearing: targetBearing,
             pitch: following3D ? 60 : 0,
             duration: 800,
             essential: true
@@ -1177,7 +1174,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setLastLocation(newLocation);
       },
       (error) => {
-        console.error('Geolocation error during tracking:', error);
+        logger.error('Geolocation error during tracking:', error);
       },
       {
         enableHighAccuracy: true,
@@ -1187,7 +1184,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     );
     
     setWatchId(newWatchId);
-    console.log('Location tracking started');
+    logger.dev('Location tracking started');
   };
 
   // Function to stop location tracking
@@ -1195,7 +1192,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (watchId !== null) {
       navigator.geolocation.clearWatch(watchId);
       setWatchId(null);
-      console.log('Location tracking stopped');
+      logger.dev('Location tracking stopped');
     }
   };
 
@@ -1291,7 +1288,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       animatedLocationRef.current = { ...location };
       animatedHeadingRef.current = initialHeading;
     } catch (error) {
-      console.error('Error updating user marker:', error);
+      logger.error('Error updating user marker:', error);
     }
   };
   
@@ -1354,6 +1351,31 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         headingElementRef.current.style.transform = `rotate(${visualRotation}deg)`;
       }
       
+      // --- Rotate map bearing to follow compass heading (Google Maps-style) ---
+      // When in following mode (2D or 3D) or navigation mode, the map rotates
+      // so the direction the user is facing always points "up" on screen.
+      const isFollowing = isFollowingLocationRef.current;
+      const isNav = isNavigatingRef.current;
+      const isLocFixed = isLocationFixedRef.current;
+      if ((isFollowing || (isNav && !isLocFixed)) && hasCompassDataRef.current && mapRef.current) {
+        const targetMapBearing = animatedHeadingRef.current;
+        const currentMapBearing = mapRef.current.getBearing();
+        
+        // Normalize to 0-360 for comparison
+        const normalizedTarget = ((targetMapBearing % 360) + 360) % 360;
+        const normalizedCurrent = ((currentMapBearing % 360) + 360) % 360;
+        
+        // Shortest path rotation (handle 0/360 wrap-around)
+        let bearingDiff = normalizedTarget - normalizedCurrent;
+        if (bearingDiff > 180) bearingDiff -= 360;
+        if (bearingDiff < -180) bearingDiff += 360;
+        
+        if (Math.abs(bearingDiff) > 0.15) {
+          const newBearing = currentMapBearing + bearingDiff * 0.12;
+          mapRef.current.setBearing(newBearing);
+        }
+      }
+      
       animationFrameRef.current = requestAnimationFrame(animate);
     };
     
@@ -1375,18 +1397,19 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     try {
       const map = mapRef.current;
       
-      // Center map on user location with high zoom
+      // Center map on user location with high zoom and compass bearing
+      const compassBearing = hasCompassDataRef.current ? deviceOrientationRef.current : 0;
       map.flyTo({
         center: [userLocation.lng, userLocation.lat],
         zoom: 19, // High zoom for detailed navigation
-        bearing: 0, // Reset rotation for navigation
+        bearing: compassBearing, // Kompass-Ausrichtung für Navigation
         essential: true,
         duration: 1500
       });
       
-      console.log('Map centered on user location for navigation');
+      logger.dev('Map centered on user location for navigation');
     } catch (error) {
-      console.error('Error centering map on user:', error);
+      logger.error('Error centering map on user:', error);
     }
   };
 
@@ -1427,16 +1450,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           essential: true
         });
         
-        console.log('Following mode: Map centered on user location');
+        logger.dev('Following mode: Map centered on user location');
       } else {
         // In fixed mode, only update the user marker position without moving the map
-        console.log('Fixed mode: Map will not follow user movement, only marker updates');
+        logger.dev('Fixed mode: Map will not follow user movement, only marker updates');
       }
       
       // Check if user is close to destination (within 10 meters)
       if (distance < 10) {
         // User has arrived at destination
-        console.log('User has arrived at destination!');
+        logger.dev('User has arrived at destination!');
         if (voiceEnabled) {
           speakInstruction('Sie haben Ihr Ziel erreicht!');
         }
@@ -1445,7 +1468,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       }
       
     } catch (error) {
-      console.error('Error updating navigation progress:', error);
+      logger.error('Error updating navigation progress:', error);
     }
   };
 
@@ -1461,7 +1484,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         try {
           walkingTimeLabelRef.current.remove();
         } catch (error) {
-          console.log('Error removing existing walking time label:', error instanceof Error ? error.message : String(error));
+          logger.dev('Error removing existing walking time label:', error instanceof Error ? error.message : String(error));
         }
         walkingTimeLabelRef.current = null;
       }
@@ -1495,9 +1518,9 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         .addTo(map);
       
       walkingTimeLabelRef.current = timeLabelMarker;
-      console.log('Walking time label added:', walkingTimeMinutes, 'minutes');
+      logger.dev('Walking time label added:', walkingTimeMinutes, 'minutes');
     } catch (error) {
-      console.error('Error adding walking time label:', error);
+      logger.error('Error adding walking time label:', error);
     }
   };
 
@@ -1510,7 +1533,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Beende Following-Modus wenn Station ausgewählt wird
       if (isFollowingLocation) {
-        console.log('Station selected - deactivating following mode');
+        logger.dev('Station selected - deactivating following mode');
         setIsFollowingLocation(false);
         setIs3DFollowing(false);
         stopLocationTracking();
@@ -1519,17 +1542,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       setIsStationFollowingActive(false);
       
       // Debug: Log station coordinates and validate them
-      console.log('Highlighting station:', station.name, 'Coordinates:', { lat: station.lat, lng: station.lng });
+      logger.dev('Highlighting station:', station.name, 'Coordinates:', { lat: station.lat, lng: station.lng });
       
       // Validate coordinates
       if (!station.lat || !station.lng || isNaN(station.lat) || isNaN(station.lng)) {
-        console.error('Invalid station coordinates:', station);
+        logger.error('Invalid station coordinates:', station);
         return;
       }
       
       // If we're in navigation mode, automatically start navigation to the new station
       if (isNavigating) {
-        console.log('Navigation mode active - switching to new station:', station.name);
+        logger.dev('Navigation mode active - switching to new station:', station.name);
         // Clear current navigation first but keep station markers visible
         clearNavigation(true);
         // Start navigation to new station
@@ -1576,7 +1599,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Set view with offset so station appears in upper portion when panel is expanded
       const targetCenter = [station.lng, station.lat + latOffset];
-      console.log('✅ Jumping instantly to coordinates:', targetCenter);
+      logger.dev('✅ Jumping instantly to coordinates:', targetCenter);
       
       // Jump SOFORT zur Station ohne Animation
       map.jumpTo({
@@ -1590,8 +1613,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       setShowStationList(false);
       setIsPanelExpanded(false); // Panel standardmäßig im kleinen Zustand
       
-      console.log('Station highlighted and map centered on:', { lng: station.lng, lat: station.lat + latOffset });
-      console.log('🔍 Panel State:', {
+      logger.dev('Station highlighted and map centered on:', { lng: station.lng, lat: station.lat + latOffset });
+      logger.dev('🔍 Panel State:', {
         selectedStation: !!station,
         showStationList: false,
         userLocation: !!userLocation,
@@ -1599,7 +1622,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         isClosing: false,
         isFullScreenNavigation: false
       });
-      console.log('📋 Station Data:', {
+      logger.dev('📋 Station Data:', {
         name: station.name,
         address: station.address || 'NICHT VORHANDEN',
         description: station.description || 'NICHT VORHANDEN',
@@ -1608,7 +1631,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         photo_url: station.photo_url || 'NICHT VORHANDEN'
       });
     } catch (error) {
-      console.error('Error highlighting station:', error);
+      logger.error('Error highlighting station:', error);
     }
   };
 
@@ -1674,7 +1697,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         try {
           highlightMarkerRef.current.remove();
         } catch (error) {
-          console.log('Error removing highlight marker:', error instanceof Error ? error.message : String(error));
+          logger.dev('Error removing highlight marker:', error instanceof Error ? error.message : String(error));
         }
         highlightMarkerRef.current = null;
       }
@@ -1684,7 +1707,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         try {
           walkingTimeLabelRef.current.remove();
         } catch (error) {
-          console.log('Error removing walking time label:', error instanceof Error ? error.message : String(error));
+          logger.dev('Error removing walking time label:', error instanceof Error ? error.message : String(error));
         }
         walkingTimeLabelRef.current = null;
       }
@@ -1710,7 +1733,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         }
       } catch (error) {
         // Ignore errors if layer/source doesn't exist
-        console.log('Route cleanup - some layers/sources may not exist:', error instanceof Error ? error.message : String(error));
+        logger.dev('Route cleanup - some layers/sources may not exist:', error instanceof Error ? error.message : String(error));
       }
       
       // Clear navigation if active
@@ -1737,15 +1760,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Deaktiviere auch den normalen Following-Modus
       if (isFollowingLocation) {
-        console.log('Clearing highlight - deactivating following mode');
+        logger.dev('Clearing highlight - deactivating following mode');
         setIsFollowingLocation(false);
         setIs3DFollowing(false);
         stopLocationTracking();
       }
       
-      console.log('Station highlight and route cleared');
+      logger.dev('Station highlight and route cleared');
     } catch (error) {
-      console.error('Error clearing highlight:', error);
+      logger.error('Error clearing highlight:', error);
     }
   };
 
@@ -1815,7 +1838,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
         // iOS: Don't try automatic - it will fail without user gesture
         // We'll request in locateMe() instead
-        console.log('iOS detected: compass permission will be requested on user interaction');
+        logger.dev('iOS detected: compass permission will be requested on user interaction');
         return;
       }
       // Android / desktop: just add listeners
@@ -1851,7 +1874,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Set Mapbox access token
         const accessToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
         if (!accessToken) {
-          console.error('Mapbox access token not found. Please set NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN in your environment variables.');
+          logger.error('Mapbox access token not found. Please set NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN in your environment variables.');
           return;
         }
         
@@ -1886,13 +1909,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         });
 
         mapRef.current = map;
-        console.log('Mapbox map initialized successfully');
-        console.log('Map center set to:', center);
+        logger.dev('Mapbox map initialized successfully');
+        logger.dev('Map center set to:', center);
 
         // Add event listeners for map interactions
         map.on('dragstart', () => {
           // Wenn Benutzer die Karte manuell bewegt, beende Following-Modus komplett
-          console.log('User drag detected - deactivating following mode');
+          logger.dev('User drag detected - deactivating following mode');
           setIsCentered(false);
           setIsStationFollowingActive(false);
           setIsFollowingLocation(false);
@@ -1902,10 +1925,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             stopLocationTracking();
           }
           
-          // Zurück zur normalen Ansicht
-          if (map.getPitch() > 30) {
+          // Zurück zur normalen Ansicht (Nord oben, kein Pitch)
+          const needsReset = map.getPitch() > 5 || Math.abs(((map.getBearing() + 180) % 360) - 180) > 1;
+          if (needsReset) {
             map.easeTo({
               pitch: 0,
+              bearing: 0,
               duration: 500
             });
           }
@@ -1915,7 +1940,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           // Nur deaktivieren wenn Following aktiv ist (um programmatische Pitch-Änderungen zu ignorieren)
           if (!isFollowingLocation) return;
           
-          console.log('User pitch detected - deactivating following mode');
+          logger.dev('User pitch detected - deactivating following mode');
           setIsCentered(false);
           setIsStationFollowingActive(false);
           setIsFollowingLocation(false);
@@ -1933,7 +1958,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         if (userLocation) {
           // Use updateUserMarker function to get proper direction display
           updateUserMarker(userLocation, userHeading, false);
-          console.log('User marker added at:', userLocation, 'with heading:', userHeading);
+          logger.dev('User marker added at:', userLocation, 'with heading:', userHeading);
         }
 
         // Standort fortlaufend aktualisieren für flüssige Bewegung auf der Karte
@@ -1944,7 +1969,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         // Force map to invalidate size and render
         setTimeout(() => {
           map.resize();
-          console.log('Map resized and should be visible now');
+          logger.dev('Map resized and should be visible now');
         }, 100);
 
         return () => {
@@ -1954,7 +1979,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
         };
       } catch (error) {
-        console.error('Error initializing Mapbox map:', error);
+        logger.error('Error initializing Mapbox map:', error);
       }
     };
 
@@ -1992,11 +2017,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const darkStyle = process.env.NEXT_PUBLIC_MAPBOX_DARK_STYLE || 'mapbox://styles/mapbox/dark-v11';
         
         const newStyle = isDarkMode ? darkStyle : lightStyle;
-        console.log("Switching to Mapbox style:", newStyle);
+        logger.dev("Switching to Mapbox style:", newStyle);
         
         map.setStyle(newStyle);
       } catch (error) {
-        console.error('Error changing map style:', error);
+        logger.error('Error changing map style:', error);
       }
     };
     
@@ -2011,39 +2036,42 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (isFollowingLocation && !isNavigating) {
       // Following-Modus aktiviert - starte Location Tracking
       if (watchId === null) {
-        console.log('Following mode activated - starting location tracking');
+        logger.dev('Following mode activated - starting location tracking');
         startLocationTracking();
       }
       
       // Setze Pitch basierend auf 2D/3D-Modus
+      // Bearing wird kontinuierlich vom Animation Loop aktualisiert (Kompass-Rotation)
       const map = mapRef.current;
+      const compassBearing = hasCompassDataRef.current ? deviceOrientation : 0;
       if (is3DFollowing) {
-        // 3D-Ansicht
+        // 3D-Ansicht mit Kompass-Bearing
         map.easeTo({
           pitch: 60,
-          bearing: deviceOrientation !== 0 ? -deviceOrientation + 180 : map.getBearing(),
+          bearing: compassBearing,
           duration: 800,
           essential: true
         });
       } else {
-        // 2D-Ansicht
+        // 2D-Ansicht mit Kompass-Bearing (Karte dreht sich mit Blickrichtung)
         map.easeTo({
           pitch: 0,
-          bearing: 0,
+          bearing: compassBearing,
           duration: 800,
           essential: true
         });
       }
     } else if (!isFollowingLocation && !isNavigating && watchId !== null) {
       // Following-Modus deaktiviert - stoppe Location Tracking nur wenn es läuft
-      console.log('Following mode deactivated - stopping location tracking');
+      logger.dev('Following mode deactivated - stopping location tracking');
       stopLocationTracking();
       
-      // Zurück zur 2D-Ansicht
+      // Zurück zur normalen 2D-Ansicht (Nord oben)
       if (mapRef.current) {
         const map = mapRef.current;
         map.easeTo({
           pitch: 0,
+          bearing: 0,
           duration: 800,
           essential: true
         });
@@ -2054,7 +2082,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   // Stationen auf Karte anzeigen
   useEffect(() => {
     if (!mapRef.current || stations.length === 0) {
-      console.log('Map not ready or no stations available');
+      logger.dev('Map not ready or no stations available');
       return;
     }
     
@@ -2094,16 +2122,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           // Add click handler to open info panel
           marker.getElement().addEventListener('click', (e) => {
             e.stopPropagation(); // Prevent event bubbling
-            console.log('Marker clicked:', s.name);
+            logger.dev('Marker clicked:', s.name);
             highlightStation(s);
           });
           
           stationsLayerRef.current.push(marker);
         });
         
-        console.log(`Successfully added ${stations.length} station markers to map`);
+        logger.dev(`Successfully added ${stations.length} station markers to map`);
       } catch (error) {
-        console.error('Error adding markers to map:', error);
+        logger.error('Error adding markers to map:', error);
       }
     };
     
@@ -2114,7 +2142,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (!mapRef.current) return;
     const map = mapRef.current;
     if (!navigator.geolocation) {
-      console.warn('Geolocation is not supported by this browser');
+      logger.warn('Geolocation is not supported by this browser');
       return;
     }
 
@@ -2134,12 +2162,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         }
       }
     } catch (error) {
-      console.error('Permission check error in locateMe:', error);
+      logger.error('Permission check error in locateMe:', error);
     }
     
     if (isFollowingLocation && is3DFollowing) {
       // Zustand 3: Following 3D ist aktiv -> Deaktiviere Following komplett
-      console.log('Deactivating 3D following mode');
+      logger.dev('Deactivating 3D following mode');
       setIsFollowingLocation(false);
       setIs3DFollowing(false);
       setIsCentered(false);
@@ -2158,29 +2186,30 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           duration: 800
         });
         
-        console.log('Following mode deactivated');
+        logger.dev('Following mode deactivated');
       }
     } else if (isFollowingLocation && !is3DFollowing) {
       // Zustand 2: Following 2D ist aktiv -> Wechsel zu Following 3D
-      console.log('Switching to 3D following mode');
+      logger.dev('Switching to 3D following mode');
       setIs3DFollowing(true);
       
       if (userLocation) {
-        // Aktiviere 3D-Ansicht
+        // Aktiviere 3D-Ansicht mit Kompass-Bearing
+        const compassBearing = hasCompassDataRef.current ? deviceOrientation : 0;
         map.flyTo({
           center: [userLocation.lng, userLocation.lat],
           zoom: 19,
-          bearing: deviceOrientation !== 0 ? -deviceOrientation + 180 : 0,
+          bearing: compassBearing,
           pitch: 60, // 3D-Ansicht
           essential: true,
           duration: 800
         });
         
-        console.log('3D following mode activated');
+        logger.dev('3D following mode activated');
       }
     } else if (isCentered && !isFollowingLocation) {
       // Zustand 1b: Bereits zentriert -> Aktiviere 2D Following
-      console.log('Activating 2D following mode from centered state');
+      logger.dev('Activating 2D following mode from centered state');
       
       if (userLocation) {
         setIsFollowingLocation(true);
@@ -2188,16 +2217,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setIsCentered(false); // Reset centered state when activating following
         // Location Tracking wird automatisch durch useEffect gestartet
         
+        // Kompass-Bearing: Blickrichtung zeigt nach oben (wie Google Maps)
+        const compassBearing = hasCompassDataRef.current ? deviceOrientation : 0;
         map.flyTo({
           center: [userLocation.lng, userLocation.lat],
           zoom: 18,
-          bearing: 0,
+          bearing: compassBearing,
           pitch: 0, // 2D-Ansicht
           essential: true,
           duration: 800
         });
         
-        console.log('2D following mode activated');
+        logger.dev('2D following mode activated');
         return;
       }
       
@@ -2217,10 +2248,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               setIsCentered(false); // Reset centered state when activating following
               // Location Tracking wird automatisch durch useEffect gestartet
               
+              // Kompass-Bearing: Blickrichtung zeigt nach oben (wie Google Maps)
+              const compassBearing = hasCompassDataRef.current ? deviceOrientationRef.current : 0;
               map.flyTo({
                 center: [longitude, latitude],
                 zoom: 18,
-                bearing: 0,
+                bearing: compassBearing,
                 pitch: 0, // 2D-Ansicht
                 essential: true,
                 duration: 800
@@ -2228,13 +2261,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
               // Update user marker with direction
               updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
-              console.log('2D following mode activated');
+              logger.dev('2D following mode activated');
             } catch (error) {
-              console.error('Error updating user location:', error);
+              logger.error('Error updating user location:', error);
             }
           },
           (error) => {
-            console.error('Geolocation error:', error);
+            logger.error('Geolocation error:', error);
           },
           { 
             enableHighAccuracy: true,
@@ -2243,11 +2276,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
         );
       } catch (error) {
-        console.error('Error with geolocation:', error);
+        logger.error('Error with geolocation:', error);
       }
     } else {
       // Zustand 1a: Standort einfach zentrieren (ohne Following zu aktivieren)
-      console.log('Centering on user location');
+      logger.dev('Centering on user location');
       
       // Verwende die bereits gecachte Position wenn vorhanden
       if (userLocation) {
@@ -2262,7 +2295,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           duration: 800
         });
         
-        console.log('Location centered');
+        logger.dev('Location centered');
         return;
       }
       
@@ -2290,13 +2323,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               
               // Update user marker with direction
               updateUserMarker({ lat: latitude, lng: longitude }, heading, false);
-              console.log('Location centered');
+              logger.dev('Location centered');
             } catch (error) {
-              console.error('Error updating user location:', error);
+              logger.error('Error updating user location:', error);
             }
           },
           (error) => {
-            console.error('Geolocation error:', error);
+            logger.error('Geolocation error:', error);
           },
           { 
             enableHighAccuracy: true,
@@ -2305,7 +2338,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }
         );
       } catch (error) {
-        console.error('Error with geolocation:', error);
+        logger.error('Error with geolocation:', error);
       }
     }
   }
@@ -2315,7 +2348,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (!mapRef.current || !selectedStation || !userLocation) return;
     const map = mapRef.current;
     
-    console.log('Centering on station and activating following mode');
+    logger.dev('Centering on station and activating following mode');
     
     // Gleicher Offset wie beim Klick auf die Station
     const latOffset = -0.0013;
@@ -2337,7 +2370,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       setIsStationFollowingActive(true); // Aktiviere den grünen Rand
       // Location Tracking wird automatisch durch useEffect gestartet
       
-      console.log('Station-following mode activated');
+      logger.dev('Station-following mode activated');
     }, 1000);
   }
 
@@ -2863,7 +2896,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 type="button"
                 onClick={() => {
                   // TODO: Reservierungs-Logik
-                  console.log('Reservierung für Station:', selectedStation.name);
+                  logger.dev('Reservierung für Station:', selectedStation.name);
                 }}
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white px-6 py-3.5 shadow-md active:scale-95 transition-transform"
               >
@@ -2880,7 +2913,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <div className="fixed left-1/2 top-4 z-[1001] transform -translate-x-1/2">
         <button
           onClick={() => {
-            console.log('Button clicked! Current state:', showStationList, 'Nearby stations:', nearbyStations.length);
+            logger.dev('Button clicked! Current state:', showStationList, 'Nearby stations:', nearbyStations.length);
             setShowStationList(!showStationList);
           }}
           className={`flex items-center gap-2.5 px-5 h-10 rounded-full backdrop-blur-sm transition-all duration-200 hover:scale-105 active:scale-95 shadow-lg ${
@@ -3092,7 +3125,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                       
                       if (isLocationFixed) {
                         // Currently fixed - switch to following mode
-                        console.log('Switching from FIXED to FOLLOWING mode');
+                        logger.dev('Switching from FIXED to FOLLOWING mode');
                         setIsLocationFixed(false);
                         // Reset map bearing to north
                         map.setBearing(0);
@@ -3104,10 +3137,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                           essential: true,
                           duration: 1000 // Smooth animation
                         });
-                        console.log('Now in FOLLOWING mode - map will follow user');
+                        logger.dev('Now in FOLLOWING mode - map will follow user');
                       } else {
                         // Currently following - switch to fixed mode
-                        console.log('Switching from FOLLOWING to FIXED mode');
+                        logger.dev('Switching from FOLLOWING to FIXED mode');
                         setIsLocationFixed(true);
                         // Center map perfectly on user location
                         map.flyTo({
@@ -3117,7 +3150,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                           essential: true,
                           duration: 1000
                         });
-                        console.log('Now in FIXED mode - map will NOT follow user');
+                        logger.dev('Now in FIXED mode - map will NOT follow user');
                       }
                     }
                   }}
@@ -3187,7 +3220,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <CameraOverlay 
           onClose={() => setScanning(false)}
           onStationScanned={async (stationId: string) => {
-            console.log('📍 QR-Code/Code gescannt:', stationId);
+            logger.dev('📍 QR-Code/Code gescannt:', stationId);
             
             // Schließe Scanner sofort
             setScanning(false);
@@ -3224,7 +3257,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 const { data, error } = await query.single();
                 
                 if (error || !data) {
-                  console.error('Station nicht gefunden:', error);
+                  logger.error('Station nicht gefunden:', error);
                   alert(isShortCode 
                     ? `Station mit Code "${stationId.toUpperCase()}" nicht gefunden`
                     : 'Station nicht gefunden'
@@ -3241,7 +3274,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                   }
                 }
               } catch (err) {
-                console.error('Fehler beim Laden der Station:', err);
+                logger.error('Fehler beim Laden der Station:', err);
                 alert('Station konnte nicht geladen werden');
               }
             }
@@ -3257,7 +3290,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           }}
           onConfirm={async (userEmail?: string, userName?: string) => {
             const currentStation = stations.find((s) => s.id === scannedStation.id) ?? scannedStation;
-            console.log('✅ Ausleihe bestätigt:', { 
+            logger.dev('✅ Ausleihe bestätigt:', { 
               stationId: scannedStation.id, 
               stationName: currentStation.name,
               userEmail, 
@@ -3276,11 +3309,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 .eq('id', scannedStation.id);
               
               if (updateError) {
-                console.error('❌ Fehler beim Senden des Signals:', updateError);
+                logger.error('❌ Fehler beim Senden des Signals:', updateError);
                 throw updateError;
               }
               
-              console.log('🎉 Signal an ESP32 gesendet! LED sollte jetzt blinken.');
+              logger.dev('🎉 Signal an ESP32 gesendet! LED sollte jetzt blinken.');
               
               // TODO: Hier die tatsächliche Ausleih-Logik implementieren
               // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
@@ -3294,7 +3327,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               // Stationen werden automatisch durch StationManager aktualisiert
               
             } catch (error) {
-              console.error('Fehler bei der Ausleihe:', error);
+              logger.error('Fehler bei der Ausleihe:', error);
               const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
               await notifyRentalError(errorMessage);
               alert('Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.');

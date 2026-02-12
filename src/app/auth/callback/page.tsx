@@ -4,6 +4,7 @@ import { useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { usePageTheme } from "@/lib/usePageTheme";
+import { logger } from "@/lib/logger";
 
 function AuthCallbackContent() {
   const router = useRouter();
@@ -32,7 +33,7 @@ function AuthCallbackContent() {
         
         const { data: userData, error: userError } = await supabase.auth.getUser();
         if (userError || !userData?.user) {
-          console.error('Error getting user:', userError);
+          logger.error('Error getting user:', String(userError));
           router.replace("/");
           return;
         }
@@ -75,7 +76,7 @@ function AuthCallbackContent() {
         // Otherwise, go to default app page
         router.replace("/app");
       } catch (error) {
-        console.error('Error in auth callback:', error);
+        logger.error('Error in auth callback:', String(error));
         if (isMounted) {
           router.replace("/");
         }
