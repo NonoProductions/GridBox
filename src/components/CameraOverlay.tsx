@@ -21,17 +21,22 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualCode, setManualCode] = useState(["", "", "", ""]);
   const [scanningActive, setScanningActive] = useState(false);
-  const [lastScannedCode, setLastScannedCode] = useState<string>("");
-  const [lastScanTime, setLastScanTime] = useState<number>(0);
   const [scanSuccess, setScanSuccess] = useState(false);
   const qrCodeReaderRef = useRef<BrowserQRCodeReader | null>(null);
   const scanControlRef = useRef<{ stop: () => void } | null>(null);
+  const lastScannedInfoRef = useRef({ code: "", time: 0 });
+  const onStationScannedRef = useRef(onStationScanned);
   const inputRefs = [
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
     useRef<HTMLInputElement>(null),
   ];
+
+  // Halte Callback-Ref aktuell
+  useEffect(() => {
+    onStationScannedRef.current = onStationScanned;
+  }, [onStationScanned]);
 
   // Wake Lock: Verhindere, dass der Bildschirm dunkel wird während des Scannens
   useEffect(() => {
@@ -58,7 +63,61 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
 
   useEffect(() => {
     let mounted = true;
-    
+    let visibilityHandler: (() => void) | null = null;
+
+    // Standard-Kamera-Constraints
+    const constraints: MediaStreamConstraints = {
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+      audio: false
+    };
+
+    // Funktion zum Neustarten der Kamera bei Track-Verlust
+    const restartCamera = async () => {
+      if (!mounted) return;
+      console.warn('⚠️ Camera track ended, attempting restart...');
+      try {
+        // Altes Scanning stoppen
+        if (scanControlRef.current) {
+          scanControlRef.current.stop();
+          scanControlRef.current = null;
+        }
+        if (qrCodeReaderRef.current) {
+          try { qrCodeReaderRef.current.reset(); } catch {}
+          qrCodeReaderRef.current = null;
+        }
+
+        const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (!mounted) {
+          newStream.getTracks().forEach(t => t.stop());
+          return;
+        }
+        // Alten Stream aufräumen
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => { try { t.stop(); } catch {} });
+        }
+        streamRef.current = newStream;
+        const el = videoRef.current;
+        if (el) {
+          el.srcObject = newStream;
+          await el.play();
+        }
+        // Neuen Track überwachen
+        const newTrack = newStream.getVideoTracks()[0];
+        newTrack.addEventListener('ended', restartCamera, { once: true });
+        // Scanning neu starten
+        setScanningActive(false);
+        requestAnimationFrame(() => {
+          if (mounted) setScanningActive(true);
+        });
+      } catch (err) {
+        console.error('Failed to restart camera:', err);
+      }
+    };
+
     (async () => {
       try {
         // Prüfe ob MediaDevices API verfügbar ist
@@ -66,46 +125,52 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
           throw new Error("Kamera-API wird von diesem Browser nicht unterstützt");
         }
 
-        // Einfache Kamera-Constraints - verhindert Zoom-Effekte
-        const constraints: MediaStreamConstraints = {
-          video: {
-            facingMode: "environment", // Rückkamera ohne "ideal" - direkter
-            width: { ideal: 1280 }, // Moderate Auflösung ohne min/max
-            height: { ideal: 720 },
-          },
-          audio: false
-        };
-
         console.log('📱 Requesting camera access...');
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         
         if (!mounted) {
-          // Komponente wurde bereits unmountet
           stream.getTracks().forEach(track => track.stop());
           return;
         }
         
         streamRef.current = stream;
         
-        // Prüfe Kamera-Capabilities (ohne Zoom-triggernde Änderungen)
+        // Prüfe Kamera-Capabilities
         const track = stream.getVideoTracks()[0];
         const capabilities = track.getCapabilities?.() as any;
         
         if (capabilities) {
-          // Nur prüfen ob Taschenlampe verfügbar ist - keine Constraint-Änderungen
           if ('torch' in capabilities) {
             setTorchSupported(true);
             console.log('✅ Torch support detected');
           }
         }
+
+        // Überwache den Kamera-Track auf unerwartetes Ende
+        track.addEventListener('ended', restartCamera, { once: true });
+
+        // Bei Sichtbarkeitswechsel (Tab/App) Kamera prüfen
+        visibilityHandler = () => {
+          if (document.visibilityState !== 'visible' || !mounted) return;
+          const currentTrack = streamRef.current?.getVideoTracks()[0];
+          if (!currentTrack || currentTrack.readyState === 'ended') {
+            console.warn('⚠️ Camera dead after visibility change, restarting...');
+            restartCamera();
+          } else {
+            // Video könnte pausiert sein nach Hintergrund
+            const el = videoRef.current;
+            if (el && el.paused) {
+              el.play().catch(() => {});
+            }
+          }
+        };
+        document.addEventListener('visibilitychange', visibilityHandler);
         
         const el = videoRef.current;
         
         if (el) {
-          // Setze Stream direkt - kein Warten
           el.srcObject = stream;
           
-          // Sofort-Start: play() direkt nach Stream-Zuweisung
           const startVideo = async () => {
             try {
               await el.play();
@@ -119,7 +184,6 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
             }
           };
           
-          // Starte Video sobald Metadaten geladen sind (nur einmal)
           el.addEventListener('loadedmetadata', startVideo, { once: true });
           
           el.onerror = (e) => {
@@ -135,7 +199,6 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
         
         if (!mounted) return;
         
-        // Bessere Fehlermeldungen
         const error = e as Error;
         if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
           setError("Kamera-Zugriff wurde verweigert. Bitte erlaube den Zugriff in den Browser-Einstellungen.");
@@ -156,6 +219,11 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
 
     return () => {
       mounted = false;
+      
+      // Visibility-Listener entfernen
+      if (visibilityHandler) {
+        document.removeEventListener('visibilitychange', visibilityHandler);
+      }
       
       // Stoppe zuerst den QR-Scanner
       if (scanControlRef.current) {
@@ -181,125 +249,116 @@ export default function CameraOverlay({ onClose, onStationScanned }: CameraOverl
     };
   }, []);
 
-  // QR-Code Scanning - Optimierte kontinuierliche Scan-Methode mit Canvas-Fallback
+  // QR-Code Scanning - Nutzt bestehenden Stream, keine neuen Streams
   useEffect(() => {
     if (!scanningActive || !videoRef.current || !streamRef.current) return;
 
     const video = videoRef.current;
-    
-    // Warte bis Video bereit ist
-    if (video.readyState < 2) {
-      console.log('⏳ Waiting for video to be ready...');
-      const onMetadataLoaded = () => {
-        console.log('✅ Video metadata loaded, ready to scan');
-      };
-      video.addEventListener('loadeddata', onMetadataLoaded, { once: true });
-      return;
-    }
+    const stream = streamRef.current;
+    let cancelled = false;
 
-    const codeReader = new BrowserQRCodeReader();
-    qrCodeReaderRef.current = codeReader;
-    
-    // Hole das Video-Device von der aktuellen Stream
-    const videoTrack = streamRef.current.getVideoTracks()[0];
-    const deviceId = videoTrack.getSettings().deviceId || null;
+    const startScanning = () => {
+      if (cancelled) return;
 
-    console.log('🚀 Starting continuous QR code scanning...');
-    console.log('📹 Video ready state:', video.readyState);
-    console.log('📐 Video dimensions:', video.videoWidth, 'x', video.videoHeight);
-    console.log('🎥 Video track settings:', videoTrack.getSettings());
-    
-    // Gemeinsame Callback-Funktion für QR-Code-Erkennung
-    const handleDecode = (result: any, error: any) => {
-      if (result) {
-        const scannedText = result.getText();
-        const now = Date.now();
-        
-        console.log('🔍 QR Code detected:', scannedText);
-        
-        // Verhindere mehrfaches Scannen desselben Codes innerhalb von 1 Sekunde
-        if (scannedText !== lastScannedCode || now - lastScanTime > 1000) {
-          console.log('✅ QR Code erfolgreich gescannt:', scannedText);
-          
-          setLastScannedCode(scannedText);
-          setLastScanTime(now);
-          
-          // Visueller Erfolgsindikator
-          setScanSuccess(true);
-          setTimeout(() => setScanSuccess(false), 1000);
-          
-          // Versuche Station-ID zu extrahieren
-          // Unterstützte Formate:
-          // 1. URL: https://domain.com/rent/{stationId}
-          // 2. Alt: "GRIDBOX-STATION-{stationId}"
-          // 3. Direkt: nur die Station-ID
-          let stationId = scannedText;
-          
-          // Format 1: URL mit /rent/
-          if (scannedText.includes('/rent/')) {
-            // Matcht UUIDs (mit Bindestrichen) UND Short-Codes (alphanumerisch)
-            const match = scannedText.match(/\/rent\/([A-Za-z0-9-]+)/i);
-            if (match) {
-              stationId = match[1];
+      const codeReader = new BrowserQRCodeReader();
+      qrCodeReaderRef.current = codeReader;
+
+      console.log('🚀 Starting continuous QR code scanning...');
+      console.log('📹 Video ready state:', video.readyState);
+      console.log('📐 Video dimensions:', video.videoWidth, 'x', video.videoHeight);
+
+      // Callback nutzt Refs statt State - verhindert Effect-Neustart
+      const handleDecode = (result: any, error: any) => {
+        if (cancelled) return;
+
+        if (result) {
+          const scannedText = result.getText();
+          const now = Date.now();
+          const { code: lastCode, time: lastTime } = lastScannedInfoRef.current;
+
+          console.log('🔍 QR Code detected:', scannedText);
+
+          // Verhindere mehrfaches Scannen desselben Codes innerhalb von 1 Sekunde
+          if (scannedText !== lastCode || now - lastTime > 1000) {
+            console.log('✅ QR Code erfolgreich gescannt:', scannedText);
+
+            lastScannedInfoRef.current = { code: scannedText, time: now };
+
+            setScanSuccess(true);
+            setTimeout(() => setScanSuccess(false), 1000);
+
+            // Station-ID extrahieren
+            let stationId = scannedText;
+
+            if (scannedText.includes('/rent/')) {
+              const match = scannedText.match(/\/rent\/([A-Za-z0-9-]+)/i);
+              if (match) stationId = match[1];
+            } else if (scannedText.startsWith('GRIDBOX-STATION-')) {
+              stationId = scannedText.replace('GRIDBOX-STATION-', '');
+            }
+
+            console.log('📍 Extracted Station ID:', stationId);
+
+            if (onStationScannedRef.current) {
+              onStationScannedRef.current(stationId);
+            }
+
+            if (navigator.vibrate) {
+              navigator.vibrate([100, 50, 100]);
             }
           }
-          // Format 2: Alt-Format GRIDBOX-STATION-
-          else if (scannedText.startsWith('GRIDBOX-STATION-')) {
-            stationId = scannedText.replace('GRIDBOX-STATION-', '');
-          }
-          // Format 3: Sonst direkt die ID verwenden
-          
-          console.log('📍 Extracted Station ID:', stationId);
-          
-          // Callback mit Station-ID
-          if (onStationScanned) {
-            onStationScanned(stationId);
-          }
-          
-          // Haptisches Feedback für erfolgreichen Scan
-          if (navigator.vibrate) {
-            navigator.vibrate([100, 50, 100]); // Doppel-Vibration
-          }
         }
-      }
-      
-      // Log nur echte Fehler, nicht "NotFoundException" (kein QR-Code im Bild)
-      if (error && !error.message?.includes('NotFoundException')) {
-        console.debug('QR scan attempt:', error.message);
-      }
-    };
-    
-    // Starte kontinuierliches Video-Scanning
-    try {
-      console.log('🚀 Starting direct video scanning');
-      codeReader.decodeFromVideoDevice(
-        deviceId,
-        videoRef.current!,
-        handleDecode
-      ).catch((err) => {
-        console.error('Error in video scanning:', err);
-      });
-      
-      // Speichere eine Referenz zum Stoppen via reset()
-      scanControlRef.current = {
-        stop: () => {
-          codeReader.reset();
+
+        if (error && !error.message?.includes('NotFoundException')) {
+          console.debug('QR scan attempt:', error.message);
         }
       };
-      
-    } catch (err) {
-      console.error('Error starting video scan:', err);
+
+      // decodeFromStream nutzt den bestehenden Kamera-Stream
+      // (decodeFromVideoDevice würde einen NEUEN Stream öffnen und den alten ersetzen!)
+      try {
+        codeReader.decodeFromStream(stream, video, handleDecode)
+          .catch((err: any) => {
+            if (!cancelled) {
+              console.error('Error in stream scanning:', err);
+            }
+          });
+
+        scanControlRef.current = {
+          stop: () => {
+            cancelled = true;
+            // Nur Scanning stoppen, NICHT den Kamera-Stream
+            try {
+              codeReader.stopContinuousDecode();
+            } catch {
+              // Fallback
+              try { codeReader.reset(); } catch {}
+            }
+          }
+        };
+      } catch (err) {
+        console.error('Error starting scan:', err);
+      }
+    };
+
+    // Warte bis Video bereit ist, dann starte Scanning
+    if (video.readyState >= 2) {
+      startScanning();
+    } else {
+      console.log('⏳ Waiting for video to be ready...');
+      video.addEventListener('loadeddata', startScanning, { once: true });
     }
 
     return () => {
       console.log('Stopping QR code scanning...');
+      cancelled = true;
+      video.removeEventListener('loadeddata', startScanning);
       if (scanControlRef.current) {
         scanControlRef.current.stop();
         scanControlRef.current = null;
       }
-      codeReader.reset();
     };
-  }, [scanningActive, onStationScanned, lastScannedCode, lastScanTime]);
+  }, [scanningActive]);
 
   // Taschenlampe ein/ausschalten
   const toggleTorch = async () => {
