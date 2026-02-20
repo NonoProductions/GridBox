@@ -33,6 +33,7 @@ interface Rental {
   started_at: string;
   ended_at: string | null;
   status: string;
+  powerbank_id?: string | null;
 }
 
 interface OwnerDashboardProps {
@@ -439,11 +440,25 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         setOwnerRentals([]);
         return;
       }
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from("rentals")
-        .select("id, station_id, total_price, started_at, ended_at, status")
+        .select("id, station_id, total_price, started_at, ended_at, status, powerbank_id")
         .in("station_id", stationIds)
         .order("started_at", { ascending: false });
+
+      const missingPowerbankColumn =
+        !!error &&
+        `${error.code ?? ''} ${error.message ?? ''} ${error.details ?? ''}`.toLowerCase().includes('powerbank_id');
+
+      if (missingPowerbankColumn) {
+        const legacy = await supabase
+          .from("rentals")
+          .select("id, station_id, total_price, started_at, ended_at, status")
+          .in("station_id", stationIds)
+          .order("started_at", { ascending: false });
+        data = legacy.data ? legacy.data.map((row: any) => ({ ...row, powerbank_id: null })) : [];
+        error = legacy.error;
+      }
 
       if (error) {
         logger.warn("Rentals für Statistiken (optional):", error.message);
@@ -457,6 +472,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         started_at: r.started_at,
         ended_at: r.ended_at ?? null,
         status: r.status ?? "",
+        powerbank_id: r.powerbank_id ?? null,
       }));
       setOwnerRentals(list);
     } catch (e) {
@@ -1267,8 +1283,8 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       const now = new Date();
       const diffSeconds = (now.getTime() - lastContact.getTime()) / 1000;
       
-      // 60 Sekunden statt 30 für mehr Toleranz bei Netzwerk-Latenzen
-      return diffSeconds < 60;
+      // 90 Sekunden Toleranz: ESP32 sendet alle 15s; bei kurzen Ausfällen bleibt Station sichtbar
+      return diffSeconds < 90;
     } catch (error) {
       logger.error('Fehler beim Prüfen der Station-Verbindung:', error, station.name);
       return false;
@@ -1286,15 +1302,20 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const activeStationsCount = stations.filter((station) => station.is_active).length;
   const inactiveStationsCount = stations.length - activeStationsCount;
   const totalCapacity = stations.reduce((sum, station) => sum + (station.total_units || 0), 0);
-  
-  // Zähle eingelegte Powerbanks (nur wenn ESP32 Batterie-Daten sendet)
-  const totalOccupiedUnits = stations.reduce((sum, station) => {
-    const hasBatteryData = 
-      station.battery_voltage !== undefined && 
+
+  const hasStationPowerbank = (station: Station) => {
+    const hasPowerbankId = typeof station.powerbank_id === "string" && station.powerbank_id.trim().length > 0;
+    const hasLegacyBatteryData =
+      station.battery_voltage !== undefined &&
       station.battery_voltage !== null &&
-      station.battery_percentage !== undefined && 
+      station.battery_percentage !== undefined &&
       station.battery_percentage !== null;
-    return sum + (hasBatteryData ? 1 : 0);
+    return hasPowerbankId || hasLegacyBatteryData;
+  };
+  
+  // Zähle eingelegte Powerbanks (primär per powerbank_id)
+  const totalOccupiedUnits = stations.reduce((sum, station) => {
+    return sum + (hasStationPowerbank(station) ? 1 : 0);
   }, 0);
   
   const totalAvailableUnits = totalCapacity - totalOccupiedUnits;
@@ -1756,11 +1777,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             </div>
                             <div className={`flex items-center justify-between text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
                               <span>
-                                {station.battery_voltage !== undefined && 
-                                 station.battery_voltage !== null &&
-                                 station.battery_percentage !== undefined && 
-                                 station.battery_percentage !== null
-                                  ? '1' : '0'} / {station.total_units ?? 0} belegt
+                                {hasStationPowerbank(station) ? '1' : '0'} / {station.total_units ?? 0} belegt
                               </span>
                               <span>
                                 {station.battery_percentage !== undefined && station.battery_percentage !== null
@@ -1920,6 +1937,31 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                           <div className={`h-[220px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
                             <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Keine Ausleihen im gewählten Zeitraum</p>
                           </div>
+                        )}
+                      </div>
+
+                      {/* Letzte Ausleihen inkl. Powerbank-ID */}
+                      <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
+                        <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Letzte Ausleihen (Tracking via Powerbank-ID)</p>
+                        {ownerRentals.length > 0 ? (
+                          <div className="space-y-2">
+                            {ownerRentals.slice(0, 5).map((rental) => {
+                              const stationName = stations.find((s) => s.id === rental.station_id)?.name ?? "Unbekannte Station";
+                              return (
+                                <div
+                                  key={rental.id}
+                                  className={`rounded-xl px-3 py-2 text-xs flex items-center justify-between ${
+                                    isDarkMode ? 'bg-black/20 text-gray-300' : 'bg-white text-slate-700'
+                                  }`}
+                                >
+                                  <span className="truncate mr-2">{stationName}</span>
+                                  <span className="font-mono">{rental.powerbank_id || 'ID fehlt'}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Noch keine Ausleihen vorhanden</p>
                         )}
                       </div>
 
@@ -2190,16 +2232,10 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             Aktuell eingelegt
                           </div>
                           <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            {(selectedStation.battery_voltage !== undefined && 
-                              selectedStation.battery_voltage !== null &&
-                              selectedStation.battery_percentage !== undefined && 
-                              selectedStation.battery_percentage !== null) ? '1' : '0'} Powerbank{(selectedStation.battery_voltage !== undefined && 
-                              selectedStation.battery_voltage !== null &&
-                              selectedStation.battery_percentage !== undefined && 
-                              selectedStation.battery_percentage !== null) ? '' : 's'}
+                            {hasStationPowerbank(selectedStation) ? '1' : '0'} Powerbank{hasStationPowerbank(selectedStation) ? '' : 's'}
                           </div>
                           <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-                            Erkannt durch ESP32-Sensoren
+                            Erkannt per Powerbank-ID (Fallback: Batteriesensoren)
                           </p>
                         </div>
                       </div>
@@ -2214,7 +2250,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                           Slot-Status & Powerbank-Daten
                         </h5>
                         <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          Powerbanks werden nur als &quot;eingelegt&quot; angezeigt wenn ESP32 Batterie-Daten sendet
+                          Erkennung erfolgt primär über `powerbank_id` (Fallback: ESP32 Batterie-Daten)
                         </p>
                       </div>
                       <div className="overflow-x-auto">
@@ -2243,6 +2279,11 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                               }`}>
                                 Ladezustand
                               </th>
+                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
+                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
+                              }`}>
+                                Powerbank-ID
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2251,11 +2292,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                                 const slotNumber = index + 1;
                                 
                                 // Powerbank ist nur eingelegt wenn ESP32 Batterie-Daten sendet
-                                const hasBatteryData = 
-                                  selectedStation.battery_voltage !== undefined && 
-                                  selectedStation.battery_voltage !== null &&
-                                  selectedStation.battery_percentage !== undefined && 
-                                  selectedStation.battery_percentage !== null;
+                                const hasBatteryData = hasStationPowerbank(selectedStation);
                                 
                                 // Nur Slot 1 kann eine Powerbank haben (da ESP32 nur eine Batterie messen kann)
                                 const isOccupied = slotNumber === 1 && hasBatteryData;
@@ -2334,12 +2371,23 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                                         </span>
                                       )}
                                     </td>
+                                    <td className="py-3 px-5">
+                                      {isOccupied && selectedStation.powerbank_id ? (
+                                        <span className={`text-sm font-mono ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                          {selectedStation.powerbank_id}
+                                        </span>
+                                      ) : (
+                                        <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                                          —
+                                        </span>
+                                      )}
+                                    </td>
                                   </tr>
                                 );
                               })
                             ) : (
                               <tr>
-                                <td colSpan={4} className="py-8 px-5 text-center">
+                                <td colSpan={5} className="py-8 px-5 text-center">
                                   <span className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
                                     Keine Slots konfiguriert. Bitte Kapazität oben einstellen.
                                   </span>

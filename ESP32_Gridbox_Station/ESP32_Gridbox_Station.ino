@@ -33,7 +33,7 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 // ===== BATTERIE KONFIGURATION =====
 #define TCA9548A_ADDRESS 0x70     // I2C Adresse des TCA9548A Multiplexers
 #define BQ27441_ADDRESS 0x55      // I2C Adresse des BQ27441 Fuel Gauge
-#define BATTERY_CHANNEL 0         // Kanal des Multiplexers für den Fuel Gauge (0-7)
+#define BATTERY_CHANNEL 0        // Kanal des Multiplexers für den Fuel Gauge (0-7)
 #define BATTERY_UPDATE_INTERVAL 15000  // Batteriedaten alle 15 Sekunden aktualisieren (reduziert Egress um ~87%)
 #define BATTERY_TEST_MODE false   // true = Test-Modus ohne Hardware (verwendet Dummy-Daten)
 
@@ -58,7 +58,10 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define STATUS_LED_PIN 23   // Externe Status-LED (optional)
 
 // Servo Konfiguration (mechanische Ausgabe)
-#define SERVO_PIN 18              // Servo-Pin (anpassen je nach Hardware)
+#define SERVO_A_PIN 13            // Servo A Signal-Pin (GPIO 8 = Flash-Pin, nicht nutzbar!)
+#define SERVO_B_PIN 7             // Servo B Signal-Pin
+#define DISPENSE_TARGET_SERVO 1   // 1 = Servo A (Pin 8), 2 = Servo B (Pin 7)
+#define SERVO_STARTUP_IDENTIFY true // Bewegt A und B kurz beim Start zur Zuordnung
 #define SERVO_CLOSED_ANGLE 0      // Winkel: Fach geschlossen
 #define SERVO_OPEN_ANGLE 180      // Winkel: Fach geöffnet / Powerbank wird ausgegeben
 #define SERVO_MOVE_DELAY_MS 1500  // Zeit in ms, wie lange der Servo in Offen-Position bleibt
@@ -68,6 +71,9 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define ENABLE_DISPENSE_LED false    // Deaktiviert das Blinksignal bei Ausleihe (war nur ein Test)
 #define DISPENSE_LED_DURATION 5000   // LED leuchtet 5 Sekunden bei Ausgabe
 #define DISPENSE_POLL_INTERVAL 15000  // Nur bei USE_SUPABASE_REALTIME=0: Intervall für Ausgabe-Check (Sekunden)
+#define REALTIME_FALLBACK_POLL_INTERVAL 5000  // Auch bei Realtime regelmäßig pollen (falls WS Event verpasst wird)
+#define DISPENSE_CONFIRM_TIMEOUT_MS 5000      // Abbruch, wenn Entnahme nicht innerhalb von 5s erkannt
+#define DISPENSE_CHECK_INTERVAL_MS 250        // Sensor-Prüfung während Ausgabe
 
 // Relais & Button Konfiguration
 #define RELAY_PIN 5                 // Kontrolliert das Lade-Relais (Pin 17 = funktionierender Relais-Pin aus Testskript)
@@ -80,6 +86,7 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 
 // Update-Intervalle
 const unsigned long UPDATE_INTERVAL = 15000;  // 15 Sekunden (reduziert Egress-Verbrauch um ~87%)
+const unsigned long HTTP_TIMEOUT_MS = 10000;  // 10 s Timeout für Supabase-Requests (verhindert Hänger)
 
 // ===== ENDE KONFIGURATION =====
 
@@ -111,14 +118,18 @@ bool batteryInitialized = false;
 bool lastReportedBatteryPresent = false;  // Zuletzt an Supabase gemeldeter Zustand (Powerbank da/weg)
 bool batteryStateEverReported = false;    // Einmal initial melden, danach nur bei Änderung
 
-// Servo-Objekt
-Servo dispenseServo;
+// Servo-Objekte
+Servo dispenseServoA;
+Servo dispenseServoB;
+bool servosReady = false;
+bool dispenseServoLogged = false;
+bool servoAReady = false;
+bool servoBReady = false;
 
 // EEPROM: pro Kanal erkannter I2C-Adresse (0 = noch nicht erkannt). Kanal 0: 0x55 = Fuel Gauge, überspringen!
 uint8_t eepromAddressByChannel[8] = {0};
 
 #if USE_SUPABASE_REALTIME
-WiFiClientSecure realtimeSecureClient;
 WebSocketsClient realtimeWebSocket;
 unsigned long lastRealtimeHeartbeat = 0;
 const unsigned long REALTIME_HEARTBEAT_MS = 20000;  // unter 25 s
@@ -133,6 +144,9 @@ void handleChargeButton();
 void updateChargingState();
 void evaluateBatteryPresence();
 void dispensePowerbank();
+bool rollbackFailedDispense();
+bool initDispenseServos();
+void moveDispenseServo(int angle);
 
 // EEPROM Funktionsprototypen
 bool writeEEPROMByte(uint8_t channel, uint8_t address, uint8_t data);
@@ -197,9 +211,8 @@ void setup() {
   delay(500);
   digitalWrite(LED_PIN, LOW);
 
-  // Servo initialisieren (Ausgabemechanik)
-  dispenseServo.attach(SERVO_PIN);
-  dispenseServo.write(SERVO_CLOSED_ANGLE);
+  // Servos initialisieren (Ausgabemechanik)
+  servosReady = initDispenseServos();
 
   // Relais & Button initialisieren
   pinMode(RELAY_PIN, OUTPUT);
@@ -239,8 +252,8 @@ void setup() {
     int slash = host.indexOf('/');
     if (slash > 0) host = host.substring(0, slash);
     String path = "/realtime/v1/websocket?apikey=" + String(SUPABASE_KEY) + "&vsn=1.0.0";
-    realtimeSecureClient.setInsecure();
-    realtimeWebSocket.begin(realtimeSecureClient, host.c_str(), 443, path.c_str());
+    // Links2004 WebSockets: beginSSL(host, port, url) – kein WiFiClientSecure nötig
+    realtimeWebSocket.beginSSL(host.c_str(), 443, path.c_str());
     realtimeWebSocket.onEvent(realtimeWebSocketEvent);
     realtimeWebSocket.setReconnectInterval(5000);
     Serial.println("Realtime: WebSocket-Verbindung wird aufgebaut...");
@@ -254,15 +267,23 @@ void setup() {
     // Synchronisiere total_units mit TOTAL_SLOTS Konfiguration
     syncTotalUnits();
     
-    // Sende initiale Batterie-Daten sofort (falls vorhanden)
+    // Sende initiale Batterie-Daten sofort (updated_at = Verbindungsstatus)
     if (batteryInitialized) {
       #if !BATTERY_TEST_MODE
         readBatteryData();
       #endif
+      if (batteryPresent) {
+        Serial.println("🔋 Powerbank: " + String(batteryVoltage, 2) + " V, " + String(batteryPercentage) + " % (Start)");
+      } else {
+        Serial.println("🔋 Powerbank: keine erkannt");
+      }
       updateBatteryData();
       lastReportedBatteryPresent = batteryPresent;
       batteryStateEverReported = true;
       lastBatteryUpdate = millis();
+    } else {
+      Serial.println("🔋 Batterie: Fuel Gauge nicht gefunden – Akku-Anzeige deaktiviert.");
+      if (isConnected) updateBatteryData();  // Trotzdem updated_at senden (Station = verbunden)
     }
   }
   
@@ -338,6 +359,11 @@ void loop() {
     realtimeSendHeartbeat();
     lastRealtimeHeartbeat = millis();
   }
+  // Fallback-Polling auch im Realtime-Modus, falls WebSocket-Events verpasst werden
+  if (millis() - lastDispenseCheck > REALTIME_FALLBACK_POLL_INTERVAL) {
+    checkDispenseRequest();
+    lastDispenseCheck = millis();
+  }
   if (realtimeDispenseRequested) {
     realtimeDispenseRequested = false;
     unsigned long timeSinceLastDispense = millis() - lastDispenseTime;
@@ -366,7 +392,7 @@ void loop() {
     lastUpdate = millis();
   }
   
-  // Batteriedaten lesen (Intervall); an Supabase nur bei Zustandsänderung senden (Powerbank rein/raus)
+  // Batteriedaten lesen (Intervall); an Supabase senden (updated_at = Verbindungsstatus im Dashboard!)
   if (millis() - lastBatteryUpdate > BATTERY_UPDATE_INTERVAL) {
     if (batteryInitialized) {
       #if BATTERY_TEST_MODE
@@ -379,17 +405,26 @@ void loop() {
       #else
         readBatteryData();
       #endif
-      // Nur senden wenn: erstes Mal (Initialzustand) oder Powerbank ein-/ausgesteckt
-      if (!batteryStateEverReported) {
-        updateBatteryData();
-        lastReportedBatteryPresent = batteryPresent;
-        batteryStateEverReported = true;
-      } else if (batteryPresent != lastReportedBatteryPresent) {
-        updateBatteryData();
-        lastReportedBatteryPresent = batteryPresent;
-        Serial.println(batteryPresent ? "Powerbank erkannt → Daten gesendet." : "Powerbank entfernt → NULL gesendet.");
+      // Serial: Akkustand der Powerbank anzeigen (jedes Intervall)
+      if (batteryPresent) {
+        Serial.println("🔋 Powerbank: " + String(batteryVoltage, 2) + " V, " + String(batteryPercentage) + " %");
+      } else {
+        Serial.println("🔋 Powerbank: keine erkannt (Spannung < " + String(BATTERY_PRESENT_THRESHOLD, 1) + " V)");
       }
+      // Immer senden: updated_at muss regelmäßig aktualisiert werden, damit die Station im Dashboard als "verbunden" gilt (< 60 s)
+      if (batteryPresent != lastReportedBatteryPresent) {
+        Serial.println(batteryPresent ? "Powerbank erkannt → Daten an Dashboard." : "Powerbank entfernt → NULL an Dashboard.");
+        lastReportedBatteryPresent = batteryPresent;
+      }
+      updateBatteryData();  // Sendet battery_voltage/percentage + updated_at
+      lastReportedBatteryPresent = batteryPresent;
+      if (!batteryStateEverReported) batteryStateEverReported = true;
     } else {
+      // Fuel Gauge nicht gefunden – trotzdem updated_at senden, damit Station als verbunden angezeigt wird
+      if (isConnected) {
+        updateBatteryData();  // Sendet NULL für Batterie + updated_at
+      }
+      Serial.println("🔋 Batterie: Fuel Gauge nicht gefunden (I2C/Kanal " + String(BATTERY_CHANNEL) + ")");
       if (initBatterySystem()) {
         batteryInitialized = true;
       } else {
@@ -420,6 +455,7 @@ void connectWiFi() {
     Serial.println("WLAN verbunden, IP: " + WiFi.localIP().toString());
     isConnected = true;
     digitalWrite(STATUS_LED_PIN, HIGH);  // LED dauerhaft an
+    lastBatteryUpdate = 0;  // Nächsten Loop sofort Heartbeat senden (updated_at), damit Dashboard wieder "verbunden" zeigt
   } else {
     isConnected = false;
     digitalWrite(STATUS_LED_PIN, LOW);
@@ -432,21 +468,18 @@ void getStationData() {
   if (!isConnected) return;
   
   HTTPClient http;
-  
-  // URL bauen (nutze Short-Code oder UUID)
   String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  
-  // Nutze Short-Code oder UUID basierend auf Konfiguration
   #if USE_SHORT_CODE
     url += "short_code=eq." + String(STATION_SHORT_CODE);
   #else
     url += "id=eq." + String(STATION_ID);
   #endif
-  
+
   http.begin(url);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
-  
+
   int httpCode = http.GET();
   
   if (httpCode == 200) {
@@ -524,17 +557,12 @@ void updateAvailableUnits(int units) {
   // JSON Body erstellen
   DynamicJsonDocument doc(256);
   doc["available_units"] = units;
-  doc["updated_at"] = "now()";
-  
+  // updated_at wird vom DB-Trigger bei jedem UPDATE automatisch gesetzt
   String jsonBody;
   serializeJson(doc, jsonBody);
-  
+  http.setTimeout(HTTP_TIMEOUT_MS);
   int httpCode = http.PATCH(jsonBody);
-  
-  if (httpCode == 200 || httpCode == 201) {
-    lastReportedUnits = units;
-  }
-  
+  if (httpCode == 200 || httpCode == 201) lastReportedUnits = units;
   http.end();
 }
 
@@ -555,13 +583,11 @@ void checkDispenseRequest() {
   #endif
   
   url += "&select=dispense_requested";
-  
   http.begin(url);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
-  
   int httpCode = http.GET();
-  
   if (httpCode == 200) {
     String payload = http.getString();
     
@@ -605,11 +631,80 @@ void checkDispenseRequest() {
 void dispensePowerbank() {
   // Hinweis: Die Prüfungen (Mindestsaldo 5 € und Distanz <= 100 m)
   // werden in der Web-App / Supabase gemacht, bevor dispense_requested gesetzt wird.
-  Serial.println("Servo: gebe Powerbank aus.");
-  dispenseServo.write(SERVO_OPEN_ANGLE);
-  delay(SERVO_MOVE_DELAY_MS);
-  dispenseServo.write(SERVO_CLOSED_ANGLE);
+  Serial.println("Servo: Ausgabe gestartet.");
+  if (!servosReady) {
+    Serial.println("❌ Servos nicht bereit (attach fehlgeschlagen) - Ausgabe abgebrochen.");
+    return;
+  }
+  if (!dispenseServoLogged) {
+    Serial.println(String("Aktiver Ausgabe-Servo: ") + (DISPENSE_TARGET_SERVO == 1 ? "A (Pin " + String(SERVO_A_PIN) + ")" : "B (Pin " + String(SERVO_B_PIN) + ")"));
+    dispenseServoLogged = true;
+  }
+
+  // Servo vor der Ausgabe sicherheitshalber re-attachen (WiFi/HTTP können LEDC-Kanäle stören)
+  if (!dispenseServoA.attached()) {
+    Serial.println("⚠️ Servo A war detached – re-attach vor Ausgabe.");
+    dispenseServoA.setPeriodHertz(50);
+    dispenseServoA.attach(SERVO_A_PIN, 500, 2400);
+    delay(100);
+  }
+  if (!dispenseServoB.attached()) {
+    Serial.println("⚠️ Servo B war detached – re-attach vor Ausgabe.");
+    dispenseServoB.setPeriodHertz(50);
+    dispenseServoB.attach(SERVO_B_PIN, 500, 2400);
+    delay(100);
+  }
+
+  // Ohne Batteriesensor kann keine sichere Entnahme-Prüfung erfolgen
+  if (!batteryInitialized) {
+    Serial.println("⚠️ Batterie-Sensor nicht verfügbar: keine Entnahme-Verifikation möglich.");
+    moveDispenseServo(SERVO_OPEN_ANGLE);
+    delay(SERVO_MOVE_DELAY_MS);
+    moveDispenseServo(SERVO_CLOSED_ANGLE);
+    delay(300);
+    return;
+  }
+
+  bool pickupDetected = false;
+
+  // Servo öffnen und bis zu 5s auf Entnahme warten
+  moveDispenseServo(SERVO_OPEN_ANGLE);
+  delay(50);  // PWM-Signal stabilisieren bevor I2C-Operationen starten
+  unsigned long waitStart = millis();
+
+  while (millis() - waitStart < DISPENSE_CONFIRM_TIMEOUT_MS) {
+    delay(DISPENSE_CHECK_INTERVAL_MS);
+    #if !BATTERY_TEST_MODE
+      readBatteryData();  // aktualisiert batteryPresent via evaluateBatteryPresence()
+    #endif
+
+    if (!batteryPresent) {
+      pickupDetected = true;
+      break;
+    }
+  }
+
+  if (pickupDetected) {
+    Serial.println("✅ Entnahme erkannt: Powerbank wurde genommen.");
+  } else {
+    Serial.println("❌ Keine Entnahme innerhalb 5s erkannt -> Ausleihe wird abgebrochen.");
+  }
+
+  // Servo schließen (Powerbank zurückziehen)
+  moveDispenseServo(SERVO_CLOSED_ANGLE);
   delay(300);
+
+  if (pickupDetected) {
+    // Sofort Batterie-Status an Supabase senden, damit die App die Entnahme erkennt
+    updateBatteryData();
+    lastBatteryUpdate = millis();
+  } else {
+    if (rollbackFailedDispense()) {
+      Serial.println("↩️ Ausleihe erfolgreich zurückgerollt.");
+    } else {
+      Serial.println("⚠️ Rückrollen fehlgeschlagen - bitte in Dashboard prüfen.");
+    }
+  }
 }
 
 void activateDispenseLED() {
@@ -629,7 +724,7 @@ void activateDispenseLED() {
   // - Solenoid zum Entriegeln
   // - Buzzer für akustisches Signal
   // Beispiel:
-  // digitalWrite(SERVO_PIN, HIGH);
+  // digitalWrite(SERVO_A_PIN, HIGH);
   // myServo.write(90);
 }
 
@@ -645,14 +740,12 @@ void resetDispenseFlag() {
   #else
     url += "id=eq." + String(STATION_ID);
   #endif
-  
   http.begin(url);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Prefer", "return=representation");
-  
-  // Setze dispense_requested zurück und aktualisiere last_dispense_time
   DynamicJsonDocument doc(256);
   doc["dispense_requested"] = false;
   
@@ -667,6 +760,100 @@ void resetDispenseFlag() {
   
   // Kurze Pause damit Datenbank Zeit hat zu aktualisieren
   delay(500);
+}
+
+bool rollbackFailedDispense() {
+  if (!isConnected) return false;
+
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + "/rest/v1/rpc/rollback_failed_dispense";
+  http.begin(url);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Prefer", "return=representation");
+  DynamicJsonDocument doc(256);
+  doc["p_station_id"] = String(STATION_ID);
+  String jsonBody;
+  serializeJson(doc, jsonBody);
+
+  int httpCode = http.POST(jsonBody);
+  String payload = http.getString();
+  http.end();
+
+  if (httpCode == 200 || httpCode == 201) {
+    return true;
+  }
+
+  Serial.println("Rollback RPC Fehler: HTTP " + String(httpCode) + " -> " + payload);
+  return false;
+}
+
+bool initDispenseServos() {
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  dispenseServoA.setPeriodHertz(50);
+  dispenseServoB.setPeriodHertz(50);
+  int servoChannelA = dispenseServoA.attach(SERVO_A_PIN, 500, 2400);
+  int servoChannelB = dispenseServoB.attach(SERVO_B_PIN, 500, 2400);
+  servoAReady = (servoChannelA >= 0);
+  servoBReady = (servoChannelB >= 0);
+
+  Serial.println("Servo A (Pin " + String(SERVO_A_PIN) + ") Kanal: " + String(servoChannelA));
+  Serial.println("Servo B (Pin " + String(SERVO_B_PIN) + ") Kanal: " + String(servoChannelB));
+
+  bool targetServoReady = (DISPENSE_TARGET_SERVO == 1) ? servoAReady : servoBReady;
+  if (!targetServoReady) {
+    Serial.println("❌ Ziel-Servo attach fehlgeschlagen. Pins/Wiring/Power pruefen.");
+    return false;
+  }
+
+  if (servoAReady) dispenseServoA.write(SERVO_CLOSED_ANGLE);
+  if (servoBReady) dispenseServoB.write(SERVO_CLOSED_ANGLE);
+  Serial.println("✅ Ziel-Servo initialisiert, Startposition: geschlossen.");
+  if (!servoAReady || !servoBReady) {
+    Serial.println("⚠️ Hinweis: Ein Servo ist optional ausgefallen, Ziel-Servo bleibt nutzbar.");
+  }
+
+#if SERVO_STARTUP_IDENTIFY
+  Serial.println("Servo-Zuordnungstest: zuerst Servo A, dann Servo B (nur wenn bereit).");
+  if (servoAReady) {
+    dispenseServoA.write(SERVO_OPEN_ANGLE);
+    delay(600);
+    dispenseServoA.write(SERVO_CLOSED_ANGLE);
+    delay(400);
+  }
+  if (servoBReady) {
+    dispenseServoB.write(SERVO_OPEN_ANGLE);
+    delay(600);
+    dispenseServoB.write(SERVO_CLOSED_ANGLE);
+    delay(400);
+  }
+#endif
+
+  Serial.println(String("Konfigurierter Ausgabe-Servo: ") + (DISPENSE_TARGET_SERVO == 1 ? "A" : "B"));
+  return true;
+}
+
+void moveDispenseServo(int angle) {
+  if (DISPENSE_TARGET_SERVO == 1) {
+    if (!dispenseServoA.attached()) {
+      Serial.println("Servo A war detached – re-attach auf Pin " + String(SERVO_A_PIN));
+      dispenseServoA.setPeriodHertz(50);
+      dispenseServoA.attach(SERVO_A_PIN, 500, 2400);
+      delay(50);
+    }
+    dispenseServoA.write(angle);
+  } else {
+    if (!dispenseServoB.attached()) {
+      Serial.println("Servo B war detached – re-attach auf Pin " + String(SERVO_B_PIN));
+      dispenseServoB.setPeriodHertz(50);
+      dispenseServoB.attach(SERVO_B_PIN, 500, 2400);
+      delay(50);
+    }
+    dispenseServoB.write(angle);
+  }
 }
 
 #if USE_SUPABASE_REALTIME
@@ -838,12 +1025,11 @@ void syncTotalUnits() {
   #else
     url += "id=eq." + String(STATION_ID);
   #endif
-  
   http.begin(url);
+  http.setTimeout(HTTP_TIMEOUT_MS);
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
   http.addHeader("Content-Type", "application/json");
-  
   DynamicJsonDocument doc(256);
   doc["total_units"] = TOTAL_SLOTS;
   
@@ -967,56 +1153,62 @@ void readBatteryData() {
   evaluateBatteryPresence();
 }
 
-// Sende Batteriedaten an Supabase
+// Sende Batteriedaten an Supabase (mit Timeout + 1 Retry für stabilere Anzeige im Dashboard)
 void updateBatteryData() {
   if (!isConnected) return;
   
-  HTTPClient http;
-  
-  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  
-  #if USE_SHORT_CODE
-    url += "short_code=eq." + String(STATION_SHORT_CODE);
-  #else
-    url += "id=eq." + String(STATION_ID);
-  #endif
-  
-  http.begin(url);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Prefer", "return=representation");
-  
-  // JSON Body erstellen
-  DynamicJsonDocument doc(256);
-  
-  // Wenn Batterie erkannt wird, sende die Werte, sonst NULL
-  if (batteryPresent && batteryInitialized) {
-    doc["battery_voltage"] = batteryVoltage;
-    doc["battery_percentage"] = batteryPercentage;
-  } else {
-    // Setze auf NULL wenn keine Batterie erkannt wird
-    doc["battery_voltage"] = nullptr;
-    doc["battery_percentage"] = nullptr;
-    Serial.println("  ⚠️ Keine Batterie erkannt → Setze Werte auf NULL");
-    if (!batteryInitialized) {
-      Serial.println("  → Batterie-System nicht initialisiert");
+  for (int attempt = 0; attempt < 2; attempt++) {
+    HTTPClient http;
+    String url = String(SUPABASE_URL) + "/rest/v1/stations?";
+    #if USE_SHORT_CODE
+      url += "short_code=eq." + String(STATION_SHORT_CODE);
+    #else
+      url += "id=eq." + String(STATION_ID);
+    #endif
+
+    http.begin(url);
+    http.setTimeout(HTTP_TIMEOUT_MS);
+    http.addHeader("apikey", SUPABASE_KEY);
+    http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Prefer", "return=representation");
+
+    DynamicJsonDocument doc(256);
+    String detectedPowerbankId = readPowerbankID(EEPROM_CHANNEL);
+    if (batteryPresent && batteryInitialized) {
+      if (detectedPowerbankId.length() > 0) {
+        doc["powerbank_id"] = detectedPowerbankId;
+      } else {
+        doc["powerbank_id"] = nullptr;
+      }
+      doc["battery_voltage"] = (int)(batteryVoltage * 100) / 100.0;
+      doc["battery_percentage"] = batteryPercentage;
     } else {
-      Serial.println("  → Spannung zu niedrig: " + String(batteryVoltage, 2) + " V (Schwellwert: " + String(BATTERY_PRESENT_THRESHOLD, 1) + " V)");
+      doc["powerbank_id"] = nullptr;
+      doc["battery_voltage"] = nullptr;
+      doc["battery_percentage"] = nullptr;
+    }
+
+    String jsonBody;
+    serializeJson(doc, jsonBody);
+    int httpCode = http.PATCH(jsonBody);
+    String responseBody = http.getString();
+    http.end();
+
+    if (httpCode == 200 || httpCode == 201) {
+      break;
+    }
+    Serial.println("Body: " + jsonBody);
+    if (responseBody.length() > 0) {
+      Serial.println("Supabase Antwort: " + responseBody);
+    }
+    if (attempt == 0) {
+      Serial.println("Supabase Battery-Update Fehler (HTTP " + String(httpCode) + "), Retry...");
+      delay(500);
+    } else {
+      Serial.println("Supabase Battery-Update fehlgeschlagen nach Retry: HTTP " + String(httpCode));
     }
   }
-  
-  // WICHTIG: updated_at aktualisieren (für Verbindungsstatus im Dashboard)
-  doc["updated_at"] = "now()";
-  
-  String jsonBody;
-  serializeJson(doc, jsonBody);
-  
-  int httpCode = http.PATCH(jsonBody);
-  
-  // Kein Dauer-Logging der Batteriedaten nötig
-  
-  http.end();
 }
 
 // ===== HILFSFUNKTIONEN =====
@@ -1042,7 +1234,7 @@ uint8_t findEEPROMAddressOnChannel(uint8_t channel) {
   selectI2CChannel(channel);
   delay(10);
   for (uint8_t addr = 0x50; addr <= 0x57; addr++) {
-    if (channel == BATTERY_CHANNEL && addr == 0x55) continue;  // 0x55 auf Kanal 0 = Fuel Gauge
+    if (channel == BATTERY_CHANNEL && addr == 0x55) continue;  // 0x55 auf diesem Kanal = Fuel Gauge
     Wire.beginTransmission(addr);
     Wire.write(0x00);
     if (Wire.endTransmission() == 0) {

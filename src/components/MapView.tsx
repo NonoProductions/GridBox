@@ -1201,14 +1201,63 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             >
               <button
                 type="button"
-                onClick={() => {
-                  // TODO: Reservierungs-Logik
-                  console.log('Reservierung für Station:', selectedStation.name);
+                onClick={async () => {
+                  const stationForRental = panelStation ?? selectedStation;
+                  if (!stationForRental) {
+                    return;
+                  }
+
+                  try {
+                    const {
+                      data: { user },
+                      error: userError,
+                    } = await supabase.auth.getUser();
+
+                    if (userError || !user) {
+                      const currentUrl =
+                        window.location.pathname + window.location.search;
+                      window.location.href = `/login?returnUrl=${encodeURIComponent(currentUrl)}`;
+                      return;
+                    }
+
+                    const reservationEndMs = Date.now() + 10 * 60 * 1000;
+                    const reservedAt = new Date(reservationEndMs).toISOString();
+
+                    await supabase
+                      .from("reservations")
+                      .update({ status: "cancelled" })
+                      .eq("user_id", user.id)
+                      .in("status", ["pending", "confirmed"]);
+
+                    const { error: reservationError } = await supabase
+                      .from("reservations")
+                      .insert({
+                        user_id: user.id,
+                        station_id: stationForRental.id,
+                        reserved_at: reservedAt,
+                        status: "confirmed",
+                      });
+
+                    if (reservationError) {
+                      throw reservationError;
+                    }
+
+                    sessionStorage.setItem(
+                      "rental_reservation_end",
+                      String(reservationEndMs)
+                    );
+                    alert("Powerbank fuer 10 Minuten reserviert.");
+                  } catch (err) {
+                    console.error("Fehler bei der Reservierung:", err);
+                    alert(
+                      "Reservierung fehlgeschlagen. Bitte versuchen Sie es erneut."
+                    );
+                  }
                 }}
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white px-6 py-3.5 shadow-md active:scale-95 transition-transform"
               >
                 <span className="text-lg font-semibold">Reservieren</span>
-                <span className="text-base opacity-80">· kostenlos für 10 Min</span>
+                <span className="text-base opacity-80">· kostenlos fuer 10 Min</span>
               </button>
             </div>
           </div>
@@ -1343,64 +1392,19 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <CameraOverlay 
           onClose={() => setScanning(false)}
           onStationScanned={async (stationId: string) => {
-            console.log('📍 QR-Code/Code gescannt:', stationId);
-            
-            // Schließe Scanner sofort
             setScanning(false);
-            
-            // Prüfe ob es ein 4-stelliger Code ist (z.B. A3B7)
-            const isShortCode = /^[A-Z0-9]{4}$/i.test(stationId);
-            
-            // Suche die Station in der Liste
-            let station = isShortCode 
-              ? stations.find(s => s.short_code?.toUpperCase() === stationId.toUpperCase())
-              : stations.find(s => s.id === stationId);
-            
-            if (station) {
-              // Station gefunden - zeige Ausleih-Bestätigungsmodal
-              setScannedStation(station);
-              setShowRentalModal(true);
-              
-              // Haptisches Feedback
-              if (navigator.vibrate) {
-                navigator.vibrate([200, 100, 200]);
-              }
-            } else {
-              // Station nicht in der Liste - suche in Datenbank
-              try {
-                const { supabase } = await import('@/lib/supabaseClient');
-                let query = supabase.from('stations').select('*').eq('is_active', true);
-                
-                if (isShortCode) {
-                  query = query.ilike('short_code', stationId);
-                } else {
-                  query = query.eq('id', stationId);
-                }
-                
-                const { data, error } = await query.single();
-                
-                if (error || !data) {
-                  console.error('Station nicht gefunden:', error);
-                  alert(isShortCode 
-                    ? `Station mit Code "${stationId.toUpperCase()}" nicht gefunden`
-                    : 'Station nicht gefunden'
-                  );
-                  return;
-                }
-                
-                if (data) {
-                  setScannedStation(data);
-                  setShowRentalModal(true);
-                  
-                  if (navigator.vibrate) {
-                    navigator.vibrate([200, 100, 200]);
-                  }
-                }
-              } catch (err) {
-                console.error('Fehler beim Laden der Station:', err);
-                alert('Station konnte nicht geladen werden');
-              }
+            const scannedId = stationId.trim();
+            if (!scannedId) {
+              alert("Ungueltiger QR-Code.");
+              return;
             }
+
+            if (navigator.vibrate) {
+              navigator.vibrate([200, 100, 200]);
+            }
+
+            const theme = isDarkMode === true ? "dark" : "light";
+            window.location.href = `/rent/${encodeURIComponent(scannedId)}?theme=${theme}`;
           }}
         />
       )}
@@ -1411,54 +1415,82 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             setShowRentalModal(false);
             setScannedStation(null);
           }}
-          onConfirm={async (userEmail?: string, userName?: string) => {
+          onConfirm={async () => {
             const currentStation = stations.find((s) => s.id === scannedStation.id) ?? scannedStation;
-            console.log('✅ Ausleihe bestätigt:', { 
-              stationId: scannedStation.id, 
-              stationName: currentStation.name,
-              userEmail, 
-              userName 
-            });
-            
-            try {
-              // 🚨 SIGNAL AN ESP32 SENDEN! 🚨
-              // Setze dispense_requested Flag in der Datenbank
-              const { error: updateError } = await supabase
-                .from('stations')
-                .update({ 
-                  dispense_requested: true,
-                  available_units: Math.max(0, (currentStation.available_units ?? 1) - 1)
-                })
-                .eq('id', scannedStation.id);
-              
-              if (updateError) {
-                console.error('❌ Fehler beim Senden des Signals:', updateError);
-                throw updateError;
+
+            const { data: { user }, error: userError } = await supabase.auth.getUser();
+            if (userError || !user) throw new Error('Bitte melden Sie sich an.');
+
+            const { data: batteryCheck } = await supabase
+              .from('stations')
+              .select('battery_voltage, battery_percentage, available_units')
+              .eq('id', currentStation.id)
+              .single();
+
+            if (batteryCheck) {
+              const hasBattery = batteryCheck.battery_voltage != null && batteryCheck.battery_percentage != null;
+              const shouldBeAvailable = hasBattery ? 1 : 0;
+              if ((batteryCheck.available_units ?? 0) < shouldBeAvailable) {
+                await supabase
+                  .from('stations')
+                  .update({ available_units: shouldBeAvailable })
+                  .eq('id', currentStation.id);
               }
-              
-              console.log('🎉 Signal an ESP32 gesendet! LED sollte jetzt blinken.');
-              
-              // TODO: Hier die tatsächliche Ausleih-Logik implementieren
-              // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
-              
-              // Push-Benachrichtigung senden
-              await notifyRentalSuccess(scannedStation.name, '/');
-              
-              // Erfolgsmeldung
-              alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!\n\n💡 Die LED an der Station blinkt jetzt für 5 Sekunden.${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
-              
-              // Stationen werden automatisch durch StationManager aktualisiert
-              
-            } catch (error) {
-              console.error('Fehler bei der Ausleihe:', error);
-              const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
-              await notifyRentalError(errorMessage);
-              alert('Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.');
             }
-            
-            // Modal schließen und Station auf Karte anzeigen
+
+            const getPosition = () =>
+              new Promise<GeolocationPosition>((resolve, reject) => {
+                if (!navigator.geolocation) { reject(new Error('Geolocation nicht unterstützt.')); return; }
+                navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+              });
+
+            let userLat: number, userLng: number;
+            try {
+              const pos = await getPosition();
+              userLat = pos.coords.latitude;
+              userLng = pos.coords.longitude;
+            } catch {
+              throw new Error('Standort konnte nicht ermittelt werden.');
+            }
+
+            const withGeo = await supabase.rpc('create_rental', {
+              p_user_id: user.id,
+              p_station_id: currentStation.id,
+              p_user_lat: userLat,
+              p_user_lng: userLng,
+            });
+
+            const shouldFallbackToLegacy =
+              !!withGeo.error &&
+              (
+                withGeo.error.code === 'PGRST202' ||
+                `${withGeo.error.message ?? ''} ${withGeo.error.details ?? ''}`.includes('does not exist') ||
+                `${withGeo.error.message ?? ''} ${withGeo.error.details ?? ''}`.includes('create_rental(uuid,uuid,double precision,double precision)')
+              );
+
+            const { data: rentalData, error: rentalError } = shouldFallbackToLegacy
+              ? await supabase.rpc('create_rental', {
+                  p_user_id: user.id,
+                  p_station_id: currentStation.id,
+                })
+              : withGeo;
+
+            if (rentalError) {
+              const msg = rentalError.message || '';
+              if (msg.includes('MIN_BALANCE')) throw new Error('Du benötigst mindestens 5,00 € Guthaben.');
+              if (msg.includes('OUT_OF_RANGE')) throw new Error('Du bist zu weit von der Station entfernt (max. 100 m).');
+              if (msg.includes('NO_UNITS_AVAILABLE')) throw new Error('Keine Powerbanks verfügbar.');
+              if (msg.includes('HAS_ACTIVE_RENTAL')) throw new Error('Du hast bereits eine aktive Ausleihe.');
+              if (msg.includes('Keine verfügbare Powerbank')) throw new Error('Keine Powerbanks verfügbar.');
+              if (msg.includes('bereits eine aktive Powerbank-Ausleihe')) throw new Error('Du hast bereits eine aktive Ausleihe.');
+              throw new Error('Fehler beim Erstellen der Ausleihe.');
+            }
+
+            if (!rentalData?.success) throw new Error('Ausleihe konnte nicht erstellt werden.');
+            await notifyRentalSuccess(currentStation.name, '/').catch(() => {});
+          }}
+          onPickupComplete={() => {
             setShowRentalModal(false);
-            highlightStation(scannedStation);
             setScannedStation(null);
           }}
           isDarkMode={isDarkMode === true}

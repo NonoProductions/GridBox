@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
 import StationManager, { Station } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
+import ReturnSummaryModal, { ReturnSummaryData } from "@/components/ReturnSummaryModal";
 import mapboxgl from "mapbox-gl";
 import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
 import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
@@ -295,6 +296,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const [showRentalModal, setShowRentalModal] = useState<boolean>(false);
   const [scannedStation, setScannedStation] = useState<Station | null>(null);
   const [compassPermissionGranted, setCompassPermissionGranted] = useState<boolean>(false);
+  // Aktive Ausleihe (Timer-Banner)
+  const [activeRental, setActiveRental] = useState<{
+    id: string;
+    station_id: string;
+    started_at: string;
+    start_price: number;
+    price_per_minute: number;
+    powerbank_id?: string | null;
+  } | null>(null);
+  const [returnSummary, setReturnSummary] = useState<ReturnSummaryData | null>(null);
+  const [rentalNow, setRentalNow] = useState<number>(Date.now());
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapElRef = useRef<HTMLDivElement | null>(null);
   const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -324,6 +336,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const deviceOrientationRef = useRef(0);
   const compassPermissionGrantedRef = useRef(false);
   const selectedStationRef = useRef<Station | null>(null);
+  const prevActiveRentalRef = useRef<string | null>(null);
   const lastLocationRef = useRef<{lat: number, lng: number} | null>(null);
   const isLocationFixedRef = useRef(false);
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
@@ -350,6 +363,128 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   useEffect(() => { selectedStationRef.current = selectedStation; }, [selectedStation]);
   useEffect(() => { lastLocationRef.current = lastLocation; }, [lastLocation]);
   useEffect(() => { isLocationFixedRef.current = isLocationFixed; }, [isLocationFixed]);
+
+  // Aktive Ausleihe laden (für Timer-Banner auf der Startseite)
+  const fetchActiveRental = useCallback(async (): Promise<boolean> => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setActiveRental(null);
+        return false;
+      }
+
+      let { data, error } = await supabase
+        .from('rentals')
+        .select('id, station_id, started_at, start_price, price_per_minute, powerbank_id')
+        .eq('user_id', user.id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      const missingPowerbankColumn =
+        !!error &&
+        `${error.code ?? ''} ${error.message ?? ''} ${error.details ?? ''}`.toLowerCase().includes('powerbank_id');
+
+      if (missingPowerbankColumn) {
+        const legacy = await supabase
+          .from('rentals')
+          .select('id, station_id, started_at, start_price, price_per_minute')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .maybeSingle();
+        data = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+        error = legacy.error ?? null;
+      }
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        prevActiveRentalRef.current = data.id;
+        setActiveRental({
+          id: data.id,
+          station_id: data.station_id,
+          started_at: data.started_at,
+          start_price: parseFloat(data.start_price),
+          price_per_minute: parseFloat(data.price_per_minute),
+          powerbank_id: data.powerbank_id ?? null,
+        });
+        return true;
+      } else {
+        const prevId = prevActiveRentalRef.current;
+        prevActiveRentalRef.current = null;
+        setActiveRental(null);
+
+        if (prevId) {
+          try {
+            const { data: finished } = await supabase
+              .from('rentals')
+              .select('id, station_id, started_at, ended_at, duration_minutes, start_price, price_per_minute, powerbank_id')
+              .eq('id', prevId)
+              .in('status', ['finished', 'closed'])
+              .maybeSingle();
+
+            if (finished?.ended_at) {
+              const elapsed = Math.max(0, (new Date(finished.ended_at).getTime() - new Date(finished.started_at).getTime()) / 60000);
+              const total = parseFloat(finished.start_price ?? '0.10') + elapsed * parseFloat(finished.price_per_minute ?? '0.05');
+
+              const { data: stationData } = await supabase
+                .from('stations')
+                .select('name, address')
+                .eq('id', finished.station_id)
+                .maybeSingle();
+
+              setReturnSummary({
+                rentalId: finished.id,
+                stationName: stationData?.name ?? 'Unbekannte Station',
+                stationAddress: stationData?.address ?? undefined,
+                powerbankId: finished.powerbank_id,
+                startedAt: finished.started_at,
+                endedAt: finished.ended_at,
+                durationMinutes: finished.duration_minutes ?? Math.round(elapsed),
+                totalPrice: Math.round(total * 100) / 100,
+              });
+            }
+          } catch { /* silent */ }
+        }
+
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const fetchActiveRentalWithRetry = useCallback(async () => {
+    const attempts = [0, 1000, 2500, 5000];
+    for (const waitMs of attempts) {
+      if (waitMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+      const found = await fetchActiveRental();
+      if (found) {
+        break;
+      }
+    }
+  }, [fetchActiveRental]);
+
+  useEffect(() => { fetchActiveRentalWithRetry(); }, [fetchActiveRentalWithRetry]);
+
+  // Timer-Tick (jede Sekunde aktualisieren wenn aktive Ausleihe vorhanden)
+  useEffect(() => {
+    if (!activeRental) return;
+    const interval = setInterval(() => setRentalNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [activeRental]);
+
+  // Status-Sync: prüft regelmäßig, ob die Ausleihe serverseitig bereits beendet wurde
+  useEffect(() => {
+    if (!activeRental) return;
+    const sync = setInterval(() => {
+      fetchActiveRental();
+    }, 8000);
+    return () => clearInterval(sync);
+  }, [activeRental, fetchActiveRental]);
 
   // Debug: Log stations when they change
   useEffect(() => {
@@ -2430,6 +2565,51 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         }} 
       />
       
+      {/* Aktive Ausleihe Timer-Pill */}
+      {activeRental && !showRentalModal && (() => {
+        const start = new Date(activeRental.started_at).getTime();
+        const diffMs = rentalNow - start;
+        const totalSeconds = Math.max(0, Math.floor(diffMs / 1000));
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        const minutesAsDecimal = diffMs / 60000;
+        const currentPrice = activeRental.start_price + Math.max(0, minutesAsDecimal) * activeRental.price_per_minute;
+
+        return (
+          <div className="fixed top-[68px] left-0 right-0 z-[900] flex justify-center pointer-events-none">
+            <div className={`inline-flex items-center gap-3 rounded-full px-4 py-2 shadow-lg backdrop-blur-sm pointer-events-auto ${
+              isDarkMode === true
+                ? 'bg-black/30 border border-white/15 text-white'
+                : 'bg-white/40 border border-slate-300/40 text-slate-900 shadow-lg'
+            }`}>
+              <div className="grid place-items-center h-7 w-7 rounded-full bg-emerald-500 text-white flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+              </div>
+              <div className="font-semibold tabular-nums text-sm tracking-tight">
+                {hours > 0 ? `${hours.toString().padStart(2, '0')}:` : ''}
+                {minutes.toString().padStart(2, '0')}:{seconds.toString().padStart(2, '0')}
+              </div>
+              <div className={`h-4 w-px ${isDarkMode === true ? 'bg-white/20' : 'bg-slate-300/60'}`} />
+              <div className="font-bold text-sm tabular-nums text-emerald-600 dark:text-emerald-400">
+                {currentPrice.toFixed(2)} €
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Return Summary Modal */}
+      {returnSummary && (
+        <ReturnSummaryModal
+          data={returnSummary}
+          isDarkMode={isDarkMode === true}
+          onClose={() => setReturnSummary(null)}
+        />
+      )}
+
       {/* Loading indicator for location */}
       {locationLoading && (
         <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/20 backdrop-blur-sm">
@@ -2894,14 +3074,63 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             >
               <button
                 type="button"
-                onClick={() => {
-                  // TODO: Reservierungs-Logik
-                  logger.dev('Reservierung für Station:', selectedStation.name);
+                onClick={async () => {
+                  const stationForRental = panelStation ?? selectedStation;
+                  if (!stationForRental) {
+                    return;
+                  }
+
+                  try {
+                    const {
+                      data: { user },
+                      error: userError,
+                    } = await supabase.auth.getUser();
+
+                    if (userError || !user) {
+                      const currentUrl =
+                        window.location.pathname + window.location.search;
+                      window.location.href = `/login?returnUrl=${encodeURIComponent(currentUrl)}`;
+                      return;
+                    }
+
+                    const reservationEndMs = Date.now() + 10 * 60 * 1000;
+                    const reservedAt = new Date(reservationEndMs).toISOString();
+
+                    await supabase
+                      .from("reservations")
+                      .update({ status: "cancelled" })
+                      .eq("user_id", user.id)
+                      .in("status", ["pending", "confirmed"]);
+
+                    const { error: reservationError } = await supabase
+                      .from("reservations")
+                      .insert({
+                        user_id: user.id,
+                        station_id: stationForRental.id,
+                        reserved_at: reservedAt,
+                        status: "confirmed",
+                      });
+
+                    if (reservationError) {
+                      throw reservationError;
+                    }
+
+                    sessionStorage.setItem(
+                      "rental_reservation_end",
+                      String(reservationEndMs)
+                    );
+                    alert("Powerbank fuer 10 Minuten reserviert.");
+                  } catch (err) {
+                    logger.error("Fehler bei der Reservierung:", err);
+                    alert(
+                      "Reservierung fehlgeschlagen. Bitte versuchen Sie es erneut."
+                    );
+                  }
                 }}
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 text-white px-6 py-3.5 shadow-md active:scale-95 transition-transform"
               >
                 <span className="text-lg font-semibold">Reservieren</span>
-                <span className="text-base opacity-80">· kostenlos für 10 Min</span>
+                <span className="text-base opacity-80">· kostenlos fuer 10 Min</span>
               </button>
             </div>
           </div>
@@ -3025,24 +3254,48 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         </button>
       )}
 
-      {/* Scannen Button - nur anzeigen wenn keine Station ausgewählt */}
+      {/* Bottom Action Button - nur anzeigen wenn keine Station ausgewählt */}
       {!selectedStation && !isFullScreenNavigation && (
-        <button
-          type="button"
-          onClick={() => {
-            setScanning(true);
-          }}
-          className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-12 shadow-lg active:scale-95 border border-emerald-500"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M3 7V5a2 2 0 0 1 2-2h2" />
-            <path d="M17 3h2a2 2 0 0 1 2 2v2" />
-            <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
-            <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
-            <rect x="7" y="7" width="10" height="10" rx="2" />
-          </svg>
-          <span className="text-base font-semibold tracking-wide">Scannen</span>
-        </button>
+        activeRental ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (!userLocation || stations.length === 0) return;
+              const sorted = [...stations].sort((a, b) => {
+                const distA = calculateDistance(userLocation.lat, userLocation.lng, a.lat, a.lng);
+                const distB = calculateDistance(userLocation.lat, userLocation.lng, b.lat, b.lng);
+                return distA - distB;
+              });
+              if (sorted.length > 0) {
+                highlightStation(sorted[0]);
+              }
+            }}
+            className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-12 shadow-lg active:scale-95 border border-emerald-500"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+              <circle cx="12" cy="10" r="3" />
+            </svg>
+            <span className="text-base font-semibold tracking-wide">Nächste Station finden</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setScanning(true);
+            }}
+            className="fixed bottom-5 left-4 right-4 z-[1000] flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-12 shadow-lg active:scale-95 border border-emerald-500"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+              <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+              <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+              <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+              <rect x="7" y="7" width="10" height="10" rx="2" />
+            </svg>
+            <span className="text-base font-semibold tracking-wide">Scannen</span>
+          </button>
+        )
       )}
       
 
@@ -3220,64 +3473,19 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         <CameraOverlay 
           onClose={() => setScanning(false)}
           onStationScanned={async (stationId: string) => {
-            logger.dev('📍 QR-Code/Code gescannt:', stationId);
-            
-            // Schließe Scanner sofort
             setScanning(false);
-            
-            // Prüfe ob es ein 4-stelliger Code ist (z.B. A3B7)
-            const isShortCode = /^[A-Z0-9]{4}$/i.test(stationId);
-            
-            // Suche die Station in der Liste
-            let station = isShortCode 
-              ? stations.find(s => s.short_code?.toUpperCase() === stationId.toUpperCase())
-              : stations.find(s => s.id === stationId);
-            
-            if (station) {
-              // Station gefunden - zeige Ausleih-Bestätigungsmodal
-              setScannedStation(station);
-              setShowRentalModal(true);
-              
-              // Haptisches Feedback
-              if (navigator.vibrate) {
-                navigator.vibrate([200, 100, 200]);
-              }
-            } else {
-              // Station nicht in der Liste - suche in Datenbank
-              try {
-                const { supabase } = await import('@/lib/supabaseClient');
-                let query = supabase.from('stations').select('*').eq('is_active', true);
-                
-                if (isShortCode) {
-                  query = query.ilike('short_code', stationId);
-                } else {
-                  query = query.eq('id', stationId);
-                }
-                
-                const { data, error } = await query.single();
-                
-                if (error || !data) {
-                  logger.error('Station nicht gefunden:', error);
-                  alert(isShortCode 
-                    ? `Station mit Code "${stationId.toUpperCase()}" nicht gefunden`
-                    : 'Station nicht gefunden'
-                  );
-                  return;
-                }
-                
-                if (data) {
-                  setScannedStation(data);
-                  setShowRentalModal(true);
-                  
-                  if (navigator.vibrate) {
-                    navigator.vibrate([200, 100, 200]);
-                  }
-                }
-              } catch (err) {
-                logger.error('Fehler beim Laden der Station:', err);
-                alert('Station konnte nicht geladen werden');
-              }
+            const scannedId = stationId.trim();
+            if (!scannedId) {
+              alert("Ungueltiger QR-Code.");
+              return;
             }
+
+            if (navigator.vibrate) {
+              navigator.vibrate([200, 100, 200]);
+            }
+
+            const theme = isDarkMode === true ? "dark" : "light";
+            window.location.href = `/rent/${encodeURIComponent(scannedId)}?theme=${theme}`;
           }}
         />
       )}
@@ -3288,55 +3496,103 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             setShowRentalModal(false);
             setScannedStation(null);
           }}
-          onConfirm={async (userEmail?: string, userName?: string) => {
+          onConfirm={async () => {
             const currentStation = stations.find((s) => s.id === scannedStation.id) ?? scannedStation;
-            logger.dev('✅ Ausleihe bestätigt:', { 
-              stationId: scannedStation.id, 
-              stationName: currentStation.name,
-              userEmail, 
-              userName 
-            });
-            
-            try {
-              // 🚨 SIGNAL AN ESP32 SENDEN! 🚨
-              // Setze dispense_requested Flag in der Datenbank
-              const { error: updateError } = await supabase
-                .from('stations')
-                .update({ 
-                  dispense_requested: true,
-                  available_units: Math.max(0, (currentStation.available_units ?? 1) - 1)
-                })
-                .eq('id', scannedStation.id);
-              
-              if (updateError) {
-                logger.error('❌ Fehler beim Senden des Signals:', updateError);
-                throw updateError;
-              }
-              
-              logger.dev('🎉 Signal an ESP32 gesendet! LED sollte jetzt blinken.');
-              
-              // TODO: Hier die tatsächliche Ausleih-Logik implementieren
-              // z.B. Ausleihe in der Datenbank speichern, Powerbank reservieren, etc.
-              
-              // Push-Benachrichtigung senden
-              await notifyRentalSuccess(scannedStation.name, '/');
-              
-              // Erfolgsmeldung
-              alert(`Powerbank erfolgreich an Station "${scannedStation.name}" ausgeliehen!\n\n💡 Die LED an der Station blinkt jetzt für 5 Sekunden.${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
-              
-              // Stationen werden automatisch durch StationManager aktualisiert
-              
-            } catch (error) {
-              logger.error('Fehler bei der Ausleihe:', error);
-              const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
-              await notifyRentalError(errorMessage);
-              alert('Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.');
+
+            // 1. Aktuellen User holen
+            const { data: { user }, error: userError } = await supabase.auth.getUser();
+            if (userError || !user) {
+              throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
             }
-            
-            // Modal schließen und Station auf Karte anzeigen
+
+            // 2. available_units anhand der Batterie-Daten synchronisieren
+            const { data: batteryCheck } = await supabase
+              .from('stations')
+              .select('battery_voltage, battery_percentage, available_units')
+              .eq('id', currentStation.id)
+              .single();
+
+            if (batteryCheck) {
+              const hasBattery = batteryCheck.battery_voltage != null && batteryCheck.battery_percentage != null;
+              const shouldBeAvailable = hasBattery ? 1 : 0;
+              if ((batteryCheck.available_units ?? 0) < shouldBeAvailable) {
+                await supabase
+                  .from('stations')
+                  .update({ available_units: shouldBeAvailable })
+                  .eq('id', currentStation.id);
+              }
+            }
+
+            // 3. Geolocation holen
+            const getPosition = () =>
+              new Promise<GeolocationPosition>((resolve, reject) => {
+                if (!navigator.geolocation) {
+                  reject(new Error('Geolocation wird nicht unterstützt.'));
+                  return;
+                }
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                  enableHighAccuracy: true, timeout: 10000, maximumAge: 0,
+                });
+              });
+
+            let userLat: number;
+            let userLng: number;
+
+            try {
+              const position = await getPosition();
+              userLat = position.coords.latitude;
+              userLng = position.coords.longitude;
+            } catch {
+              throw new Error('Standort konnte nicht ermittelt werden. Bitte Standortzugriff erlauben.');
+            }
+
+            // 4. Ausleihe über RPC erstellen (erstellt Rental + setzt dispense_requested)
+            const withGeo = await supabase.rpc('create_rental', {
+              p_user_id: user.id,
+              p_station_id: currentStation.id,
+              p_user_lat: userLat,
+              p_user_lng: userLng,
+            });
+
+            const shouldFallbackToLegacy =
+              !!withGeo.error &&
+              (
+                withGeo.error.code === 'PGRST202' ||
+                `${withGeo.error.message ?? ''} ${withGeo.error.details ?? ''}`.includes('does not exist') ||
+                `${withGeo.error.message ?? ''} ${withGeo.error.details ?? ''}`.includes('create_rental(uuid,uuid,double precision,double precision)')
+              );
+
+            const { data: rentalData, error: rentalError } = shouldFallbackToLegacy
+              ? await supabase.rpc('create_rental', {
+                  p_user_id: user.id,
+                  p_station_id: currentStation.id,
+                })
+              : withGeo;
+
+            if (rentalError) {
+              const msg = rentalError.message || '';
+              if (msg.includes('MIN_BALANCE')) throw new Error('Du benötigst mindestens 5,00 € Guthaben.');
+              if (msg.includes('OUT_OF_RANGE')) throw new Error('Du bist zu weit von der Station entfernt (max. 100 m).');
+              if (msg.includes('STATION_NOT_FOUND')) throw new Error('Station nicht gefunden.');
+              if (msg.includes('STATION_INACTIVE')) throw new Error('Station ist nicht aktiv.');
+              if (msg.includes('NO_UNITS_AVAILABLE')) throw new Error('Keine Powerbanks verfügbar.');
+              if (msg.includes('HAS_ACTIVE_RENTAL')) throw new Error('Du hast bereits eine aktive Ausleihe.');
+              if (msg.includes('Keine verfügbare Powerbank')) throw new Error('Keine Powerbanks verfügbar.');
+              if (msg.includes('bereits eine aktive Powerbank-Ausleihe')) throw new Error('Du hast bereits eine aktive Ausleihe.');
+              throw new Error('Fehler beim Erstellen der Ausleihe.');
+            }
+
+            if (!rentalData?.success) {
+              throw new Error('Ausleihe konnte nicht erstellt werden.');
+            }
+
+            logger.dev('Ausleihe erfolgreich erstellt:', rentalData);
+            await notifyRentalSuccess(currentStation.name, '/').catch(() => {});
+          }}
+          onPickupComplete={() => {
             setShowRentalModal(false);
-            highlightStation(scannedStation);
             setScannedStation(null);
+            fetchActiveRentalWithRetry();
           }}
           isDarkMode={isDarkMode === true}
         />

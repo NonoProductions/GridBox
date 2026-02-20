@@ -6,9 +6,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { usePageTheme } from "@/lib/usePageTheme";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import { Station } from "@/components/StationManager";
-import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
+import { notifyRentalSuccess } from "@/lib/notifications";
 
-// Force dynamic rendering
 export const dynamic = 'force-dynamic';
 
 function RentPageContent() {
@@ -22,7 +21,6 @@ function RentPageContent() {
   const [error, setError] = useState<string | null>(null);
   const isDarkMode = usePageTheme(searchParams);
 
-  // Lade Station-Daten
   useEffect(() => {
     const fetchStation = async () => {
       if (!stationId) {
@@ -70,6 +68,34 @@ function RentPageContent() {
         }
 
         setStation(data);
+
+        // Sofort aktuelle Batterie-Daten nachladen (wie im Dashboard), damit Anzeige stimmt
+        if (data?.id) {
+          let { data: fresh, error: freshError } = await supabase
+            .from('stations')
+            .select('powerbank_id, battery_voltage, battery_percentage')
+            .eq('id', data.id)
+            .single();
+          const missingPowerbankColumn =
+            !!freshError &&
+            `${freshError.code ?? ''} ${freshError.message ?? ''} ${freshError.details ?? ''}`.toLowerCase().includes('powerbank_id');
+          if (missingPowerbankColumn) {
+            const legacy = await supabase
+              .from('stations')
+              .select('battery_voltage, battery_percentage')
+              .eq('id', data.id)
+              .single();
+            fresh = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+          }
+          if (fresh) {
+            setStation((prev) => prev ? {
+              ...prev,
+              powerbank_id: fresh.powerbank_id,
+              battery_voltage: fresh.battery_voltage,
+              battery_percentage: fresh.battery_percentage,
+            } : null);
+          }
+        }
       } catch {
         setError('Station konnte nicht geladen werden.');
       } finally {
@@ -126,147 +152,164 @@ function RentPageContent() {
       <RentalConfirmationModal
         station={station}
         onClose={() => router.push('/')}
-        onConfirm={async (userEmail?: string, userName?: string) => {
-          try {
-            // Hole aktuellen User
-            const { data: { user }, error: userError } = await supabase.auth.getUser();
-            if (userError || !user) {
-              throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
-            }
+        onConfirm={async () => {
+          // 1. Aktuellen User holen
+          const { data: { user }, error: userError } = await supabase.auth.getUser();
+          if (userError || !user) {
+            throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
+          }
 
-            // Validate station ID format
-            const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-            if (!uuidPattern.test(station.id)) {
-              throw new Error('Ungültige Station-ID.');
-            }
-            
-            // Prüfe ob User bereits eine aktive Ausleihe hat
-            const { data: activeRental, error: checkError } = await supabase
-              .from('rentals')
-              .select('id')
-              .eq('user_id', user.id)
-              .eq('status', 'active')
-              .maybeSingle();
+          // 2. available_units anhand der Batterie-Daten synchronisieren,
+          //    damit der RPC-Check (available_units > 0) korrekt funktioniert
+          let { data: batteryCheck, error: batteryCheckError } = await supabase
+            .from('stations')
+            .select('powerbank_id, battery_voltage, battery_percentage, available_units')
+            .eq('id', station.id)
+            .single();
 
-            if (checkError) {
-              console.error('Error checking active rentals:', checkError);
-              throw new Error('Fehler beim Prüfen der Ausleihen.');
-            }
+          const missingPowerbankColumnInCheck =
+            !!batteryCheckError &&
+            `${batteryCheckError.code ?? ''} ${batteryCheckError.message ?? ''} ${batteryCheckError.details ?? ''}`.toLowerCase().includes('powerbank_id');
 
-            if (activeRental) {
-              throw new Error('Sie haben bereits eine aktive Powerbank-Ausleihe. Bitte geben Sie diese zuerst zurück.');
-            }
-
-            // Validate station is still active before creating rental
-            const { data: stationCheck, error: stationCheckError } = await supabase
+          if (missingPowerbankColumnInCheck) {
+            const legacy = await supabase
               .from('stations')
-              .select('id, is_active')
+              .select('battery_voltage, battery_percentage, available_units')
               .eq('id', station.id)
               .single();
+            batteryCheck = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+          }
 
-            if (stationCheckError || !stationCheck) {
-              throw new Error('Station nicht gefunden.');
+          if (batteryCheck) {
+            const hasPowerbankId = typeof batteryCheck.powerbank_id === 'string' && batteryCheck.powerbank_id.trim().length > 0;
+            const hasLegacyBattery = batteryCheck.battery_voltage != null && batteryCheck.battery_percentage != null;
+            const shouldBeAvailable = hasPowerbankId || hasLegacyBattery ? 1 : 0;
+            if ((batteryCheck.available_units ?? 0) < shouldBeAvailable) {
+              await supabase
+                .from('stations')
+                .update({ available_units: shouldBeAvailable })
+                .eq('id', station.id);
             }
+          }
 
-            if (!stationCheck.is_active) {
-              throw new Error('Station ist derzeit nicht aktiv.');
-            }
-
-            // Hole aktuelle Wallet-Balance für Mindest-Guthaben-Check (5 €)
-            const { data: walletData, error: walletError } = await supabase
-              .from('wallets')
-              .select('balance')
-              .eq('user_id', user.id)
-              .single();
-
-            if (walletError || !walletData) {
-              throw new Error('Wallet konnte nicht geladen werden.');
-            }
-
-            const currentBalance = parseFloat(walletData.balance);
-            if (isNaN(currentBalance) || currentBalance < 5) {
-              throw new Error('Du benötigst mindestens 5,00 € Guthaben, um eine Powerbank auszuleihen.');
-            }
-
-            // Hole aktuelle Benutzer-Position (für 100m-Radius-Check)
-            const getPosition = () =>
-              new Promise<GeolocationPosition>((resolve, reject) => {
-                if (!navigator.geolocation) {
-                  reject(new Error('Geolocation wird von deinem Gerät/Browser nicht unterstützt.'));
-                  return;
-                }
-                navigator.geolocation.getCurrentPosition(
-                  (pos) => resolve(pos),
-                  (err) => reject(err),
-                  { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-                );
+          // 3. Geolocation holen
+          const getPosition = () =>
+            new Promise<GeolocationPosition>((resolve, reject) => {
+              if (!navigator.geolocation) {
+                reject(new Error('Geolocation wird von deinem Gerät/Browser nicht unterstützt.'));
+                return;
+              }
+              navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true, timeout: 10000, maximumAge: 0,
               });
+            });
 
-            let userLat: number;
-            let userLng: number;
+          let userLat: number;
+          let userLng: number;
 
-            try {
-              const position = await getPosition();
-              userLat = position.coords.latitude;
-              userLng = position.coords.longitude;
-            } catch (geoError) {
-              console.error('Geolocation Error:', geoError);
-              throw new Error('Standort konnte nicht ermittelt werden. Bitte Standortzugriff erlauben und erneut versuchen.');
-            }
+          try {
+            const position = await getPosition();
+            userLat = position.coords.latitude;
+            userLng = position.coords.longitude;
+          } catch {
+            throw new Error('Standort konnte nicht ermittelt werden. Bitte Standortzugriff erlauben und erneut versuchen.');
+          }
 
-            // Erstelle die Ausleihe über die Datenbankfunktion (mit Geo- und Guthaben-Check im Backend)
-            const { data: rentalData, error: rentalError } = await supabase.rpc('create_rental', {
+          // 4. Ausleihe über RPC erstellen
+          const callCreateRental = async () => {
+            const withGeo = await supabase.rpc('create_rental', {
               p_user_id: user.id,
               p_station_id: station.id,
               p_user_lat: userLat,
               p_user_lng: userLng,
             });
 
-            if (rentalError) {
-              console.error('Error creating rental:', rentalError);
-              const msg = rentalError.message || '';
-
-              // Freundliche Fehlermeldungen basierend auf den Exceptions aus der DB-Funktion
-              if (msg.includes('MIN_BALANCE')) {
-                throw new Error('Du benötigst mindestens 5,00 € Guthaben, um eine Powerbank auszuleihen.');
-              }
-              if (msg.includes('OUT_OF_RANGE')) {
-                throw new Error('Du bist zu weit von der Station entfernt (max. 100m). Bitte näher an die Station gehen.');
-              }
-              if (msg.includes('STATION_NOT_FOUND')) {
-                throw new Error('Station wurde nicht gefunden.');
-              }
-              if (msg.includes('STATION_INACTIVE')) {
-                throw new Error('Diese Station ist derzeit nicht aktiv.');
-              }
-              if (msg.includes('NO_UNITS_AVAILABLE')) {
-                throw new Error('Leider sind an dieser Station aktuell keine Powerbanks verfügbar.');
-              }
-              if (msg.includes('HAS_ACTIVE_RENTAL')) {
-                throw new Error('Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurück.');
-              }
-
-              throw new Error('Fehler beim Erstellen der Ausleihe. Bitte versuchen Sie es erneut.');
+            if (!withGeo.error) {
+              return withGeo;
             }
 
-            if (!rentalData || !rentalData.success) {
-              throw new Error('Ausleihe konnte nicht erstellt werden.');
+            const raw = `${withGeo.error.code ?? ''} ${withGeo.error.message ?? ''} ${withGeo.error.details ?? ''}`;
+            const missingGeoOverload =
+              withGeo.error.code === 'PGRST202' ||
+              raw.includes('does not exist') ||
+              raw.includes('create_rental(uuid,uuid,double precision,double precision)') ||
+              raw.includes('create_rental(p_user_id, p_station_id, p_user_lat, p_user_lng)');
+
+            if (!missingGeoOverload) {
+              return withGeo;
             }
 
-            // Push-Benachrichtigung senden
-            await notifyRentalSuccess(station.name, '/');
-            
-            // Erfolgsmeldung
-            alert(`Powerbank erfolgreich an Station "${station.name}" ausgeliehen!${!userName ? '' : `\n\nBestätigung wurde an ${userEmail} gesendet.`}`);
-            
-            // Zur Startseite navigieren
-            router.push(`/?theme=${isDarkMode ? "dark" : "light"}`);
-          } catch (error) {
-            console.error('Fehler bei der Ausleihe:', error);
-            const errorMessage = error instanceof Error ? error.message : 'Fehler bei der Ausleihe. Bitte versuchen Sie es erneut.';
-            await notifyRentalError(errorMessage);
-            alert(errorMessage);
+            return supabase.rpc('create_rental', {
+              p_user_id: user.id,
+              p_station_id: station.id,
+            });
+          };
+
+          let { data: rentalData, error: rentalError } = await callCreateRental();
+
+          // Retry bei möglicher Race Condition:
+          // Batterie ist schon erkannt, available_units aber noch nicht synchron.
+          if (rentalError?.message?.includes('NO_UNITS_AVAILABLE')) {
+            let { data: freshStation, error: freshStationError } = await supabase
+              .from('stations')
+              .select('powerbank_id, battery_voltage, battery_percentage, available_units')
+              .eq('id', station.id)
+              .maybeSingle();
+
+            const missingPowerbankColumnInRetry =
+              !!freshStationError &&
+              `${freshStationError.code ?? ''} ${freshStationError.message ?? ''} ${freshStationError.details ?? ''}`.toLowerCase().includes('powerbank_id');
+
+            if (missingPowerbankColumnInRetry) {
+              const legacy = await supabase
+                .from('stations')
+                .select('battery_voltage, battery_percentage, available_units')
+                .eq('id', station.id)
+                .maybeSingle();
+              freshStation = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+            }
+
+            const hasPowerbankNow =
+              (typeof freshStation?.powerbank_id === 'string' && freshStation.powerbank_id.trim().length > 0) ||
+              (freshStation?.battery_voltage != null && freshStation?.battery_percentage != null);
+
+            if (hasPowerbankNow) {
+              await supabase
+                .from('stations')
+                .update({ available_units: 1 })
+                .eq('id', station.id);
+
+              ({ data: rentalData, error: rentalError } = await callCreateRental());
+            }
           }
+
+          if (rentalError) {
+            const msg = (rentalError.message ?? '') + (rentalError.details ? ` ${rentalError.details}` : '') + (rentalError.hint ? ` (${rentalError.hint})` : '');
+            console.error('create_rental Fehler:', { message: rentalError.message, details: rentalError.details, code: rentalError.code, full: rentalError });
+            if (msg.includes('Unauthorized')) throw new Error('Sitzung abgelaufen. Bitte erneut anmelden.');
+            if (msg.includes('Wallet nicht gefunden')) throw new Error('Kein Wallet gefunden. Bitte kontaktieren Sie den Support.');
+            if (msg.includes('MIN_BALANCE')) throw new Error('Du benötigst mindestens 5,00 € Guthaben, um eine Powerbank auszuleihen.');
+            if (msg.includes('OUT_OF_RANGE')) throw new Error('Du bist zu weit von der Station entfernt (max. 100 m). Bitte näher an die Station gehen.');
+            if (msg.includes('STATION_NOT_FOUND')) throw new Error('Station wurde nicht gefunden.');
+            if (msg.includes('STATION_INACTIVE')) throw new Error('Diese Station ist derzeit nicht aktiv.');
+            if (msg.includes('NO_UNITS_AVAILABLE')) throw new Error('Leider sind an dieser Station aktuell keine Powerbanks verfügbar.');
+            if (msg.includes('HAS_ACTIVE_RENTAL')) throw new Error('Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurück.');
+            if (msg.includes('Keine verfügbare Powerbank')) throw new Error('Leider sind an dieser Station aktuell keine Powerbanks verfügbar.');
+            if (msg.includes('bereits eine aktive Powerbank-Ausleihe')) throw new Error('Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurück.');
+            if (msg.includes('does not exist') || msg.includes('42703')) throw new Error('Datenbank-Konfigurationsfehler. Bitte den Support kontaktieren.');
+            throw new Error(rentalError.message || 'Fehler beim Erstellen der Ausleihe. Bitte versuchen Sie es erneut.');
+          }
+
+          if (!rentalData || !rentalData.success) {
+            console.error('create_rental unerwartete Antwort:', rentalData);
+            throw new Error('Ausleihe konnte nicht erstellt werden.');
+          }
+
+          // 5. Push-Benachrichtigung (Fehler hier nicht weiterleiten)
+          await notifyRentalSuccess(station.name, '/').catch(() => {});
+        }}
+        onPickupComplete={() => {
+          router.push(`/?theme=${isDarkMode ? "dark" : "light"}`);
         }}
         isDarkMode={isDarkMode}
       />
@@ -286,4 +329,3 @@ export default function RentPage() {
     </Suspense>
   );
 }
-

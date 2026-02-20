@@ -20,6 +20,7 @@ interface ActiveRental {
   started_at: string;
   start_price: number;
   price_per_minute: number;
+  powerbank_id?: string | null;
 }
 
 function WalletContent() {
@@ -51,6 +52,15 @@ function WalletContent() {
     return () => clearInterval(interval);
   }, [activeRental]);
 
+  // Status-Sync: stoppt Timer automatisch, wenn Rückgabe serverseitig abgeschlossen wurde
+  useEffect(() => {
+    if (!activeRental) return;
+    const sync = setInterval(() => {
+      loadWalletData();
+    }, 8000);
+    return () => clearInterval(sync);
+  }, [activeRental]);
+
   const loadWalletData = async () => {
     try {
       setInitialLoading(true);
@@ -80,12 +90,27 @@ function WalletContent() {
       }
 
       // Prüfe auf aktive Ausleihe für Live-Counter
-      const { data: rentalData, error: rentalError } = await supabase
+      let { data: rentalData, error: rentalError } = await supabase
         .from('rentals')
-        .select('id, station_id, started_at, start_price, price_per_minute')
+        .select('id, station_id, started_at, start_price, price_per_minute, powerbank_id')
         .eq('user_id', user.id)
         .eq('status', 'active')
         .maybeSingle();
+
+      const missingPowerbankColumn =
+        !!rentalError &&
+        `${rentalError.code ?? ''} ${rentalError.message ?? ''} ${rentalError.details ?? ''}`.toLowerCase().includes('powerbank_id');
+
+      if (missingPowerbankColumn) {
+        const legacy = await supabase
+          .from('rentals')
+          .select('id, station_id, started_at, start_price, price_per_minute')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .maybeSingle();
+        rentalData = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+        rentalError = legacy.error;
+      }
 
       if (rentalError) {
         console.error("Rental Fehler:", rentalError);
@@ -96,6 +121,7 @@ function WalletContent() {
           started_at: rentalData.started_at,
           start_price: parseFloat(rentalData.start_price),
           price_per_minute: parseFloat(rentalData.price_per_minute),
+          powerbank_id: rentalData.powerbank_id ?? null,
         });
       } else {
         setActiveRental(null);
@@ -227,6 +253,11 @@ function WalletContent() {
             </span>{" "}
             (inkl. Startpreis)
           </div>
+          {activeRental.powerbank_id && (
+            <div className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+              Powerbank-ID: <span className="font-semibold">{activeRental.powerbank_id}</span>
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-center h-10 w-10 rounded-full bg-emerald-600 text-white">
           <svg

@@ -30,6 +30,7 @@ export interface Station {
   powerbanks?: Powerbank[]; // Liste der Powerbanks an dieser Station
   battery_voltage?: number; // Batteriespannung in Volt
   battery_percentage?: number; // Batterieprozente (0-100)
+  powerbank_id?: string | null; // Eindeutige ID der aktuell erkannten Powerbank
   charge_enabled?: boolean; // Relais-Steuerung: Laden aktiviert/deaktiviert
   opening_hours?: string; // Öffnungszeiten (z.B. "Mo-Fr: 8:00-18:00, Sa: 9:00-16:00")
 }
