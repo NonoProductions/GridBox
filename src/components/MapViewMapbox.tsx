@@ -2781,10 +2781,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               height: isPanelExpanded 
                 ? dragOffset < 0 
                   ? `calc(70vh + ${dragOffset}px)` 
-                  : '90vh'
+                  : '80vh'
                 : dragOffset > 0
                   ? `calc(17rem + ${dragOffset}px)`
                   : '17rem',
+              maxHeight: '80vh',
               minHeight: 'auto',
               transition: dragOffset === 0 ? 'height 0.3s ease-out' : 'none'
             }}
