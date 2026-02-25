@@ -57,7 +57,7 @@ function WalletContent() {
     if (!activeRental) return;
     const sync = setInterval(() => {
       loadWalletData();
-    }, 8000);
+    }, 5000);
     return () => clearInterval(sync);
   }, [activeRental]);
 

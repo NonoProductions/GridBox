@@ -1,9 +1,77 @@
--- Automatische Rückgabe wenn Powerbank in Station erkannt wird.
--- Trigger feuert bei UPDATE von powerbank_id auf stations.
--- Sucht die aktive Ausleihe primär per station_id (robust),
--- optional zusätzlich per powerbank_id (wenn gesetzt).
--- Beendet die Ausleihe, berechnet Preis und belastet Wallet.
+-- ============================================================
+-- FIX: Automatische Rückgabe bei Powerbank-Einstecken
+-- ============================================================
+-- PROBLEM: Die Ausleihe wird nicht beendet wenn die Powerbank
+--          zurückgesteckt wird, weil der Trigger nur per
+--          powerbank_id matched, diese aber in rentals oft NULL ist.
+--
+-- LÖSUNG:  Trigger matched jetzt PRIMÄR per station_id (Fallback)
+--          und optional per powerbank_id (wenn gesetzt).
+--          Zusätzlich: available_units wird wieder hochgezählt.
+--
+-- ANLEITUNG: Dieses SQL im Supabase SQL-Editor ausführen.
+-- ============================================================
 
+-- 1. Sicherstellen dass powerbank_id in beiden Tabellen TEXT ist (nicht UUID)
+DO $$
+BEGIN
+  -- stations.powerbank_id → TEXT
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'stations' AND column_name = 'powerbank_id'
+  ) THEN
+    ALTER TABLE stations ADD COLUMN powerbank_id TEXT;
+  ELSE
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'stations' AND column_name = 'powerbank_id' AND udt_name = 'uuid'
+    ) THEN
+      ALTER TABLE stations ALTER COLUMN powerbank_id TYPE TEXT USING powerbank_id::text;
+    END IF;
+  END IF;
+
+  -- rentals.powerbank_id → TEXT
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'rentals' AND column_name = 'powerbank_id'
+  ) THEN
+    ALTER TABLE rentals ADD COLUMN powerbank_id TEXT;
+  ELSE
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'rentals' AND column_name = 'powerbank_id' AND udt_name = 'uuid'
+    ) THEN
+      ALTER TABLE rentals ALTER COLUMN powerbank_id TYPE TEXT USING powerbank_id::text;
+    END IF;
+  END IF;
+END $$;
+
+-- 2. Indizes
+CREATE INDEX IF NOT EXISTS idx_stations_powerbank_id ON stations(powerbank_id);
+CREATE INDEX IF NOT EXISTS idx_rentals_powerbank_id ON rentals(powerbank_id);
+CREATE INDEX IF NOT EXISTS idx_rentals_station_status ON rentals(station_id, status);
+
+-- 3. Trigger: Beim Erstellen einer Ausleihe automatisch powerbank_id von Station kopieren
+CREATE OR REPLACE FUNCTION set_rental_powerbank_id_from_station()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.powerbank_id IS NULL OR length(trim(NEW.powerbank_id)) = 0 THEN
+    SELECT s.powerbank_id
+    INTO NEW.powerbank_id
+    FROM stations s
+    WHERE s.id = NEW.station_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_set_rental_powerbank_id_from_station ON rentals;
+CREATE TRIGGER trigger_set_rental_powerbank_id_from_station
+  BEFORE INSERT ON rentals
+  FOR EACH ROW
+  EXECUTE FUNCTION set_rental_powerbank_id_from_station();
+
+-- 4. HAUPTFIX: Automatische Rückgabe-Trigger (matched per station_id UND powerbank_id)
 CREATE OR REPLACE FUNCTION process_powerbank_return_on_station_update()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -16,12 +84,12 @@ DECLARE
   v_total_price NUMERIC(10,2);
   v_wallet_id UUID;
 BEGIN
-  -- Nur reagieren, wenn eine Powerbank-ID vorhanden ist (= Powerbank wurde eingesetzt)
+  -- Nur reagieren wenn eine Powerbank-ID vorhanden ist (= Powerbank eingesteckt)
   IF NEW.powerbank_id IS NULL OR length(trim(NEW.powerbank_id::text)) = 0 THEN
     RETURN NEW;
   END IF;
 
-  -- Nur reagieren, wenn sich powerbank_id tatsächlich geändert hat
+  -- Nur reagieren wenn sich powerbank_id tatsächlich geändert hat
   IF TG_OP = 'UPDATE' AND COALESCE(OLD.powerbank_id::text, '') = COALESCE(NEW.powerbank_id::text, '') THEN
     RETURN NEW;
   END IF;
@@ -75,7 +143,7 @@ BEGIN
   SET available_units = LEAST(COALESCE(available_units, 0) + 1, COALESCE(total_units, 1))
   WHERE id = NEW.id;
 
-  -- Wallet belasten (wenn vorhanden)
+  -- Wallet belasten
   SELECT w.id INTO v_wallet_id
   FROM wallets w
   WHERE w.user_id = v_user_id
@@ -126,3 +194,10 @@ CREATE TRIGGER trigger_process_powerbank_return
   AFTER UPDATE OF powerbank_id ON stations
   FOR EACH ROW
   EXECUTE FUNCTION process_powerbank_return_on_station_update();
+
+-- 5. Falls es aktuell eine hängende aktive Ausleihe gibt, zeige sie an
+SELECT r.id, r.user_id, r.station_id, r.started_at, r.powerbank_id, r.status,
+       ROUND(EXTRACT(EPOCH FROM (NOW() - r.started_at)) / 60.0, 1) AS elapsed_minutes
+FROM rentals r
+WHERE r.status = 'active'
+ORDER BY r.started_at DESC;

@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
-import StationManager, { Station } from "@/components/StationManager";
+import StationManager, { Station, isStationOnline, computeRealAvailability } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import ReturnSummaryModal, { ReturnSummaryData } from "@/components/ReturnSummaryModal";
 import mapboxgl from "mapbox-gl";
@@ -482,7 +482,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (!activeRental) return;
     const sync = setInterval(() => {
       fetchActiveRental();
-    }, 8000);
+    }, 5000);
     return () => clearInterval(sync);
   }, [activeRental, fetchActiveRental]);
 
@@ -2236,16 +2236,23 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             return;
           }
           
+          // Marker-Farbe basierend auf Verbindungsstatus
+          const online = isStationOnline(s);
+          const markerColor = online ? '#10b981' : '#9ca3af'; // grün wenn online, grau wenn offline
+          
           const stationElement = document.createElement('div');
           stationElement.innerHTML = `
             <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path fill="#10b981" stroke="#10b981" d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/>
+              <path fill="${markerColor}" stroke="${markerColor}" d="M12 22s-7-4.35-7-10a7 7 0 1 1 14 0c0 5.65-7 10-7 10z"/>
               <path d="M13 11h3l-4 6v-4H9l4-6v4z" fill="white" stroke="white"/>
             </svg>
           `;
           stationElement.style.width = '32px';
           stationElement.style.height = '32px';
           stationElement.style.cursor = 'pointer';
+          if (!online) {
+            stationElement.style.opacity = '0.6';
+          }
           
           const marker = new mapboxgl.Marker({
             element: stationElement,
@@ -2820,13 +2827,33 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                 <div className="flex-1 space-y-1.5">
                   {/* Verfügbare Powerbanks */}
                   <div className="flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-emerald-600 dark:text-emerald-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="5 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className={`flex-shrink-0 ${panelStation && isStationOnline(panelStation) ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}>
                       <path d="M13 11h3l-4 6v-4H9l4-6v4z"/>
                     </svg>
                     <span className="text-base -ml-2">
-                      <span className="font-semibold">{panelStation?.available_units ?? 0}</span> verfügbar
+                      <span className="font-semibold">{panelStation ? computeRealAvailability(panelStation) : 0}</span> verfügbar
                     </span>
                   </div>
+
+                  {/* Verbindungsstatus */}
+                  {panelStation && !isStationOnline(panelStation) && (
+                    <div className={`flex items-center gap-2 px-2 py-1 rounded-lg ${
+                      isDarkMode === true ? 'bg-red-900/30' : 'bg-red-50'
+                    }`}>
+                      <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                      <span className={`text-xs font-medium ${isDarkMode === true ? 'text-red-400' : 'text-red-600'}`}>
+                        Station offline
+                      </span>
+                    </div>
+                  )}
+                  {panelStation && isStationOnline(panelStation) && (
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                      <span className={`text-xs font-medium ${isDarkMode === true ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                        Verbunden
+                      </span>
+                    </div>
+                  )}
 
                   {/* Kosten */}
                   <div className="flex items-center gap-3">
@@ -3208,9 +3235,18 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                         </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                          {station.available_units} verfügbar
+                        <div className={`text-sm font-medium ${
+                          isStationOnline(station) 
+                            ? 'text-emerald-600 dark:text-emerald-400' 
+                            : 'text-gray-400 dark:text-gray-500'
+                        }`}>
+                          {computeRealAvailability(station)} verfügbar
                         </div>
+                        {!isStationOnline(station) && (
+                          <div className="text-xs text-red-500 dark:text-red-400 mt-0.5">
+                            Offline
+                          </div>
+                        )}
                         <div className="text-xs opacity-60 mt-1">
                           Details →
                         </div>
@@ -3505,20 +3541,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
             }
 
-            // 2. available_units anhand der Batterie-Daten synchronisieren
+            // 2. Verbindungsstatus prüfen und available_units synchronisieren
             const { data: batteryCheck } = await supabase
               .from('stations')
-              .select('battery_voltage, battery_percentage, available_units')
+              .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at')
               .eq('id', currentStation.id)
               .single();
 
+            // Station offline? Ausleihe verhindern
+            if (batteryCheck && !isStationOnline(batteryCheck)) {
+              throw new Error('Diese Station ist derzeit nicht verbunden. Bitte versuche es später erneut.');
+            }
+
             if (batteryCheck) {
-              const hasBattery = batteryCheck.battery_voltage != null && batteryCheck.battery_percentage != null;
-              const shouldBeAvailable = hasBattery ? 1 : 0;
-              if ((batteryCheck.available_units ?? 0) < shouldBeAvailable) {
+              const realAvailable = computeRealAvailability(batteryCheck);
+              if ((batteryCheck.available_units ?? 0) < realAvailable) {
                 await supabase
                   .from('stations')
-                  .update({ available_units: shouldBeAvailable })
+                  .update({ available_units: realAvailable })
                   .eq('id', currentStation.id);
               }
             }

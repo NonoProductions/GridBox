@@ -58,12 +58,15 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define STATUS_LED_PIN 23   // Externe Status-LED (optional)
 
 // Servo Konfiguration (mechanische Ausgabe)
-#define SERVO_A_PIN 13            // Servo A Signal-Pin (GPIO 8 = Flash-Pin, nicht nutzbar!)
+#define SERVO_A_PIN 13            // Servo A Signal-Pin
 #define SERVO_B_PIN 7             // Servo B Signal-Pin
-#define DISPENSE_TARGET_SERVO 1   // 1 = Servo A (Pin 8), 2 = Servo B (Pin 7)
-#define SERVO_STARTUP_IDENTIFY true // Bewegt A und B kurz beim Start zur Zuordnung
-#define SERVO_CLOSED_ANGLE 0      // Winkel: Fach geschlossen
-#define SERVO_OPEN_ANGLE 180      // Winkel: Fach geöffnet / Powerbank wird ausgegeben
+#define DISPENSE_TARGET_SERVO 1   // 1 = Servo A (Pin 13), 2 = Servo B (Pin 7)
+#define SERVO_STARTUP_IDENTIFY false // Bewegt A und B kurz beim Start zur Zuordnung
+// Kalibrierte Winkel pro Servo (Servos sind gegenläufig!)
+#define SERVO_A_CLOSED_ANGLE 140  // Servo A: Fach geschlossen
+#define SERVO_A_OPEN_ANGLE 0      // Servo A: Fach geöffnet / Powerbank wird ausgegeben
+#define SERVO_B_CLOSED_ANGLE 0    // Servo B: Fach geschlossen
+#define SERVO_B_OPEN_ANGLE 140    // Servo B: Fach geöffnet / Powerbank wird ausgegeben
 #define SERVO_MOVE_DELAY_MS 1500  // Zeit in ms, wie lange der Servo in Offen-Position bleibt
 
 // LED Konfiguration
@@ -146,7 +149,7 @@ void evaluateBatteryPresence();
 void dispensePowerbank();
 bool rollbackFailedDispense();
 bool initDispenseServos();
-void moveDispenseServo(int angle);
+void moveDispenseServo(bool open);
 
 // EEPROM Funktionsprototypen
 bool writeEEPROMByte(uint8_t channel, uint8_t address, uint8_t data);
@@ -658,9 +661,9 @@ void dispensePowerbank() {
   // Ohne Batteriesensor kann keine sichere Entnahme-Prüfung erfolgen
   if (!batteryInitialized) {
     Serial.println("⚠️ Batterie-Sensor nicht verfügbar: keine Entnahme-Verifikation möglich.");
-    moveDispenseServo(SERVO_OPEN_ANGLE);
+    moveDispenseServo(true);  // öffnen
     delay(SERVO_MOVE_DELAY_MS);
-    moveDispenseServo(SERVO_CLOSED_ANGLE);
+    moveDispenseServo(false);  // schließen
     delay(300);
     return;
   }
@@ -668,7 +671,7 @@ void dispensePowerbank() {
   bool pickupDetected = false;
 
   // Servo öffnen und bis zu 5s auf Entnahme warten
-  moveDispenseServo(SERVO_OPEN_ANGLE);
+  moveDispenseServo(true);  // öffnen
   delay(50);  // PWM-Signal stabilisieren bevor I2C-Operationen starten
   unsigned long waitStart = millis();
 
@@ -691,7 +694,7 @@ void dispensePowerbank() {
   }
 
   // Servo schließen (Powerbank zurückziehen)
-  moveDispenseServo(SERVO_CLOSED_ANGLE);
+  moveDispenseServo(false);  // schließen
   delay(300);
 
   if (pickupDetected) {
@@ -809,9 +812,9 @@ bool initDispenseServos() {
     return false;
   }
 
-  if (servoAReady) dispenseServoA.write(SERVO_CLOSED_ANGLE);
-  if (servoBReady) dispenseServoB.write(SERVO_CLOSED_ANGLE);
-  Serial.println("✅ Ziel-Servo initialisiert, Startposition: geschlossen.");
+  if (servoAReady) dispenseServoA.write(SERVO_A_CLOSED_ANGLE);
+  if (servoBReady) dispenseServoB.write(SERVO_B_CLOSED_ANGLE);
+  Serial.println("✅ Servos initialisiert, Startposition: geschlossen (A=" + String(SERVO_A_CLOSED_ANGLE) + "° B=" + String(SERVO_B_CLOSED_ANGLE) + "°)");
   if (!servoAReady || !servoBReady) {
     Serial.println("⚠️ Hinweis: Ein Servo ist optional ausgefallen, Ziel-Servo bleibt nutzbar.");
   }
@@ -819,15 +822,15 @@ bool initDispenseServos() {
 #if SERVO_STARTUP_IDENTIFY
   Serial.println("Servo-Zuordnungstest: zuerst Servo A, dann Servo B (nur wenn bereit).");
   if (servoAReady) {
-    dispenseServoA.write(SERVO_OPEN_ANGLE);
+    dispenseServoA.write(SERVO_A_OPEN_ANGLE);
     delay(600);
-    dispenseServoA.write(SERVO_CLOSED_ANGLE);
+    dispenseServoA.write(SERVO_A_CLOSED_ANGLE);
     delay(400);
   }
   if (servoBReady) {
-    dispenseServoB.write(SERVO_OPEN_ANGLE);
+    dispenseServoB.write(SERVO_B_OPEN_ANGLE);
     delay(600);
-    dispenseServoB.write(SERVO_CLOSED_ANGLE);
+    dispenseServoB.write(SERVO_B_CLOSED_ANGLE);
     delay(400);
   }
 #endif
@@ -836,8 +839,9 @@ bool initDispenseServos() {
   return true;
 }
 
-void moveDispenseServo(int angle) {
+void moveDispenseServo(bool open) {
   if (DISPENSE_TARGET_SERVO == 1) {
+    int angle = open ? SERVO_A_OPEN_ANGLE : SERVO_A_CLOSED_ANGLE;
     if (!dispenseServoA.attached()) {
       Serial.println("Servo A war detached – re-attach auf Pin " + String(SERVO_A_PIN));
       dispenseServoA.setPeriodHertz(50);
@@ -845,7 +849,9 @@ void moveDispenseServo(int angle) {
       delay(50);
     }
     dispenseServoA.write(angle);
+    Serial.println("Servo A → " + String(angle) + "° (" + (open ? "OFFEN" : "ZU") + ")");
   } else {
+    int angle = open ? SERVO_B_OPEN_ANGLE : SERVO_B_CLOSED_ANGLE;
     if (!dispenseServoB.attached()) {
       Serial.println("Servo B war detached – re-attach auf Pin " + String(SERVO_B_PIN));
       dispenseServoB.setPeriodHertz(50);
@@ -853,6 +859,7 @@ void moveDispenseServo(int angle) {
       delay(50);
     }
     dispenseServoB.write(angle);
+    Serial.println("Servo B → " + String(angle) + "° (" + (open ? "OFFEN" : "ZU") + ")");
   }
 }
 
@@ -999,8 +1006,15 @@ void evaluateBatteryPresence() {
   if (batteryPresent != previousState) {
     if (batteryPresent) {
       Serial.println("✅ Batterieanschluss erkannt (Spannung ≥ " + String(BATTERY_PRESENT_THRESHOLD, 1) + "V)");
+      // SOFORT Powerbank-ID an Supabase senden → Trigger beendet aktive Ausleihe
+      Serial.println("📤 Sende Powerbank-Rückgabe sofort an Supabase...");
+      updateBatteryData();
+      lastBatteryUpdate = millis();
     } else {
       Serial.println("❌ Batterie entfernt oder zu geringe Spannung");
+      // Auch sofort senden damit Station weiß: Powerbank weg
+      updateBatteryData();
+      lastBatteryUpdate = millis();
     }
     updateChargingState();
   }

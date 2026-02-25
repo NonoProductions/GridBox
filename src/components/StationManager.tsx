@@ -33,6 +33,39 @@ export interface Station {
   powerbank_id?: string | null; // Eindeutige ID der aktuell erkannten Powerbank
   charge_enabled?: boolean; // Relais-Steuerung: Laden aktiviert/deaktiviert
   opening_hours?: string; // Öffnungszeiten (z.B. "Mo-Fr: 8:00-18:00, Sa: 9:00-16:00")
+  last_seen?: string; // Letzter Heartbeat vom ESP32 (ISO-Zeitstempel)
+}
+
+/**
+ * Prüft, ob eine Station aktuell online/verbunden ist.
+ * Eine Station gilt als online, wenn last_seen weniger als 60 Sekunden alt ist.
+ */
+export function isStationOnline(station: { last_seen?: string | null; updated_at?: string | null }): boolean {
+  const timestamp = station.last_seen ?? station.updated_at;
+  if (!timestamp) return false;
+  const lastSeenDate = new Date(timestamp);
+  const now = new Date();
+  const diffSeconds = (now.getTime() - lastSeenDate.getTime()) / 1000;
+  return diffSeconds < 60;
+}
+
+/**
+ * Berechnet die tatsächlich verfügbaren Powerbanks unter Berücksichtigung des Verbindungsstatus.
+ * Gibt 0 zurück, wenn die Station offline ist.
+ */
+export function computeRealAvailability(station: {
+  powerbank_id?: string | null;
+  battery_voltage?: number | null;
+  battery_percentage?: number | null;
+  last_seen?: string | null;
+  updated_at?: string | null;
+}): number {
+  // Station offline → keine Powerbanks verfügbar
+  if (!isStationOnline(station)) return 0;
+  
+  const hasPowerbankId = typeof station.powerbank_id === 'string' && station.powerbank_id.trim().length > 0;
+  const hasLegacyBatteryData = station.battery_voltage != null && station.battery_percentage != null;
+  return hasPowerbankId || hasLegacyBatteryData ? 1 : 0;
 }
 
 interface StationManagerProps {

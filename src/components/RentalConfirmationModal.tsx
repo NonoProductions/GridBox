@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
+import { isStationOnline, computeRealAvailability } from "@/components/StationManager";
 
 interface Station {
   id: string;
@@ -18,6 +19,8 @@ interface Station {
   battery_voltage?: number | null;
   battery_percentage?: number | null;
   powerbank_id?: string | null;
+  last_seen?: string | null;
+  updated_at?: string | null;
 }
 
 interface RentalConfirmationModalProps {
@@ -44,31 +47,23 @@ export default function RentalConfirmationModal({
   const [authLoading, setAuthLoading] = useState(true);
   const [pickupTimeout, setPickupTimeout] = useState(false);
 
-  // Primärmerkmal: eindeutige powerbank_id (Fallback: ältere Batterie-Felder)
-  const computeAvailable = (s: { powerbank_id?: string | null; battery_voltage?: number | null; battery_percentage?: number | null }) => {
-    const hasPowerbankId = typeof s.powerbank_id === "string" && s.powerbank_id.trim().length > 0;
-    const hasLegacyBatteryData =
-      s.battery_voltage !== undefined &&
-      s.battery_voltage !== null &&
-      s.battery_percentage !== undefined &&
-      s.battery_percentage !== null;
-    return hasPowerbankId || hasLegacyBatteryData ? 1 : 0;
-  };
-
-  const [availableUnits, setAvailableUnits] = useState<number>(computeAvailable(station));
+  // Verfügbarkeit unter Berücksichtigung des Verbindungsstatus berechnen
+  const [availableUnits, setAvailableUnits] = useState<number>(computeRealAvailability(station));
+  const [stationOnline, setStationOnline] = useState<boolean>(isStationOnline(station));
 
   useEffect(() => {
-    setAvailableUnits(computeAvailable(station));
-  }, [station.battery_voltage, station.battery_percentage]);
+    setAvailableUnits(computeRealAvailability(station));
+    setStationOnline(isStationOnline(station));
+  }, [station.battery_voltage, station.battery_percentage, station.last_seen]);
 
-  // Beim Öffnen und bei Fokus: aktuelle Batterie-Daten der Station laden
+  // Beim Öffnen und bei Fokus: aktuelle Batterie-Daten + last_seen der Station laden
   useEffect(() => {
     if (phase !== "confirm") return;
     const fetchAvailableUnits = async () => {
       try {
         let { data, error: fetchError } = await supabase
           .from("stations")
-          .select("powerbank_id, battery_voltage, battery_percentage")
+          .select("powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at")
           .eq("id", station.id)
           .maybeSingle();
         const missingPowerbankColumn =
@@ -77,23 +72,30 @@ export default function RentalConfirmationModal({
         if (missingPowerbankColumn) {
           const legacy = await supabase
             .from("stations")
-            .select("battery_voltage, battery_percentage")
+            .select("battery_voltage, battery_percentage, last_seen, updated_at")
             .eq("id", station.id)
             .maybeSingle();
           data = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
           fetchError = legacy.error;
         }
         if (!fetchError && data != null) {
-          setAvailableUnits(computeAvailable(data));
+          const online = isStationOnline(data);
+          setStationOnline(online);
+          setAvailableUnits(computeRealAvailability(data));
         }
       } catch {
         // Fallback: Wert von der übergebenen Station behalten
       }
     };
     fetchAvailableUnits();
+    // Alle 15 Sekunden aktualisieren, um Verbindungsstatus zu prüfen
+    const interval = setInterval(fetchAvailableUnits, 15000);
     const onFocus = () => fetchAvailableUnits();
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [station.id, phase]);
 
   // Preis-Konfiguration
@@ -401,7 +403,7 @@ export default function RentalConfirmationModal({
                   strokeWidth="1.5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  className="flex-shrink-0 text-emerald-600 dark:text-emerald-400"
+                  className={`flex-shrink-0 ${stationOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}
                 >
                   <path d="M13 11h3l-4 6v-4H9l4-6v4z" />
                 </svg>
@@ -414,6 +416,25 @@ export default function RentalConfirmationModal({
                   verfügbar
                 </span>
               </div>
+              {/* Verbindungsstatus anzeigen */}
+              {!stationOnline && (
+                <div className={`flex items-center gap-2 mt-1 px-2 py-1 rounded-lg ${
+                  isDarkMode ? 'bg-red-900/30' : 'bg-red-50'
+                }`}>
+                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                  <span className={`text-xs font-medium ${isDarkMode ? 'text-red-400' : 'text-red-600'}`}>
+                    Station offline – keine Verbindung
+                  </span>
+                </div>
+              )}
+              {stationOnline && (
+                <div className="flex items-center gap-2 mt-1">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                  <span className={`text-xs font-medium ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                    Station verbunden
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-3">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"

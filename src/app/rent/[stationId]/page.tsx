@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { usePageTheme } from "@/lib/usePageTheme";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
-import { Station } from "@/components/StationManager";
+import { Station, isStationOnline, computeRealAvailability } from "@/components/StationManager";
 import { notifyRentalSuccess } from "@/lib/notifications";
 
 export const dynamic = 'force-dynamic';
@@ -69,11 +69,11 @@ function RentPageContent() {
 
         setStation(data);
 
-        // Sofort aktuelle Batterie-Daten nachladen (wie im Dashboard), damit Anzeige stimmt
+        // Sofort aktuelle Batterie-Daten + Verbindungsstatus nachladen, damit Anzeige stimmt
         if (data?.id) {
           let { data: fresh, error: freshError } = await supabase
             .from('stations')
-            .select('powerbank_id, battery_voltage, battery_percentage')
+            .select('powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at')
             .eq('id', data.id)
             .single();
           const missingPowerbankColumn =
@@ -82,7 +82,7 @@ function RentPageContent() {
           if (missingPowerbankColumn) {
             const legacy = await supabase
               .from('stations')
-              .select('battery_voltage, battery_percentage')
+              .select('battery_voltage, battery_percentage, last_seen, updated_at')
               .eq('id', data.id)
               .single();
             fresh = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
@@ -93,6 +93,8 @@ function RentPageContent() {
               powerbank_id: fresh.powerbank_id,
               battery_voltage: fresh.battery_voltage,
               battery_percentage: fresh.battery_percentage,
+              last_seen: fresh.last_seen,
+              updated_at: fresh.updated_at,
             } : null);
           }
         }
@@ -159,11 +161,10 @@ function RentPageContent() {
             throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
           }
 
-          // 2. available_units anhand der Batterie-Daten synchronisieren,
-          //    damit der RPC-Check (available_units > 0) korrekt funktioniert
+          // 2. Verbindungsstatus prüfen - Station muss online sein
           let { data: batteryCheck, error: batteryCheckError } = await supabase
             .from('stations')
-            .select('powerbank_id, battery_voltage, battery_percentage, available_units')
+            .select('powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at')
             .eq('id', station.id)
             .single();
 
@@ -174,20 +175,23 @@ function RentPageContent() {
           if (missingPowerbankColumnInCheck) {
             const legacy = await supabase
               .from('stations')
-              .select('battery_voltage, battery_percentage, available_units')
+              .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at')
               .eq('id', station.id)
               .single();
             batteryCheck = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
           }
 
+          // Station offline? Ausleihe verhindern
+          if (batteryCheck && !isStationOnline(batteryCheck)) {
+            throw new Error('Diese Station ist derzeit nicht verbunden. Bitte versuche es später erneut oder wähle eine andere Station.');
+          }
+
           if (batteryCheck) {
-            const hasPowerbankId = typeof batteryCheck.powerbank_id === 'string' && batteryCheck.powerbank_id.trim().length > 0;
-            const hasLegacyBattery = batteryCheck.battery_voltage != null && batteryCheck.battery_percentage != null;
-            const shouldBeAvailable = hasPowerbankId || hasLegacyBattery ? 1 : 0;
-            if ((batteryCheck.available_units ?? 0) < shouldBeAvailable) {
+            const realAvailable = computeRealAvailability(batteryCheck);
+            if ((batteryCheck.available_units ?? 0) < realAvailable) {
               await supabase
                 .from('stations')
-                .update({ available_units: shouldBeAvailable })
+                .update({ available_units: realAvailable })
                 .eq('id', station.id);
             }
           }
@@ -252,7 +256,7 @@ function RentPageContent() {
           if (rentalError?.message?.includes('NO_UNITS_AVAILABLE')) {
             let { data: freshStation, error: freshStationError } = await supabase
               .from('stations')
-              .select('powerbank_id, battery_voltage, battery_percentage, available_units')
+              .select('powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at')
               .eq('id', station.id)
               .maybeSingle();
 
@@ -263,17 +267,14 @@ function RentPageContent() {
             if (missingPowerbankColumnInRetry) {
               const legacy = await supabase
                 .from('stations')
-                .select('battery_voltage, battery_percentage, available_units')
+                .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at')
                 .eq('id', station.id)
                 .maybeSingle();
               freshStation = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
             }
 
-            const hasPowerbankNow =
-              (typeof freshStation?.powerbank_id === 'string' && freshStation.powerbank_id.trim().length > 0) ||
-              (freshStation?.battery_voltage != null && freshStation?.battery_percentage != null);
-
-            if (hasPowerbankNow) {
+            // Nur retry wenn Station online ist und Powerbank erkannt wurde
+            if (freshStation && isStationOnline(freshStation) && computeRealAvailability(freshStation) > 0) {
               await supabase
                 .from('stations')
                 .update({ available_units: 1 })
