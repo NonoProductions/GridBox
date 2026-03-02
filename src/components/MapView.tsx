@@ -1058,14 +1058,14 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               {/* Powerbank Bild */}
               <div className="w-full mb-4">
                 <img 
-                  src="/powerbank.jpg" 
+                  src="/Powerbank.png" 
                   alt="Powerbank"
                   className="w-full h-32 object-contain rounded-lg shadow-md bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 p-2"
                   onError={(e) => {
                     // Fallback zu PNG wenn JPG nicht existiert
                     const target = e.target as HTMLImageElement;
                     if (target.src.endsWith('.jpg')) {
-                      target.src = '/powerbank.png';
+                      target.src = '/Powerbank.png';
                     } else {
                       // Wenn beide nicht existieren, zeige Placeholder
                       target.style.display = 'none';
