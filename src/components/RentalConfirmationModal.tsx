@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
+// Always show the generic powerbank image on the rent flow
 import { isStationOnline, computeRealAvailability } from "@/components/StationManager";
 
 interface Station {
@@ -221,10 +221,7 @@ export default function RentalConfirmationModal({
 
   // ===== PICKUP SCREEN =====
   if (phase === "pickup") {
-    const photoSrc =
-      station.photo_url || station.photos?.[0]
-        ? getAbsoluteStationPhotoUrl(station.photo_url || station.photos?.[0])
-        : "/Powerbank.png";
+    const photoSrc = "/Powerbank.png";
 
     return (
       <div
@@ -361,13 +358,7 @@ export default function RentalConfirmationModal({
             {/* Station- oder Powerbank-Bild */}
             <div className="relative w-full aspect-[4/3] bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 flex items-center justify-center">
               <img
-                src={
-                  station.photo_url || station.photos?.[0]
-                    ? getAbsoluteStationPhotoUrl(
-                        station.photo_url || station.photos?.[0]
-                      )
-                    : "/Powerbank.png"
-                }
+                src={"/Powerbank.png"}
                 alt={station.name}
                 className="w-full h-full object-contain p-4"
                 onError={(e) => {

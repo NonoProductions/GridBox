@@ -16,14 +16,16 @@
 const char* WIFI_SSID = "FRITZ!Box Lamborelle";
 const char* WIFI_PASSWORD = "88929669398610508392";
 
-// ===== Supabase Konfiguration =====
-const char* SUPABASE_URL = "https://igrsoizvjyniuefyzzro.supabase.co";
-const char* SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlncnNvaXp2anluaXVlZnl6enJvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg1NjA1NzUsImV4cCI6MjA3NDEzNjU3NX0.Y-i6R1JSCLzLwVB07VNIb8pxmzmDoyRKzcFbk5bmups";
+// ===== PROXY Konfiguration (SICHER: kein Supabase-Key auf dem ESP32!) =====
+// Der ESP32 kommuniziert NUR mit dem Proxy (Next.js API Routes).
+// Der Proxy authentifiziert den ESP32 per DEVICE_API_KEY und leitet an Supabase weiter.
+const char* PROXY_BASE_URL = "https://gridbox-pwa.vercel.app/api/esp";  // ← Deine Vercel URL + /api/esp
+const char* DEVICE_API_KEY = "DEIN_DEVICE_API_KEY_HIER";  // ← Aus Supabase SQL: SELECT device_api_key FROM stations WHERE short_code='88SH';
 
 #define USE_SHORT_CODE true
 
-const char* STATION_SHORT_CODE = "88SH";       // ← Dein 4-stelliger Station Code
-const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID deiner Station (nur wenn USE_SHORT_CODE = false)
+const char* STATION_SHORT_CODE = "88SH";       // ← Dein 4-stelliger Station Code (nur für Logging)
+const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID deiner Station (für Realtime-Filter)
 
 // ===== SENSOR KONFIGURATION =====
 // SENSOREN DEAKTIVIERT - Nicht benötigt
@@ -140,6 +142,15 @@ volatile bool realtimeDispenseRequested = false;
 void realtimeWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
 void realtimeSendJoin();
 void realtimeSendHeartbeat();
+
+// Realtime Token Management (kurzlebiges JWT vom Proxy)
+String realtimeToken = "";
+String realtimeSupabaseHost = "";
+unsigned long realtimeTokenExpiresAt = 0;  // Unix-Timestamp (Sekunden)
+const unsigned long TOKEN_REFRESH_MARGIN = 120;  // 2 Minuten vor Ablauf erneuern
+bool realtimeConnected = false;
+bool fetchRealtimeToken();
+void connectRealtimeWebSocket();
 #endif
 
 // Funktionsprototypen
@@ -250,16 +261,12 @@ void setup() {
   
   #if USE_SUPABASE_REALTIME
   if (isConnected) {
-    String host = String(SUPABASE_URL);
-    host.replace("https://", "");
-    int slash = host.indexOf('/');
-    if (slash > 0) host = host.substring(0, slash);
-    String path = "/realtime/v1/websocket?apikey=" + String(SUPABASE_KEY) + "&vsn=1.0.0";
-    // Links2004 WebSockets: beginSSL(host, port, url) – kein WiFiClientSecure nötig
-    realtimeWebSocket.beginSSL(host.c_str(), 443, path.c_str());
-    realtimeWebSocket.onEvent(realtimeWebSocketEvent);
-    realtimeWebSocket.setReconnectInterval(5000);
-    Serial.println("Realtime: WebSocket-Verbindung wird aufgebaut...");
+    // Token vom Proxy holen und WebSocket verbinden
+    if (fetchRealtimeToken()) {
+      connectRealtimeWebSocket();
+    } else {
+      Serial.println("Realtime: Token konnte nicht geholt werden – nur Polling aktiv.");
+    }
   }
   #endif
   
@@ -361,6 +368,24 @@ void loop() {
   if (millis() - lastRealtimeHeartbeat > REALTIME_HEARTBEAT_MS) {
     realtimeSendHeartbeat();
     lastRealtimeHeartbeat = millis();
+  }
+  // Token-Refresh: vor Ablauf neues Token holen und WebSocket neu verbinden
+  if (realtimeTokenExpiresAt > 0) {
+    unsigned long nowSec = millis() / 1000;  // Uptime-basiert (nicht Unix-Zeit, aber Differenz reicht)
+    // Token wurde vor (expiresAt - fetchTime) Sekunden geholt; refresh TOKEN_REFRESH_MARGIN vorher
+    static unsigned long tokenFetchedAtMillis = 0;
+    if (tokenFetchedAtMillis == 0) tokenFetchedAtMillis = millis();
+    unsigned long tokenAge = (millis() - tokenFetchedAtMillis) / 1000;
+    unsigned long tokenLifetime = 600;  // 10 Minuten
+    if (tokenAge > (tokenLifetime - TOKEN_REFRESH_MARGIN)) {
+      Serial.println("Realtime: Token läuft ab – erneuere...");
+      if (fetchRealtimeToken()) {
+        tokenFetchedAtMillis = millis();
+        realtimeWebSocket.disconnect();
+        delay(200);
+        connectRealtimeWebSocket();
+      }
+    }
   }
   // Fallback-Polling auch im Realtime-Modus, falls WebSocket-Events verpasst werden
   if (millis() - lastDispenseCheck > REALTIME_FALLBACK_POLL_INTERVAL) {
@@ -465,36 +490,29 @@ void connectWiFi() {
   }
 }
 
-// ===== SUPABASE FUNKTIONEN =====
+// ===== PROXY API FUNKTIONEN =====
 
 void getStationData() {
   if (!isConnected) return;
   
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  #if USE_SHORT_CODE
-    url += "short_code=eq." + String(STATION_SHORT_CODE);
-  #else
-    url += "id=eq." + String(STATION_ID);
-  #endif
+  String url = String(PROXY_BASE_URL) + "/station";
 
   http.begin(url);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
 
   int httpCode = http.GET();
   
   if (httpCode == 200) {
     String payload = http.getString();
-    // Prüfe ob Antwort leer ist
     if (payload.length() == 0) {
       http.end();
       return;
     }
     
-    // JSON parsen
-    DynamicJsonDocument doc(2048);
+    // JSON parsen (Proxy gibt direkt ein Objekt zurück, kein Array)
+    DynamicJsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, payload);
     
     if (error) {
@@ -502,36 +520,42 @@ void getStationData() {
       return;
     }
     
-    if (doc.is<JsonArray>() && doc.size() > 0) {
-      JsonObject station = doc[0];
-      
-      String name = station["name"] | "N/A";
-      int availableUnits = station["available_units"] | 0;
-      int totalUnits = station["total_units"] | 0;
-      bool isActive = station["is_active"] | true;
-      String shortCode = station["short_code"] | "N/A";
-      bool chargeEnabledWeb = station["charge_enabled"] | true;  // Default: true wenn nicht gesetzt
-      
-      // Aktualisiere Web-Status und Relais
-      bool statusChanged = (chargeEnabledWeb != chargeEnabledFromWeb);
-      chargeEnabledFromWeb = chargeEnabledWeb;
-      
-      // Beim ersten Empfang oder bei Änderung: Relais aktualisieren
-      if (!firstDataReceived || statusChanged) {
-        if (!firstDataReceived) {
-          firstDataReceived = true;
-        } else {
-          Serial.println(String("Supabase: Laden per App wurde ") + (chargeEnabledWeb ? "EIN" : "AUS") + " geschaltet.");
-        }
-        updateChargingState();
+    int availableUnits = doc["available_units"] | 0;
+    int totalUnits = doc["total_units"] | 0;
+    bool isActive = doc["is_active"] | true;
+    bool chargeEnabledWeb = doc["charge_enabled"] | true;
+    bool dispenseRequested = doc["dispense_requested"] | false;
+    
+    // Aktualisiere Web-Status und Relais
+    bool statusChanged = (chargeEnabledWeb != chargeEnabledFromWeb);
+    chargeEnabledFromWeb = chargeEnabledWeb;
+    
+    if (!firstDataReceived || statusChanged) {
+      if (!firstDataReceived) {
+        firstDataReceived = true;
+      } else {
+        Serial.println(String("App: Laden wurde ") + (chargeEnabledWeb ? "EIN" : "AUS") + " geschaltet.");
       }
-      
-      currentAvailableUnits = availableUnits;
-    } else {
-      Serial.println("Supabase: Station nicht gefunden (prüfe ID/Short-Code).");
+      updateChargingState();
     }
+    
+    currentAvailableUnits = availableUnits;
+    
+    // Dispense-Check integriert (spart einen extra HTTP-Request)
+    if (dispenseRequested) {
+      unsigned long timeSinceLastDispense = millis() - lastDispenseTime;
+      if (timeSinceLastDispense > 10000) {
+        Serial.println("Proxy: Powerbank-Ausgabe angefordert.");
+        lastDispenseTime = millis();
+        resetDispenseFlag();
+        dispensePowerbank();
+        activateDispenseLED();
+      }
+    }
+  } else if (httpCode == 401) {
+    Serial.println("Proxy: Authentifizierung fehlgeschlagen (prüfe DEVICE_API_KEY).");
   } else {
-    Serial.println("Supabase HTTP Fehler beim Laden der Station: " + String(httpCode));
+    Serial.println("Proxy HTTP Fehler: " + String(httpCode));
   }
   
   http.end();
@@ -541,84 +565,53 @@ void updateAvailableUnits(int units) {
   if (!isConnected) return;
   
   HTTPClient http;
-  
-  // URL bauen
-  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  
-  #if USE_SHORT_CODE
-    url += "short_code=eq." + String(STATION_SHORT_CODE);
-  #else
-    url += "id=eq." + String(STATION_ID);
-  #endif
+  String url = String(PROXY_BASE_URL) + "/units";
   
   http.begin(url);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Prefer", "return=representation");
   
-  // JSON Body erstellen
   DynamicJsonDocument doc(256);
   doc["available_units"] = units;
-  // updated_at wird vom DB-Trigger bei jedem UPDATE automatisch gesetzt
   String jsonBody;
   serializeJson(doc, jsonBody);
-  http.setTimeout(HTTP_TIMEOUT_MS);
   int httpCode = http.PATCH(jsonBody);
-  if (httpCode == 200 || httpCode == 201) lastReportedUnits = units;
+  if (httpCode == 200) lastReportedUnits = units;
   http.end();
 }
 
 // ===== AUSGABE-SYSTEM (DISPENSE) =====
 
 void checkDispenseRequest() {
+  // Dispense-Check ist jetzt in getStationData() integriert (spart HTTP-Request).
+  // Diese Funktion wird als Fallback-Poll weiterhin aufgerufen.
   if (!isConnected) return;
   
   HTTPClient http;
+  String url = String(PROXY_BASE_URL) + "/station";
   
-  // URL bauen
-  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  
-  #if USE_SHORT_CODE
-    url += "short_code=eq." + String(STATION_SHORT_CODE);
-  #else
-    url += "id=eq." + String(STATION_ID);
-  #endif
-  
-  url += "&select=dispense_requested";
   http.begin(url);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
   int httpCode = http.GET();
   if (httpCode == 200) {
     String payload = http.getString();
     
-    // JSON parsen
     DynamicJsonDocument doc(512);
     DeserializationError error = deserializeJson(doc, payload);
     
-    if (!error && doc.is<JsonArray>() && doc.size() > 0) {
-      JsonObject station = doc[0];
-      bool dispenseRequested = station["dispense_requested"] | false;
+    if (!error) {
+      bool dispenseRequested = doc["dispense_requested"] | false;
       
       if (dispenseRequested) {
-        // Prüfe ob wir schon kürzlich eine Ausgabe hatten (Debounce)
         unsigned long timeSinceLastDispense = millis() - lastDispenseTime;
         
-        if (timeSinceLastDispense > 10000) {  // Mindestens 10 Sekunden zwischen Ausgaben
-          // Ausgabe-Anfrage akzeptiert → einmal klar loggen
-          Serial.println("Supabase: Powerbank-Ausgabe angefordert.");
-          
-          // Merke Zeitpunkt
+        if (timeSinceLastDispense > 10000) {
+          Serial.println("Proxy: Powerbank-Ausgabe angefordert.");
           lastDispenseTime = millis();
-          
-          // ZUERST Flag in Datenbank zurücksetzen (wichtig!)
           resetDispenseFlag();
-          
-          // DANN mechanische Ausgabe auslösen
           dispensePowerbank();
-          // Optional LED-Signal
           activateDispenseLED();
         } else {
           Serial.println("⚠️ Ausgabe-Anfrage ignoriert (zu kurz nach letzter Ausgabe: " + String(timeSinceLastDispense/1000) + "s)");
@@ -735,29 +728,14 @@ void resetDispenseFlag() {
   if (!isConnected) return;
   
   HTTPClient http;
+  String url = String(PROXY_BASE_URL) + "/dispense-ack";
   
-  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  
-  #if USE_SHORT_CODE
-    url += "short_code=eq." + String(STATION_SHORT_CODE);
-  #else
-    url += "id=eq." + String(STATION_ID);
-  #endif
   http.begin(url);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Prefer", "return=representation");
-  DynamicJsonDocument doc(256);
-  doc["dispense_requested"] = false;
   
-  String jsonBody;
-  serializeJson(doc, jsonBody);
-  
-  int httpCode = http.PATCH(jsonBody);
-  
-  // Kein dauerhaftes Logging hier nötig – nur interne Rücksetzung
+  int httpCode = http.PATCH("{}");
   
   http.end();
   
@@ -769,27 +747,21 @@ bool rollbackFailedDispense() {
   if (!isConnected) return false;
 
   HTTPClient http;
-  String url = String(SUPABASE_URL) + "/rest/v1/rpc/rollback_failed_dispense";
+  String url = String(PROXY_BASE_URL) + "/rollback";
   http.begin(url);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("Prefer", "return=representation");
-  DynamicJsonDocument doc(256);
-  doc["p_station_id"] = String(STATION_ID);
-  String jsonBody;
-  serializeJson(doc, jsonBody);
 
-  int httpCode = http.POST(jsonBody);
+  int httpCode = http.POST("{}");
   String payload = http.getString();
   http.end();
 
-  if (httpCode == 200 || httpCode == 201) {
+  if (httpCode == 200) {
     return true;
   }
 
-  Serial.println("Rollback RPC Fehler: HTTP " + String(httpCode) + " -> " + payload);
+  Serial.println("Rollback Fehler: HTTP " + String(httpCode) + " -> " + payload);
   return false;
 }
 
@@ -927,6 +899,61 @@ void realtimeSendHeartbeat() {
   serializeJson(doc, msg);
   realtimeWebSocket.sendTXT(msg);
 }
+
+// Hole ein kurzlebiges JWT vom Proxy für die WebSocket-Verbindung
+bool fetchRealtimeToken() {
+  if (!isConnected) return false;
+  
+  HTTPClient http;
+  String url = String(PROXY_BASE_URL) + "/token";
+  
+  http.begin(url);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  http.addHeader("Content-Type", "application/json");
+  
+  int httpCode = http.POST("{}");
+  
+  if (httpCode == 200) {
+    String payload = http.getString();
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (!error) {
+      const char* token = doc["token"];
+      const char* host = doc["supabase_host"];
+      unsigned long expiresAt = doc["expires_at"] | 0;
+      
+      if (token && host) {
+        realtimeToken = String(token);
+        realtimeSupabaseHost = String(host);
+        realtimeTokenExpiresAt = expiresAt;
+        Serial.println("Realtime: Token erhalten (gültig " + String(600) + "s)");
+        http.end();
+        return true;
+      }
+    }
+  } else {
+    Serial.println("Realtime: Token-Fehler HTTP " + String(httpCode));
+  }
+  
+  http.end();
+  return false;
+}
+
+// Verbinde WebSocket mit dem kurzlebigen Token
+void connectRealtimeWebSocket() {
+  if (realtimeToken.length() == 0 || realtimeSupabaseHost.length() == 0) {
+    Serial.println("Realtime: Kein Token vorhanden – WebSocket nicht gestartet.");
+    return;
+  }
+  
+  String path = "/realtime/v1/websocket?apikey=" + realtimeToken + "&vsn=1.0.0";
+  realtimeWebSocket.beginSSL(realtimeSupabaseHost.c_str(), 443, path.c_str());
+  realtimeWebSocket.onEvent(realtimeWebSocketEvent);
+  realtimeWebSocket.setReconnectInterval(5000);
+  Serial.println("Realtime: WebSocket-Verbindung wird aufgebaut...");
+}
 #endif
 
 // ===== LADE-STEUERUNG (RELAIS & BUTTON) =====
@@ -1031,18 +1058,11 @@ void syncTotalUnits() {
   if (!isConnected) return;
   
   HTTPClient http;
+  String url = String(PROXY_BASE_URL) + "/units";
   
-  String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-  
-  #if USE_SHORT_CODE
-    url += "short_code=eq." + String(STATION_SHORT_CODE);
-  #else
-    url += "id=eq." + String(STATION_ID);
-  #endif
   http.begin(url);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("apikey", SUPABASE_KEY);
-  http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
   http.addHeader("Content-Type", "application/json");
   DynamicJsonDocument doc(256);
   doc["total_units"] = TOTAL_SLOTS;
@@ -1052,7 +1072,7 @@ void syncTotalUnits() {
   
   int httpCode = http.PATCH(jsonBody);
   
-  if (httpCode == 200 || httpCode == 201) {
+  if (httpCode == 200) {
     Serial.println("✓ Total Units synchronisiert: " + String(TOTAL_SLOTS));
   }
   
@@ -1167,25 +1187,18 @@ void readBatteryData() {
   evaluateBatteryPresence();
 }
 
-// Sende Batteriedaten an Supabase (mit Timeout + 1 Retry für stabilere Anzeige im Dashboard)
+// Sende Batteriedaten an Proxy (mit Timeout + 1 Retry für stabilere Anzeige im Dashboard)
 void updateBatteryData() {
   if (!isConnected) return;
   
   for (int attempt = 0; attempt < 2; attempt++) {
     HTTPClient http;
-    String url = String(SUPABASE_URL) + "/rest/v1/stations?";
-    #if USE_SHORT_CODE
-      url += "short_code=eq." + String(STATION_SHORT_CODE);
-    #else
-      url += "id=eq." + String(STATION_ID);
-    #endif
+    String url = String(PROXY_BASE_URL) + "/battery";
 
     http.begin(url);
     http.setTimeout(HTTP_TIMEOUT_MS);
-    http.addHeader("apikey", SUPABASE_KEY);
-    http.addHeader("Authorization", "Bearer " + String(SUPABASE_KEY));
+    http.addHeader("X-Station-Key", DEVICE_API_KEY);
     http.addHeader("Content-Type", "application/json");
-    http.addHeader("Prefer", "return=representation");
 
     DynamicJsonDocument doc(256);
     String detectedPowerbankId = readPowerbankID(EEPROM_CHANNEL);
@@ -1209,18 +1222,14 @@ void updateBatteryData() {
     String responseBody = http.getString();
     http.end();
 
-    if (httpCode == 200 || httpCode == 201) {
+    if (httpCode == 200) {
       break;
     }
-    Serial.println("Body: " + jsonBody);
-    if (responseBody.length() > 0) {
-      Serial.println("Supabase Antwort: " + responseBody);
-    }
     if (attempt == 0) {
-      Serial.println("Supabase Battery-Update Fehler (HTTP " + String(httpCode) + "), Retry...");
+      Serial.println("Proxy Battery-Update Fehler (HTTP " + String(httpCode) + "), Retry...");
       delay(500);
     } else {
-      Serial.println("Supabase Battery-Update fehlgeschlagen nach Retry: HTTP " + String(httpCode));
+      Serial.println("Proxy Battery-Update fehlgeschlagen nach Retry: HTTP " + String(httpCode));
     }
   }
 }
