@@ -19,6 +19,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import AnalyticsDashboard from "./AnalyticsDashboard";
+import OwnerDashboardV2Content from "./OwnerDashboardV2Content";
 
 interface UserWithRole {
   user_id: string;
@@ -297,6 +298,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const [updatingStation, setUpdatingStation] = useState<string | null>(null);
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
   const [testDataEnabled, setTestDataEnabled] = useState(false);
+  const [useNewDesign, setUseNewDesign] = useState(false);
   const [ownerRentals, setOwnerRentals] = useState<Rental[]>([]);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsTimeRangeDays, setStatsTimeRangeDays] = useState<7 | 14 | 30 | 90>(14);
@@ -1620,8 +1622,42 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               </svg>
             </button>
           )}
-          {/* Rechte Seite des Headers - Testdaten Switch */}
+          {/* Rechte Seite des Headers - Design Toggle + Testdaten Switch */}
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Design Toggle */}
+            <div className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg border transition-colors ${
+              useNewDesign
+                ? 'bg-emerald-500/10 border-emerald-500/30'
+                : isDarkMode
+                  ? 'bg-gray-800/50 border-gray-700'
+                  : 'bg-gray-100 border-gray-200'
+            }`}>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useNewDesign}
+                  onChange={() => setUseNewDesign(prev => !prev)}
+                  className="sr-only"
+                />
+                <div className={`relative w-10 h-6 rounded-full transition-colors ${
+                  useNewDesign ? 'bg-emerald-500' : isDarkMode ? 'bg-gray-600' : 'bg-gray-300'
+                }`}>
+                  <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                    useNewDesign ? 'transform translate-x-4' : ''
+                  }`} />
+                </div>
+                <span className={`text-xs font-medium hidden sm:inline ${
+                  useNewDesign
+                    ? 'text-emerald-500'
+                    : isDarkMode
+                      ? 'text-gray-400'
+                      : 'text-gray-600'
+                }`}>
+                  {useNewDesign ? 'Neu' : 'V2'}
+                </span>
+              </label>
+            </div>
+            {/* Testdaten Switch */}
             <div className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg border transition-colors ${
               testDataEnabled
                 ? 'bg-yellow-500/10 border-yellow-500/30'
@@ -1852,7 +1888,85 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                 </div>
               )}
 
-              {activeTab === 'overview' && (
+              {/* ── V2 Design: alle Tabs ── */}
+              {useNewDesign && (
+                <OwnerDashboardV2Content
+                  isDarkMode={isDarkMode}
+                  activeTab={activeTab}
+                  setActiveTab={setActiveTab}
+                  stations={stations}
+                  filteredStations={filteredStations}
+                  selectedStation={selectedStation}
+                  selectedStationId={selectedStationId}
+                  setSelectedStationId={setSelectedStationId}
+                  showOnlyConnected={showOnlyConnected}
+                  setShowOnlyConnected={setShowOnlyConnected}
+                  loading={loading}
+                  isStationConnected={isStationConnected}
+                  countOccupiedSlots={countOccupiedSlots}
+                  isSlotOccupied={isSlotOccupied}
+                  getSlotData={getSlotData}
+                  updateStation={updateStation}
+                  deleteStation={deleteStation}
+                  setShowAddStationForm={setShowAddStationForm}
+                  updatingStation={updatingStation}
+                  utilizationPercentage={utilizationPercentage}
+                  totalOccupiedUnits={totalOccupiedUnits}
+                  totalCapacity={totalCapacity}
+                  totalAvailableUnits={totalAvailableUnits}
+                  averageBattery={averageBattery}
+                  connectedStationsCount={connectedStationsCount}
+                  activeStationsCount={activeStationsCount}
+                  inactiveStationsCount={inactiveStationsCount}
+                  lastUpdate={lastUpdate}
+                  realtimeActive={realtimeActive}
+                  statsLoading={statsLoading}
+                  statsRevenue={statsRevenue}
+                  statsTimeRangeDays={statsTimeRangeDays}
+                  setStatsTimeRangeDays={setStatsTimeRangeDays}
+                  revenueByDayData={revenueByDayData}
+                  rentalsByDayData={rentalsByDayData}
+                  revenueByStationData={revenueByStationData}
+                  ownerRentals={ownerRentals}
+                  txActiveCount={txActiveCount}
+                  txTotalRevenue={txTotalRevenue}
+                  txPagedRentals={txPagedRentals}
+                  txPage={txPage}
+                  setTxPage={setTxPage}
+                  txPageSize={txPageSize}
+                  setTxPageSize={setTxPageSize}
+                  txTotalPages={txTotalPages}
+                  txStatusFilter={txStatusFilter}
+                  setTxStatusFilter={setTxStatusFilter}
+                  txSearchQuery={txSearchQuery}
+                  setTxSearchQuery={setTxSearchQuery}
+                  txStationFilter={txStationFilter}
+                  setTxStationFilter={setTxStationFilter}
+                  filteredRentals={filteredRentals}
+                  stationMap={stationMap}
+                  users={users}
+                  usersLoading={usersLoading}
+                  usersSearchQuery={usersSearchQuery}
+                  usersPage={usersPage}
+                  usersPageSize={usersPageSize}
+                  usersTotalCount={usersTotalCount}
+                  usersRoleFilter={usersRoleFilter}
+                  fetchUsers={fetchUsers}
+                  setUsersSearchQuery={setUsersSearchQuery}
+                  setUsersPage={setUsersPage}
+                  assignUserRole={assignUserRole}
+                  renderStationPhotos={(station) => (
+                    <PhotoManager
+                      station={station}
+                      onUpdate={(photos) => updateStation(station.id, { photos })}
+                      isDarkMode={isDarkMode}
+                    />
+                  )}
+                />
+              )}
+
+              {/* ── Altes Design ── */}
+              {!useNewDesign && activeTab === 'overview' && (
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
                   {/* Live-Status Hinweis */}
@@ -2050,7 +2164,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                 </div>
               )}
 
-              {activeTab === 'stats' && (
+              {!useNewDesign && activeTab === 'stats' && (
                 <div className="flex-1 overflow-y-auto p-4 space-y-5">
                   {stations.length === 0 ? (
                     <div className={`rounded-2xl border p-6 text-center text-sm ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
@@ -2272,7 +2386,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                 </div>
               )}
 
-              {activeTab === 'stations' && (
+              {!useNewDesign && activeTab === 'stations' && (
             <div className="h-full flex flex-col">
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
 
@@ -2622,7 +2736,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
             </div>
             )}
 
-          {activeTab === 'transactions' && (
+          {!useNewDesign && activeTab === 'transactions' && (
             <div className="h-full flex flex-col">
               {/* Header + Statistiken */}
               <div className={`${sectionHeaderWrapper} p-4 border ${sectionHeaderClasses}`}>
@@ -2825,7 +2939,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
             </div>
           )}
 
-          {activeTab === 'users' && (
+          {!useNewDesign && activeTab === 'users' && (
             <div className="h-full flex flex-col">
               {/* Header + Filter */}
               <div className={`${sectionHeaderWrapper} p-4 border ${sectionHeaderClasses}`}>
@@ -3033,7 +3147,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
             </div>
             )}
 
-          {activeTab === 'analytics' && (
+          {!useNewDesign && activeTab === 'analytics' && (
             <AnalyticsDashboard isDarkMode={isDarkMode} />
           )}
           </div>

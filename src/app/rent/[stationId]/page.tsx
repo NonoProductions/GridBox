@@ -15,7 +15,7 @@ function RentPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const stationId = params.stationId as string;
-  
+
   const [station, setStation] = useState<Station | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,37 +81,66 @@ function RentPageContent() {
 
   if (loading) {
     return (
-      <div className={`min-h-screen flex flex-col items-center justify-center gap-4 ${
-        isDarkMode ? "bg-[#0f1419]" : "bg-slate-50"
-      }`}>
-        <div className="size-12 rounded-full border-[3px] border-emerald-500/30 border-t-emerald-500 animate-spin" />
-        <p className={`text-base font-medium ${isDarkMode ? "text-slate-300" : "text-slate-600"}`}>
-          Station wird geladen…
-        </p>
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: isDarkMode ? "#09090b" : "#fafafa" }}
+      >
+        <div className="w-5 h-5 border-2 rounded-full animate-spin"
+          style={{ borderColor: isDarkMode ? "#27272a" : "#e4e4e7", borderTopColor: isDarkMode ? "#a1a1aa" : "#71717a" }}
+        />
       </div>
     );
   }
 
   if (error || !station) {
     return (
-      <div className={`min-h-screen flex flex-col items-center justify-center gap-6 p-6 ${
-        isDarkMode ? "bg-[#0f1419]" : "bg-slate-50"
-      }`}>
-        <div className={`w-full max-w-sm rounded-2xl p-6 text-center shadow-lg ${
-          isDarkMode ? "bg-slate-800/80 text-white" : "bg-white text-slate-900"
-        }`}>
-          <div className="mx-auto mb-4 flex size-14 items-center justify-center rounded-full bg-red-500/10">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-500">
-              <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+      <div
+        className={`min-h-screen flex flex-col items-center justify-center p-6 ${
+          isDarkMode ? "bg-[#0a0f14]" : "bg-[#f8faf9]"
+        }`}
+      >
+        <style>{PAGE_ANIMATIONS}</style>
+        <div
+          className={`w-full max-w-sm rounded-3xl p-8 text-center ${
+            isDarkMode
+              ? "bg-[#111920] text-white"
+              : "bg-white text-slate-900"
+          }`}
+          style={{
+            animation: "rp-slide-up 0.5s ease-out",
+            boxShadow: isDarkMode
+              ? "0 8px 40px rgba(0,0,0,0.4)"
+              : "0 8px 40px rgba(0,0,0,0.06)",
+          }}
+        >
+          {/* Error icon */}
+          <div
+            className={`mx-auto mb-5 flex w-16 h-16 items-center justify-center rounded-2xl ${
+              isDarkMode ? "bg-red-950/40" : "bg-red-50"
+            }`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="15" y1="9" x2="9" y2="15" />
+              <line x1="9" y1="9" x2="15" y2="15" />
             </svg>
           </div>
-          <h1 className="text-xl font-semibold mb-1">Station nicht gefunden</h1>
-          <p className={`text-sm mb-6 ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
+
+          <h1 className="text-xl font-bold tracking-tight mb-2">
+            Station nicht gefunden
+          </h1>
+          <p
+            className={`text-sm leading-relaxed mb-8 ${
+              isDarkMode ? "text-slate-400" : "text-slate-500"
+            }`}
+          >
             {error}
           </p>
+
           <button
             onClick={() => router.push(`/?theme=${isDarkMode ? "dark" : "light"}`)}
-            className="w-full rounded-xl bg-emerald-600 py-3 font-medium text-white hover:bg-emerald-700 transition-colors"
+            className="w-full h-[48px] rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 font-semibold text-white text-sm tracking-wide transition-all active:scale-[0.98]"
+            style={{ boxShadow: "0 4px 20px rgba(16,185,129,0.25)" }}
           >
             Zur Startseite
           </button>
@@ -121,7 +150,7 @@ function RentPageContent() {
   }
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? "bg-[#0f1419]" : "bg-slate-50"}`}>
+    <div className={`min-h-screen ${isDarkMode ? "bg-[#0a0f14]" : "bg-[#f8faf9]"}`}>
       <RentalConfirmationModal
         station={station}
         onClose={() => router.push('/')}
@@ -292,9 +321,18 @@ function RentPageContent() {
 export default function RentPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-[#0f1419]">
-        <div className="size-12 rounded-full border-[3px] border-emerald-500/30 border-t-emerald-500 animate-spin" />
-        <p className="text-base font-medium text-slate-300">Station wird geladen…</p>
+      <div className="min-h-screen flex flex-col items-center justify-center gap-5 bg-[#0a0f14]">
+        <style>{`@keyframes rp-spin-fb { to { transform: rotate(360deg); } }`}</style>
+        <div className="relative w-14 h-14">
+          <div className="absolute inset-0 rounded-full border-[3px] border-emerald-500/15" />
+          <div
+            className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-emerald-500"
+            style={{ animation: "rp-spin-fb 0.9s linear infinite" }}
+          />
+        </div>
+        <p className="text-sm font-medium tracking-wide text-slate-500">
+          Station wird geladen...
+        </p>
       </div>
     }>
       <RentPageContent />

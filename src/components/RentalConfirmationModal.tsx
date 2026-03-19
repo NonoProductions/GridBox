@@ -225,15 +225,19 @@ export default function RentalConfirmationModal({
     }
   };
 
+  // Shared palette derived from isDarkMode
+  const bg = isDarkMode ? "#09090b" : "#fafafa";
+  const cardBg = isDarkMode ? "#18181b" : "#ffffff";
+  const borderColor = isDarkMode ? "#27272a" : "#e4e4e7";
+  const textPrimary = isDarkMode ? "#fafafa" : "#09090b";
+  const textSecondary = isDarkMode ? "#a1a1aa" : "#71717a";
+  const textTertiary = isDarkMode ? "#52525b" : "#a1a1aa";
+
   // ===== AUTH LOADING =====
   if (authLoading) {
     return (
-      <div
-        className={`fixed inset-0 z-[2000] flex items-center justify-center ${
-          isDarkMode ? "bg-gray-900" : "bg-gray-50"
-        }`}
-      >
-        <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent" />
+      <div className="fixed inset-0 z-[2000] flex items-center justify-center" style={{ background: bg }}>
+        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: borderColor, borderTopColor: textSecondary }} />
       </div>
     );
   }
@@ -243,117 +247,67 @@ export default function RentalConfirmationModal({
     const photoSrc = "/Powerbank.png";
 
     return (
-      <div
-        className="fixed inset-0 z-[2000]"
-        style={{ backgroundColor: isDarkMode ? "#282828" : "white" }}
-      >
-        <div className="flex flex-col h-full items-center justify-center px-6">
-          {/* Animiertes Powerbank-Bild */}
-          <div className="relative mb-8">
-            <div className="w-36 h-36 rounded-full bg-emerald-500/10 flex items-center justify-center">
-              <img
-                src={photoSrc}
-                alt="Powerbank"
-                className="w-24 h-24 object-contain animate-pulse"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = "/Powerbank.png";
-                }}
-              />
-            </div>
-            {/* Pulsierender Ring */}
-            <div className="absolute inset-0 rounded-full border-2 border-emerald-500/30 animate-ping" />
+      <div className="fixed inset-0 z-[2000] flex flex-col" style={{ background: bg }}>
+        <style>{`
+          @keyframes pickup-scan {
+            0% { top: 16px; }
+            50% { top: calc(100% - 20px); }
+            100% { top: 16px; }
+          }
+        `}</style>
+
+        <div className="flex-1 flex flex-col items-center justify-center px-6">
+          {/* Product image with scanning line */}
+          <div className="relative w-48 h-48 mb-12">
+            {/* Faint border frame */}
+            <div className="absolute inset-0 rounded-2xl" style={{ border: `1px solid ${borderColor}` }} />
+            {/* Scanning line — a single thin emerald bar moving vertically */}
+            <div
+              className="absolute left-3 right-3 h-px bg-emerald-500"
+              style={{ animation: "pickup-scan 3s ease-in-out infinite", opacity: 0.6 }}
+            />
+            <img
+              src={photoSrc}
+              alt="Powerbank"
+              className="absolute inset-0 w-full h-full object-contain p-6"
+              onError={(e) => { (e.target as HTMLImageElement).src = "/Powerbank.png"; }}
+            />
           </div>
 
-          <h2
-            className={`text-2xl font-bold mb-3 text-center ${
-              isDarkMode ? "text-white" : "text-slate-900"
-            }`}
-          >
-            Nehmen Sie Ihre Powerbank
-          </h2>
-          <p
-            className={`text-base text-center mb-2 ${
-              isDarkMode ? "text-gray-400" : "text-slate-500"
-            }`}
-          >
-            Die Station gibt Ihre Powerbank aus.
-            <br />
-            Bitte entnehmen Sie sie jetzt.
-          </p>
-          <p
-            className={`text-sm text-center mb-8 ${
-              isDarkMode ? "text-gray-500" : "text-slate-400"
-            }`}
-          >
+          <p className="text-[11px] font-medium tracking-[0.2em] uppercase mb-3" style={{ color: textTertiary }}>
             {station.name}
           </p>
 
-          {/* Ladeanimation */}
-          <div className="flex gap-2 mb-10">
-            <div
-              className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-bounce"
-              style={{ animationDelay: "0ms" }}
-            />
-            <div
-              className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-bounce"
-              style={{ animationDelay: "150ms" }}
-            />
-            <div
-              className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-bounce"
-              style={{ animationDelay: "300ms" }}
-            />
+          <h2 className="text-[28px] font-bold tracking-tight text-center leading-none mb-3" style={{ color: textPrimary }}>
+            Powerbank entnehmen
+          </h2>
+
+          <p className="text-[15px] text-center leading-relaxed max-w-[260px]" style={{ color: textSecondary }}>
+            Die Station gibt Ihre Powerbank aus. Bitte jetzt entnehmen.
+          </p>
+
+          {/* Subtle waiting indicator — a thin line */}
+          <div className="w-16 mt-8 mb-10">
+            <div className="h-[2px] rounded-full overflow-hidden" style={{ background: borderColor }}>
+              <div className="h-full w-1/3 rounded-full bg-emerald-500 animate-pulse" />
+            </div>
           </div>
 
-          {/* Fertig-Button erscheint nach 60s als Fallback */}
           {pickupTimeout && (
             <button
               onClick={stableOnPickupComplete}
-              className="w-full max-w-xs mb-4 flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-12 shadow-lg active:scale-95 transition-all"
+              className="w-full max-w-xs h-14 rounded-[14px] bg-emerald-600 text-white text-[15px] font-semibold tracking-wide mb-4 active:opacity-90 transition-opacity"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                width="20"
-                height="20"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              <span className="text-base font-semibold">Fertig</span>
+              Fertig
             </button>
           )}
 
-          {/* Problem melden → /hilfe */}
           <button
-            onClick={() => {
-              window.location.href = "/hilfe";
-            }}
-            className={`w-full max-w-xs flex items-center justify-center gap-3 rounded-xl px-6 h-12 border transition-all ${
-              isDarkMode
-                ? "bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
-                : "bg-gray-100 border-gray-300 text-gray-900 hover:bg-gray-200"
-            }`}
+            onClick={() => { window.location.href = "/hilfe"; }}
+            className="text-[13px] font-medium underline decoration-1 underline-offset-4 transition-opacity active:opacity-70"
+            style={{ color: textTertiary }}
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              width="18"
-              height="18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="8" x2="12" y2="12" />
-              <line x1="12" y1="16" x2="12.01" y2="16" />
-            </svg>
-            <span className="text-base font-medium">Problem melden</span>
+            Problem melden
           </button>
         </div>
       </div>
@@ -361,315 +315,168 @@ export default function RentalConfirmationModal({
   }
 
   // ===== CONFIRMATION SCREEN =====
-  return (
-    <div
-      className="fixed inset-0 z-[2000]"
-      style={{ backgroundColor: isDarkMode ? "#282828" : "white" }}
-    >
-      <div className="flex flex-col h-full relative">
-        {/* Powerbank Bild - ganz oben mit allen Infos */}
-        <div className="px-5 pt-6 pb-4">
-          <div
-            className={`rounded-2xl overflow-hidden shadow-lg ${
-              isDarkMode ? "bg-gray-800/50" : "bg-white"
-            }`}
-          >
-            {/* Station- oder Powerbank-Bild */}
-            <div className="relative w-full aspect-[4/3] bg-gradient-to-br from-emerald-50 to-emerald-100 dark:from-emerald-900/20 dark:to-emerald-800/20 flex items-center justify-center">
-              <img
-                src={"/Powerbank.png"}
-                alt={station.name}
-                className="w-full h-full object-contain p-4"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  if (!target.src.includes("/Powerbank.png")) {
-                    target.src = "/Powerbank.png";
-                  }
-                }}
-              />
-            </div>
+  const batteryPct = bestBatteryPct !== null ? Math.round(bestBatteryPct) : null;
+  const batteryColor =
+    batteryPct !== null
+      ? batteryPct >= 60 ? "#10b981" : batteryPct >= 30 ? "#eab308" : "#ef4444"
+      : "#52525b";
 
-            {/* Info-Bereich */}
-            <div
-              className={`p-4 space-y-3 ${
-                isDarkMode ? "bg-gray-800/30" : "bg-gray-50"
-              }`}
-            >
-              <h3
-                className={`text-2xl font-bold ${
-                  isDarkMode ? "text-white" : "text-slate-900"
-                }`}
-              >
-                {station.name}
-              </h3>
-              <div className="flex items-center gap-3 flex-wrap">
-                <div className="flex items-center">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="5 0 24 24"
-                    width="24"
-                    height="24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className={`flex-shrink-0 ${stationOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}
-                  >
-                    <path d="M13 11h3l-4 6v-4H9l4-6v4z" />
-                  </svg>
-                  <span
-                    className={`text-base ml-2 ${
-                      isDarkMode ? "text-white" : "text-slate-900"
-                    }`}
-                  >
-                    <span className="font-semibold">{availableUnits}</span>{" "}
-                    verfügbar
-                  </span>
-                </div>
-                {bestBatteryPct !== null && (
-                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-semibold ${
-                    bestBatteryPct >= 60
-                      ? isDarkMode ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-100 text-emerald-700"
-                      : bestBatteryPct >= 30
-                      ? isDarkMode ? "bg-yellow-900/40 text-yellow-400" : "bg-yellow-100 text-yellow-700"
-                      : isDarkMode ? "bg-red-900/40 text-red-400" : "bg-red-100 text-red-700"
-                  }`}>
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="7" width="16" height="10" rx="2" />
-                      <path d="M22 11v2" strokeWidth="2.5" strokeLinecap="round" />
-                      <rect x="3" y="8" width={`${Math.round(bestBatteryPct / 100 * 14)}`} height="8" rx="1" fill="currentColor" stroke="none" />
-                    </svg>
-                    {Math.round(bestBatteryPct)} %
-                  </div>
-                )}
-              </div>
-              {/* Verbindungsstatus anzeigen */}
-              {!stationOnline && (
-                <div className={`flex items-center gap-2 mt-1 px-2 py-1 rounded-lg ${
-                  isDarkMode ? 'bg-red-900/30' : 'bg-red-50'
-                }`}>
-                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                  <span className={`text-xs font-medium ${isDarkMode ? 'text-red-400' : 'text-red-600'}`}>
-                    Station offline – keine Verbindung
-                  </span>
-                </div>
-              )}
-              {stationOnline && (
-                <div className="flex items-center gap-2 mt-1">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                  <span className={`text-xs font-medium ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
-                    Station verbunden
-                  </span>
-                </div>
-              )}
-              <div className="flex items-center gap-3">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="20"
-                  height="20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="flex-shrink-0 text-emerald-600 dark:text-emerald-400"
-                >
-                  <rect x="2" y="5" width="20" height="14" rx="2" />
-                  <path d="M2 10h20" />
-                </svg>
-                <span
-                  className={`text-base ${
-                    isDarkMode ? "text-white" : "text-slate-900"
-                  }`}
-                >
-                  <span className="font-semibold">
-                    {startPrice.toFixed(2)}€
-                  </span>{" "}
-                  zum Start, anschließend{" "}
-                  <span className="font-semibold">
-                    {pricePerMinute.toFixed(2)}€
-                  </span>
-                  /Min
-                </span>
-              </div>
-              {station.address && (
-                <div className="flex items-center gap-3">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 24 24"
-                    width="20"
-                    height="20"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="flex-shrink-0 text-emerald-600 dark:text-emerald-400"
-                  >
-                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                    <circle cx="12" cy="10" r="3" />
-                  </svg>
-                  <span
-                    className={`text-sm ${
-                      isDarkMode ? "text-gray-400" : "text-gray-600"
-                    }`}
-                  >
-                    {station.address}
-                  </span>
-                </div>
-              )}
+  return (
+    <div className="fixed inset-0 z-[2000] flex flex-col" style={{ background: bg }}>
+      {/* Top bar — close + status */}
+      <div className="flex items-center justify-between px-5 pt-4 pb-2 flex-shrink-0">
+        <button
+          onClick={onClose}
+          className="w-10 h-10 -ml-2 flex items-center justify-center rounded-lg transition-opacity active:opacity-60"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke={textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </button>
+        <div className="flex items-center gap-2">
+          <div className={`w-[6px] h-[6px] rounded-full ${stationOnline ? "bg-emerald-500" : "bg-red-500"}`} />
+          <span className="text-[12px] font-medium" style={{ color: textTertiary }}>
+            {stationOnline ? "Online" : "Offline"}
+          </span>
+        </div>
+      </div>
+
+      {/* Scrollable content */}
+      <div className="flex-1 overflow-y-auto">
+        {/* Product image — static, confident, on a subtle card */}
+        <div className="px-5 pt-2 pb-4">
+          <div
+            className="w-full aspect-square rounded-2xl flex items-center justify-center overflow-hidden"
+            style={{ background: isDarkMode ? "#111113" : "#f4f4f5", border: `1px solid ${borderColor}` }}
+          >
+            <img
+              src="/Powerbank.png"
+              alt={station.name}
+              className="w-3/5 h-3/5 object-contain"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                if (!target.src.includes("/Powerbank.png")) target.src = "/Powerbank.png";
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Station name — big and bold */}
+        <div className="px-5 mb-5">
+          <h1 className="text-[32px] font-bold tracking-tight leading-[1.1]" style={{ color: textPrimary }}>
+            {station.name}
+          </h1>
+          {station.address && (
+            <p className="text-[13px] mt-1.5" style={{ color: textTertiary }}>
+              {station.address}
+            </p>
+          )}
+        </div>
+
+        {/* Info grid — pricing + availability as big numbers */}
+        <div className="px-5 mb-5">
+          <div className="grid grid-cols-3 gap-3">
+            {/* Start price */}
+            <div className="rounded-xl p-3" style={{ background: cardBg, border: `1px solid ${borderColor}` }}>
+              <p className="text-[22px] font-bold tracking-tight leading-none mb-1" style={{ color: textPrimary }}>
+                {startPrice.toFixed(2)}€
+              </p>
+              <p className="text-[11px] font-medium tracking-wide uppercase" style={{ color: textTertiary }}>
+                Start
+              </p>
+            </div>
+            {/* Per minute */}
+            <div className="rounded-xl p-3" style={{ background: cardBg, border: `1px solid ${borderColor}` }}>
+              <p className="text-[22px] font-bold tracking-tight leading-none mb-1" style={{ color: textPrimary }}>
+                {pricePerMinute.toFixed(2)}€
+              </p>
+              <p className="text-[11px] font-medium tracking-wide uppercase" style={{ color: textTertiary }}>
+                / Min
+              </p>
+            </div>
+            {/* Available */}
+            <div className="rounded-xl p-3" style={{ background: cardBg, border: `1px solid ${borderColor}` }}>
+              <p className="text-[22px] font-bold tracking-tight leading-none mb-1" style={{ color: textPrimary }}>
+                {stationOnline
+                  ? availableUnits
+                  : (station.available_units ?? 0)}
+              </p>
+              <p className="text-[11px] font-medium tracking-wide uppercase" style={{ color: textTertiary }}>
+                {stationOnline ? "Verfügbar" : (station.available_units ?? 0) !== 1 ? "Powerbanks" : "Powerbank"}
+              </p>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 pb-6">
+        {/* Battery bar — thin, functional */}
+        {batteryPct !== null && (
+          <div className="px-5 mb-5">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[12px] font-medium" style={{ color: textSecondary }}>Akku</span>
+              <span className="text-[12px] font-bold tabular-nums" style={{ color: textSecondary }}>{batteryPct}%</span>
+            </div>
+            <div className="h-[3px] w-full rounded-full overflow-hidden" style={{ background: borderColor }}>
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${batteryPct}%`, background: batteryColor }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Offline warning — plain text, not a card */}
+        {!stationOnline && (
+          <div className="px-5 mb-4">
+            <p className="text-[13px] font-medium text-red-500">
+              Station ist offline — Ausleihe derzeit nicht möglich.
+            </p>
+          </div>
+        )}
+
+        {/* Auth status — minimal */}
+        <div className="px-5 mb-4">
           {isAuthenticated ? (
-            <div
-              className={`rounded-lg p-4 mb-4 ${
-                isDarkMode ? "bg-gray-700/30" : "bg-gray-50"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="20"
-                  height="20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="flex-shrink-0 text-emerald-500"
-                >
-                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                  <polyline points="22 4 12 14.01 9 11.01" />
-                </svg>
-                <div>
-                  <p className="text-sm font-medium mb-1">
-                    Sie sind angemeldet
-                  </p>
-                  <p className="text-xs opacity-70">{email}</p>
-                </div>
-              </div>
-            </div>
+            <p className="text-[12px] truncate" style={{ color: textTertiary }}>{email}</p>
           ) : (
-            <div
-              className={`rounded-lg p-4 mb-4 border-2 border-dashed ${
-                isDarkMode
-                  ? "bg-emerald-900/20 border-emerald-700/50"
-                  : "bg-emerald-50 border-emerald-300"
-              }`}
-            >
-              <div className="flex items-start gap-3">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="20"
-                  height="20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="flex-shrink-0 text-emerald-600"
-                >
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                </svg>
-                <div>
-                  <p className="text-sm font-medium mb-1">
-                    Anmeldung erforderlich
-                  </p>
-                  <p className="text-xs opacity-70">
-                    Bitte melden Sie sich an, um eine Powerbank auszuleihen
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-          {error && (
-            <div
-              className={`mb-4 p-3 rounded-lg ${
-                isDarkMode
-                  ? "bg-red-900/30 text-red-400"
-                  : "bg-red-50 text-red-700"
-              }`}
-            >
-              <p className="text-sm font-medium">{error}</p>
-            </div>
+            <p className="text-[13px] font-medium" style={{ color: isDarkMode ? "#fbbf24" : "#d97706" }}>
+              Anmeldung erforderlich
+            </p>
           )}
         </div>
 
-        <div className="px-5 pb-6 space-y-3">
-          <button
-            type="button"
-            onClick={handleConfirm}
-            disabled={loading || availableUnits <= 0}
-            className="w-full flex items-center justify-center gap-3 rounded-xl bg-emerald-600 text-white px-6 h-12 shadow-lg active:scale-95 border border-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          >
-            {loading ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
-                <span className="text-base font-semibold tracking-wide">
-                  Wird bestätigt...
-                </span>
-              </>
-            ) : isAuthenticated ? (
-              <>
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="20"
-                  height="20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M13 11h3l-4 6v-4H9l4-6v4z" />
-                </svg>
-                <span className="text-base font-semibold tracking-wide">
-                  Ausleihe bestätigen
-                </span>
-              </>
-            ) : (
-              <>
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="0 0 24 24"
-                  width="20"
-                  height="20"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-                  <polyline points="10 17 15 12 10 7" />
-                  <line x1="15" y1="12" x2="3" y2="12" />
-                </svg>
-                <span className="text-base font-semibold tracking-wide">
-                  Anmelden & Ausleihen
-                </span>
-              </>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className={`w-full flex items-center justify-center gap-3 rounded-xl px-6 h-12 border transition-all ${
-              isDarkMode
-                ? "bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
-                : "bg-gray-100 border-gray-300 text-gray-900 hover:bg-gray-200"
-            }`}
-          >
-            <span className="text-base font-medium">Abbrechen</span>
-          </button>
-        </div>
+        {/* Error — just red text */}
+        {error && (
+          <div className="px-5 mb-4">
+            <p className="text-[13px] font-medium text-red-500">{error}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom actions — pinned */}
+      <div className="flex-shrink-0 px-5 pt-2 pb-6" style={{ borderTop: `1px solid ${borderColor}` }}>
+        <button
+          type="button"
+          onClick={handleConfirm}
+          disabled={loading || (!stationOnline && availableUnits <= 0)}
+          className="w-full h-14 rounded-[14px] text-[15px] font-semibold tracking-wide text-white transition-opacity active:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{ background: !stationOnline ? (isDarkMode ? "#27272a" : "#a1a1aa") : "#10b981" }}
+        >
+          {loading
+            ? "Wird bestätigt..."
+            : !stationOnline
+              ? "Station offline"
+              : isAuthenticated
+                ? "Ausleihe bestätigen"
+                : "Anmelden & Ausleihen"}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full h-10 mt-1 text-[13px] font-medium transition-opacity active:opacity-60"
+          style={{ color: textTertiary }}
+        >
+          Abbrechen
+        </button>
       </div>
     </div>
   );
