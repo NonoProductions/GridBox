@@ -10,6 +10,14 @@ import { notifyRentalSuccess } from "@/lib/notifications";
 
 export const dynamic = 'force-dynamic';
 
+// CSS animations used inline in this file
+const PAGE_ANIMATIONS: string = `
+@keyframes rp-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+`;
+
 function RentPageContent() {
   const params = useParams();
   const router = useRouter();
