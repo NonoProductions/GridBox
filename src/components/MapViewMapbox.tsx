@@ -543,7 +543,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             setShowPermissionModal(false);
           },
           (error) => {
-            logger.error('Geolocation error:', error);
+            logger.error('Geolocation error:', error.message || error.code);
             if (error.code === error.PERMISSION_DENIED) {
               logger.warn('Location permission denied by user');
               setLocationPermissionGranted(false);
@@ -556,10 +556,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               setLocationLoading(false);
             }
           },
-          { 
-            enableHighAccuracy: true, // Höhere Genauigkeit für bessere Navigation
-            maximumAge: 0, // Keine gecachte Position - immer frische Daten
-            timeout: 10000 // 10 seconds timeout
+          {
+            enableHighAccuracy: true,
+            maximumAge: 5000,
+            timeout: 15000
           }
         );
       } catch (error) {
@@ -579,7 +579,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     if (!permissionRequested && navigator.geolocation) {
       setPermissionRequested(true);
       logger.dev('Requesting explicit location permission...');
-      
+
       // Explizite Berechtigungsanfrage
       navigator.geolocation.getCurrentPosition(
         (position) => {
@@ -592,10 +592,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
           setLocationPermissionGranted(false);
           setShowPermissionModal(true);
         },
-        { 
+        {
           enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: 5000
+          maximumAge: 5000,
+          timeout: 15000
         }
       );
     }
@@ -628,10 +628,10 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setLocationPermissionGranted(false);
         setShowPermissionModal(true);
       },
-      { 
+      {
         enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 10000
+        maximumAge: 5000,
+        timeout: 15000
       }
     );
   };
@@ -1309,15 +1309,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         setLastLocation(newLocation);
       },
       (error) => {
-        logger.error('Geolocation error during tracking:', error);
+        logger.error('Geolocation error during tracking:', error.message || error.code);
       },
       {
         enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 8000
+        maximumAge: 5000,
+        timeout: 15000
       }
     );
-    
+
     setWatchId(newWatchId);
     logger.dev('Location tracking started');
   };
@@ -2001,8 +2001,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   }, [watchId]);
 
   useEffect(() => {
-    if (mapRef.current || !mapElRef.current || isDarkMode === null || locationLoading) return;
-    
+    if (mapRef.current || !mapElRef.current || isDarkMode === null) return;
+
     // Dynamically import Mapbox GL only on client side
     const initMap = async () => {
       try {
@@ -2119,7 +2119,20 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
     };
 
     initMap();
-  }, [center, isDarkMode, locationLoading, userLocation]);
+  }, [center, isDarkMode]);
+
+  // Fly to user location once it becomes available after map init
+  useEffect(() => {
+    if (mapRef.current && userLocation) {
+      mapRef.current.flyTo({
+        center: [userLocation.lng, userLocation.lat],
+        zoom: 17,
+        duration: 1200,
+        essential: true
+      });
+      updateUserMarker(userLocation, userHeading, false);
+    }
+  }, [userLocation]);
 
   // Cleanup beim Component Unmount
   useEffect(() => {
@@ -2409,12 +2422,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             }
           },
           (error) => {
-            logger.error('Geolocation error:', error);
+            logger.error('Geolocation error:', error.message || error.code);
           },
-          { 
+          {
             enableHighAccuracy: true,
-            maximumAge: 0,
-            timeout: 10000
+            maximumAge: 5000,
+            timeout: 15000
           }
         );
       } catch (error) {
@@ -2471,12 +2484,12 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             }
           },
           (error) => {
-            logger.error('Geolocation error:', error);
+            logger.error('Geolocation error:', error.message || error.code);
           },
-          { 
+          {
             enableHighAccuracy: true,
-            maximumAge: 0,
-            timeout: 10000
+            maximumAge: 5000,
+            timeout: 15000
           }
         );
       } catch (error) {
@@ -2619,15 +2632,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
       {/* Loading indicator for location */}
       {locationLoading && (
-        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/20 backdrop-blur-sm">
-          <div className={`rounded-xl px-6 py-4 shadow-lg ${
-            isDarkMode === true 
-              ? 'bg-gray-800 text-white' 
-              : 'bg-white text-slate-900'
+        <div className="fixed top-16 left-1/2 transform -translate-x-1/2 z-[999]">
+          <div className={`rounded-xl px-4 py-2 shadow-lg ${
+            isDarkMode === true
+              ? 'bg-gray-800 text-white border border-gray-700'
+              : 'bg-white text-slate-900 border border-gray-200'
           }`}>
-            <div className="flex items-center gap-3">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-emerald-600 border-t-transparent"></div>
-              <span className="text-sm font-medium">Standort wird ermittelt...</span>
+            <div className="flex items-center gap-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-2 border-emerald-600 border-t-transparent"></div>
+              <span className="text-xs font-medium">Standort wird ermittelt...</span>
             </div>
           </div>
         </div>
@@ -3545,7 +3558,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             // 2. Verbindungsstatus prüfen und available_units synchronisieren
             const { data: batteryCheck } = await supabase
               .from('stations')
-              .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at')
+              .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, powerbank_id, total_units')
               .eq('id', currentStation.id)
               .single();
 
@@ -3572,7 +3585,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
                   return;
                 }
                 navigator.geolocation.getCurrentPosition(resolve, reject, {
-                  enableHighAccuracy: true, timeout: 10000, maximumAge: 0,
+                  enableHighAccuracy: true, timeout: 15000, maximumAge: 5000,
                 });
               });
 

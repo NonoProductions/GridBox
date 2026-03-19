@@ -4,6 +4,8 @@ import AuthGate from "@/components/AuthGate";
 import AppHeader from "@/components/AppHeader";
 import NotificationManager from "@/components/NotificationManager";
 import ThemeSync from "@/components/ThemeSync";
+import NavigationOverlay from "@/components/NavigationOverlay";
+import AnalyticsTracker from "@/components/AnalyticsTracker";
 
 export const metadata = { 
   title: "GridBox - Powerbank ausleihen",
@@ -84,8 +86,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Suspense fallback={null}>
           <ThemeSync />
         </Suspense>
+        <NavigationOverlay />
         <NotificationManager />
         <AppHeader />
+        <Suspense fallback={null}>
+          <AnalyticsTracker />
+        </Suspense>
         <AuthGate />
         {children}
       </body>

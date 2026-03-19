@@ -20,7 +20,7 @@ export async function PATCH(request: Request) {
       .eq("id", station.id);
 
     if (error) {
-      console.error("ESP dispense-ack error:", error.message);
+      console.error("ESP dispense-ack error");
       return NextResponse.json(
         { error: "Update failed" },
         { status: 500 }

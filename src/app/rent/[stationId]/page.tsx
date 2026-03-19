@@ -40,7 +40,7 @@ function RentPageContent() {
         const isShortCode = /^[A-Z0-9]{4}$/i.test(sanitizedStationId);
         let query = supabase
           .from('stations')
-          .select('*')
+          .select('id, name, description, lat, lng, available_units, total_units, address, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, powerbank_id, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, charge_enabled, opening_hours, last_seen')
           .eq('is_active', true);
 
         if (isShortCode) {
@@ -67,37 +67,8 @@ function RentPageContent() {
           return;
         }
 
+        // Erster Query lädt bereits alle Felder (*) – direkt setzen, kein zweiter Netzwerkhop nötig
         setStation(data);
-
-        // Sofort aktuelle Batterie-Daten + Verbindungsstatus nachladen, damit Anzeige stimmt
-        if (data?.id) {
-          let { data: fresh, error: freshError } = await supabase
-            .from('stations')
-            .select('powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at')
-            .eq('id', data.id)
-            .single();
-          const missingPowerbankColumn =
-            !!freshError &&
-            `${freshError.code ?? ''} ${freshError.message ?? ''} ${freshError.details ?? ''}`.toLowerCase().includes('powerbank_id');
-          if (missingPowerbankColumn) {
-            const legacy = await supabase
-              .from('stations')
-              .select('battery_voltage, battery_percentage, last_seen, updated_at')
-              .eq('id', data.id)
-              .single();
-            fresh = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
-          }
-          if (fresh) {
-            setStation((prev) => prev ? {
-              ...prev,
-              powerbank_id: fresh.powerbank_id,
-              battery_voltage: fresh.battery_voltage,
-              battery_percentage: fresh.battery_percentage,
-              last_seen: fresh.last_seen,
-              updated_at: fresh.updated_at,
-            } : null);
-          }
-        }
       } catch {
         setError('Station konnte nicht geladen werden.');
       } finally {
@@ -204,7 +175,7 @@ function RentPageContent() {
                 return;
               }
               navigator.geolocation.getCurrentPosition(resolve, reject, {
-                enableHighAccuracy: true, timeout: 10000, maximumAge: 0,
+                enableHighAccuracy: true, timeout: 15000, maximumAge: 5000,
               });
             });
 

@@ -19,7 +19,7 @@ export async function POST(request: Request) {
     });
 
     if (error) {
-      console.error("ESP rollback RPC error:", error.message);
+      console.error("ESP rollback RPC error");
       return NextResponse.json(
         { error: "Rollback failed" },
         { status: 500 }

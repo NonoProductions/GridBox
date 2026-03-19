@@ -54,7 +54,7 @@ export async function PATCH(request: Request) {
       .eq("id", station.id);
 
     if (error) {
-      console.error("ESP units update error:", error.message);
+      console.error("ESP units update error");
       return NextResponse.json(
         { error: "Update failed" },
         { status: 500 }

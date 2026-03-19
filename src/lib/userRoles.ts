@@ -92,13 +92,13 @@ export const getAllUsersWithRoles = async (): Promise<UserWithRole[]> => {
   }
 };
 
-// Weise einem Benutzer eine Rolle zu
+// Weise einem Benutzer eine Rolle zu (via sichere DB-Funktion)
 export const assignUserRole = async (userId: string, role: 'owner' | 'user'): Promise<void> => {
   try {
-    const { error } = await supabase
-      .from('profiles')
-      .update({ role })
-      .eq('id', userId);
+    const { error } = await supabase.rpc('assign_user_role', {
+      p_target_user_id: userId,
+      p_new_role: role,
+    });
 
     if (error) {
       console.error('Fehler beim Zuweisen der Rolle:', error);
@@ -110,13 +110,13 @@ export const assignUserRole = async (userId: string, role: 'owner' | 'user'): Pr
   }
 };
 
-// Entferne die Rolle eines Benutzers (setzt auf 'user')
+// Entferne die Rolle eines Benutzers (setzt auf 'user') (via sichere DB-Funktion)
 export const removeUserRole = async (userId: string): Promise<void> => {
   try {
-    const { error } = await supabase
-      .from('profiles')
-      .update({ role: 'user' })
-      .eq('id', userId);
+    const { error } = await supabase.rpc('assign_user_role', {
+      p_target_user_id: userId,
+      p_new_role: 'user',
+    });
 
     if (error) {
       console.error('Fehler beim Entfernen der Rolle:', error);
@@ -174,19 +174,28 @@ export const createProfile = async (userId: string, email: string, role: 'owner'
   }
 };
 
-// Aktualisiere eine Benutzerrolle
+// Aktualisiere eine Benutzerrolle (via sichere DB-Funktion)
 export const updateUserRole = async (userId: string, role: 'owner' | 'user'): Promise<Profile> => {
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ role })
-      .eq('id', userId)
-      .select()
-      .single();
+    const { error } = await supabase.rpc('assign_user_role', {
+      p_target_user_id: userId,
+      p_new_role: role,
+    });
 
     if (error) {
       console.error('Fehler beim Aktualisieren der Benutzerrolle:', error);
       throw error;
+    }
+
+    // Nach dem Update das Profil holen
+    const { data, error: fetchError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single();
+
+    if (fetchError || !data) {
+      throw fetchError || new Error('Profil nicht gefunden');
     }
 
     return data;

@@ -34,12 +34,13 @@ function ProfileContent() {
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      if (!data.user) {
+      // getSession() liest aus localStorage – kein Netzwerkhop
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) {
         router.replace("/");
         return;
       }
-      const user = data.user;
+      const user = session.user;
       setName((user.user_metadata as Record<string, unknown>)?.full_name as string || "");
       setEmail(user.email || "");
     })();

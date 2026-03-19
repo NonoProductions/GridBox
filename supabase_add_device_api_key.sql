@@ -43,7 +43,17 @@ SECURITY DEFINER
 AS $$
 DECLARE
   new_key TEXT;
+  v_owner_id UUID;
 BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Nicht authentifiziert';
+  END IF;
+
+  SELECT owner_id INTO v_owner_id FROM stations WHERE id = p_station_id;
+  IF v_owner_id IS NULL OR v_owner_id != auth.uid() THEN
+    RAISE EXCEPTION 'Nicht autorisiert: Nur der Station-Owner darf den API-Key rotieren';
+  END IF;
+
   new_key := encode(gen_random_bytes(32), 'hex');
   UPDATE stations SET device_api_key = new_key WHERE id = p_station_id;
   RETURN new_key;

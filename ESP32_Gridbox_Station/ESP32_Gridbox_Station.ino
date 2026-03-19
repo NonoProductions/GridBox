@@ -12,30 +12,52 @@
 #include <WiFiClientSecure.h>
 #endif
 
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
 // ===== WLAN Konfiguration =====
-const char* WIFI_SSID = "FRITZ!Box Lamborelle";
-const char* WIFI_PASSWORD = "88929669398610508392";
+// WICHTIG: Echte Zugangsdaten MUESSEN in secrets.h stehen (nicht hier committen!)
+#ifndef WIFI_SSID
+#define WIFI_SSID "CHANGE_ME_IN_SECRETS_H"
+#endif
+
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "CHANGE_ME_IN_SECRETS_H"
+#endif
 
 // ===== PROXY Konfiguration (SICHER: kein Supabase-Key auf dem ESP32!) =====
 // Der ESP32 kommuniziert NUR mit dem Proxy (Next.js API Routes).
 // Der Proxy authentifiziert den ESP32 per DEVICE_API_KEY und leitet an Supabase weiter.
-const char* PROXY_BASE_URL = "https://gridbox-pwa.vercel.app/api/esp";  // ← Deine Vercel URL + /api/esp
-const char* DEVICE_API_KEY = "DEIN_DEVICE_API_KEY_HIER";  // ← Aus Supabase SQL: SELECT device_api_key FROM stations WHERE short_code='88SH';
+#ifndef PROXY_BASE_URL
+#define PROXY_BASE_URL "https://gridbox-pwa.vercel.app/api/esp"
+#endif
+
+#ifndef DEVICE_API_KEY
+#define DEVICE_API_KEY "CHANGE_ME_IN_SECRETS_H"
+#endif
 
 #define USE_SHORT_CODE true
 
-const char* STATION_SHORT_CODE = "88SH";       // ← Dein 4-stelliger Station Code (nur für Logging)
-const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID deiner Station (für Realtime-Filter)
+#ifndef STATION_SHORT_CODE
+#define STATION_SHORT_CODE "XXXX"
+#endif
+
+#ifndef STATION_ID
+#define STATION_ID "00000000-0000-0000-0000-000000000000"
+#endif
 
 // ===== SENSOR KONFIGURATION =====
 // SENSOREN DEAKTIVIERT - Nicht benötigt
 #define USE_SENSORS false         // Alle Sensoren deaktiviert
-#define TOTAL_SLOTS 2        // Anzahl Slots (für Zukunft)
+#define TOTAL_SLOTS 2        // Anzahl Slots
 
 // ===== BATTERIE KONFIGURATION =====
 #define TCA9548A_ADDRESS 0x70     // I2C Adresse des TCA9548A Multiplexers
 #define BQ27441_ADDRESS 0x55      // I2C Adresse des BQ27441 Fuel Gauge
-#define BATTERY_CHANNEL 0        // Kanal des Multiplexers für den Fuel Gauge (0-7)
+// Pro-Slot Fuel Gauge Kanäle auf dem TCA9548A (0-7)
+#define SLOT_1_BATTERY_CHANNEL 0  // Fuel Gauge Kanal für Slot 1
+#define SLOT_2_BATTERY_CHANNEL 1  // Fuel Gauge Kanal für Slot 2
 #define BATTERY_UPDATE_INTERVAL 15000  // Batteriedaten alle 15 Sekunden aktualisieren (reduziert Egress um ~87%)
 #define BATTERY_TEST_MODE false   // true = Test-Modus ohne Hardware (verwendet Dummy-Daten)
 
@@ -44,9 +66,10 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define REG_SOC     0x1C     // Ladezustand (%)
 
 // ===== EEPROM KONFIGURATION =====
-// EEPROM hängt am TCA9548A auf diesem Kanal (0-7). Nur dieser Kanal wird für EEPROM genutzt.
-#define EEPROM_CHANNEL 2
-// 24LC01B/02B kann 0x50-0x57 sein (A0/A1/A2 Pins). Auf Kanal 0 ist 0x55 = Fuel Gauge → überspringen!
+// Pro-Slot EEPROM Kanäle auf dem TCA9548A (0-7)
+#define SLOT_1_EEPROM_CHANNEL 2   // EEPROM Kanal für Slot 1
+#define SLOT_2_EEPROM_CHANNEL 3   // EEPROM Kanal für Slot 2
+// 24LC01B/02B kann 0x50-0x57 sein (A0/A1/A2 Pins). Auf Batterie-Kanälen ist 0x55 = Fuel Gauge → überspringen!
 #define EEPROM_24C02_ADDRESS 0x50    // Standard-Adresse (wird pro Kanal erkannt: 0x50-0x57)
 #define EEPROM_ID_START_ADDRESS 0x00  // Startadresse für Powerbank-ID im EEPROM
 #define EEPROM_ID_MAX_LENGTH 32      // Maximale Länge der Powerbank-ID (String)
@@ -55,14 +78,18 @@ const char* STATION_ID = "3cf6fe8a-a9af-4e73-8b42-4fc81f2c5500";  // ← UUID de
 #define EEPROM_ID_DATA_ADDRESS 0x01   // Startadresse für ID-Daten (nach Magic Byte)
 #define AUTO_INIT_EMPTY_EEPROM true   // true = Automatisch IDs schreiben wenn EEPROM leer ist
 
+// Abwärtskompatibilität: BATTERY_CHANNEL und EEPROM_CHANNEL als Alias für Slot 1
+#define BATTERY_CHANNEL SLOT_1_BATTERY_CHANNEL
+#define EEPROM_CHANNEL SLOT_1_EEPROM_CHANNEL
+
 // LED Pins
 #define LED_PIN 2           // Eingebaute LED (wird bei Ausgabe aktiviert)
 #define STATUS_LED_PIN 23   // Externe Status-LED (optional)
 
 // Servo Konfiguration (mechanische Ausgabe)
-#define SERVO_A_PIN 13            // Servo A Signal-Pin
-#define SERVO_B_PIN 7             // Servo B Signal-Pin
-#define DISPENSE_TARGET_SERVO 1   // 1 = Servo A (Pin 13), 2 = Servo B (Pin 7)
+// Servo A = Slot 1, Servo B = Slot 2
+#define SERVO_A_PIN 13            // Servo A Signal-Pin (Slot 1)
+#define SERVO_B_PIN 7             // Servo B Signal-Pin (Slot 2)
 #define SERVO_STARTUP_IDENTIFY false // Bewegt A und B kurz beim Start zur Zuordnung
 // Kalibrierte Winkel pro Servo (Servos sind gegenläufig!)
 #define SERVO_A_CLOSED_ANGLE 140  // Servo A: Fach geschlossen
@@ -115,15 +142,31 @@ unsigned long lastButtonChange = 0;
 bool relayCurrentlyOn = false;
 bool firstDataReceived = false;  // Flag für initiales Relais-Update
 
-// Batterie Variablen
-unsigned long lastBatteryUpdate = 0;
-float batteryVoltage = 0.0;
-int batteryPercentage = 0;
-bool batteryInitialized = false;
-bool lastReportedBatteryPresent = false;  // Zuletzt an Supabase gemeldeter Zustand (Powerbank da/weg)
-bool batteryStateEverReported = false;    // Einmal initial melden, danach nur bei Änderung
+// ===== Per-Slot Datenstrukturen =====
+struct SlotData {
+  float batteryVoltage;
+  int batteryPercentage;
+  bool batteryInitialized;
+  bool batteryPresent;
+  bool lastReportedBatteryPresent;
+  bool batteryStateEverReported;
+  uint8_t batteryChannel;    // TCA9548A Kanal für Fuel Gauge
+  uint8_t eepromChannel;     // TCA9548A Kanal für EEPROM
+  String powerbankId;        // Gelesene ID aus EEPROM
+};
 
-// Servo-Objekte
+SlotData slots[TOTAL_SLOTS];
+unsigned long lastBatteryUpdate = 0;
+
+// Abwärtskompatibilität: Referenzen auf Slot 1 (für Code der noch alte Variablen nutzt)
+#define batteryVoltage    slots[0].batteryVoltage
+#define batteryPercentage slots[0].batteryPercentage
+#define batteryInitialized slots[0].batteryInitialized
+#define batteryPresent    slots[0].batteryPresent
+#define lastReportedBatteryPresent slots[0].lastReportedBatteryPresent
+#define batteryStateEverReported   slots[0].batteryStateEverReported
+
+// Servo-Objekte (Servo A = Slot 1, Servo B = Slot 2)
 Servo dispenseServoA;
 Servo dispenseServoB;
 bool servosReady = false;
@@ -157,10 +200,15 @@ void connectRealtimeWebSocket();
 void handleChargeButton();
 void updateChargingState();
 void evaluateBatteryPresence();
+void evaluateSlotBatteryPresence(uint8_t slotIndex);
 void dispensePowerbank();
 bool rollbackFailedDispense();
 bool initDispenseServos();
-void moveDispenseServo(bool open);
+void moveDispenseServo(int slotIndex, bool open);
+int chooseBestSlot();  // Wählt den Slot mit dem höchsten Akku
+bool initSlotBattery(uint8_t slotIndex);
+void readSlotBatteryData(uint8_t slotIndex);
+void updateAllSlotsBatteryData();
 
 // EEPROM Funktionsprototypen
 bool writeEEPROMByte(uint8_t channel, uint8_t address, uint8_t data);
@@ -193,18 +241,38 @@ void setup() {
   Wire.begin(21, 22);
   delay(100);
   
-  // Batterie-System initialisieren
+  // Slot-Datenstrukturen initialisieren
+  slots[0].batteryChannel = SLOT_1_BATTERY_CHANNEL;
+  slots[0].eepromChannel = SLOT_1_EEPROM_CHANNEL;
+  slots[1].batteryChannel = SLOT_2_BATTERY_CHANNEL;
+  slots[1].eepromChannel = SLOT_2_EEPROM_CHANNEL;
+  for (int i = 0; i < TOTAL_SLOTS; i++) {
+    slots[i].batteryVoltage = 0.0;
+    slots[i].batteryPercentage = 0;
+    slots[i].batteryInitialized = false;
+    slots[i].batteryPresent = false;
+    slots[i].lastReportedBatteryPresent = false;
+    slots[i].batteryStateEverReported = false;
+    slots[i].powerbankId = "";
+  }
+  
+  // Batterie-System für alle Slots initialisieren
   #if BATTERY_TEST_MODE
-    batteryInitialized = true;
-    batteryVoltage = 3.70;
-    batteryPercentage = 85;
-    evaluateBatteryPresence();
-  #else
-    batteryInitialized = initBatterySystem();
-    if (!batteryInitialized) {
-      batteryPresent = false;
-      updateChargingState();
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      slots[i].batteryInitialized = true;
+      slots[i].batteryVoltage = 3.70 + i * 0.05;
+      slots[i].batteryPercentage = 85 - i * 10;
+      evaluateSlotBatteryPresence(i);
     }
+  #else
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      slots[i].batteryInitialized = initSlotBattery(i);
+      if (!slots[i].batteryInitialized) {
+        slots[i].batteryPresent = false;
+      }
+      Serial.println("Slot " + String(i + 1) + " Fuel Gauge: " + (slots[i].batteryInitialized ? "OK" : "nicht gefunden") + " (Kanal " + String(slots[i].batteryChannel) + ")");
+    }
+    updateChargingState();
   #endif
   
   // Pins konfigurieren - SICHER initialisieren
@@ -249,7 +317,7 @@ void setup() {
   
   updateChargingState();
   
-  // EEPROM-System initialisieren und Powerbank-IDs scannen (nur Start-Info in Konsole)
+  // EEPROM-System initialisieren und Powerbank-IDs scannen (beide Slots)
   scanAllPowerbankIDs();
   
   // OPTIONAL: Initialisiere Powerbank-IDs (nur beim ersten Setup oder zum Testen)
@@ -277,24 +345,27 @@ void setup() {
     // Synchronisiere total_units mit TOTAL_SLOTS Konfiguration
     syncTotalUnits();
     
-    // Sende initiale Batterie-Daten sofort (updated_at = Verbindungsstatus)
-    if (batteryInitialized) {
-      #if !BATTERY_TEST_MODE
-        readBatteryData();
-      #endif
-      if (batteryPresent) {
-        Serial.println("🔋 Powerbank: " + String(batteryVoltage, 2) + " V, " + String(batteryPercentage) + " % (Start)");
+    // Sende initiale Batterie-Daten sofort für alle Slots (updated_at = Verbindungsstatus)
+    bool anySlotInit = false;
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      if (slots[i].batteryInitialized) {
+        anySlotInit = true;
+        #if !BATTERY_TEST_MODE
+          readSlotBatteryData(i);
+        #endif
+        if (slots[i].batteryPresent) {
+          Serial.println("🔋 Slot " + String(i + 1) + ": " + String(slots[i].batteryVoltage, 2) + " V, " + String(slots[i].batteryPercentage) + " % (Start)");
+        } else {
+          Serial.println("🔋 Slot " + String(i + 1) + ": keine Powerbank erkannt");
+        }
+        slots[i].lastReportedBatteryPresent = slots[i].batteryPresent;
+        slots[i].batteryStateEverReported = true;
       } else {
-        Serial.println("🔋 Powerbank: keine erkannt");
+        Serial.println("🔋 Slot " + String(i + 1) + ": Fuel Gauge nicht gefunden – Akku-Anzeige deaktiviert.");
       }
-      updateBatteryData();
-      lastReportedBatteryPresent = batteryPresent;
-      batteryStateEverReported = true;
-      lastBatteryUpdate = millis();
-    } else {
-      Serial.println("🔋 Batterie: Fuel Gauge nicht gefunden – Akku-Anzeige deaktiviert.");
-      if (isConnected) updateBatteryData();  // Trotzdem updated_at senden (Station = verbunden)
     }
+    updateAllSlotsBatteryData();
+    lastBatteryUpdate = millis();
   }
   
   Serial.println("Setup abgeschlossen – Station bereit.");
@@ -420,46 +491,41 @@ void loop() {
     lastUpdate = millis();
   }
   
-  // Batteriedaten lesen (Intervall); an Supabase senden (updated_at = Verbindungsstatus im Dashboard!)
+  // Batteriedaten für alle Slots lesen und an Supabase senden
   if (millis() - lastBatteryUpdate > BATTERY_UPDATE_INTERVAL) {
-    if (batteryInitialized) {
-      #if BATTERY_TEST_MODE
-        // Test-Modus: Simuliere leicht variierende Batteriedaten
-        batteryVoltage = 3.65 + (random(0, 20) / 100.0);  // 3.65 - 3.85 V
-        batteryPercentage = 80 + random(-5, 10);  // 75 - 90%
-        if (batteryPercentage > 100) batteryPercentage = 100;
-        if (batteryPercentage < 0) batteryPercentage = 0;
-        evaluateBatteryPresence();
-      #else
-        readBatteryData();
-      #endif
-      // Serial: Akkustand der Powerbank anzeigen (jedes Intervall)
-      if (batteryPresent) {
-        Serial.println("🔋 Powerbank: " + String(batteryVoltage, 2) + " V, " + String(batteryPercentage) + " %");
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      if (slots[i].batteryInitialized) {
+        #if BATTERY_TEST_MODE
+          // Test-Modus: Simuliere leicht variierende Batteriedaten pro Slot
+          slots[i].batteryVoltage = 3.65 + (random(0, 20) / 100.0) + i * 0.05;
+          slots[i].batteryPercentage = 80 + random(-5, 10) - i * 5;
+          if (slots[i].batteryPercentage > 100) slots[i].batteryPercentage = 100;
+          if (slots[i].batteryPercentage < 0) slots[i].batteryPercentage = 0;
+          evaluateSlotBatteryPresence(i);
+        #else
+          readSlotBatteryData(i);
+        #endif
+        // Serial: Akkustand pro Slot
+        if (slots[i].batteryPresent) {
+          Serial.println("🔋 Slot " + String(i + 1) + ": " + String(slots[i].batteryVoltage, 2) + " V, " + String(slots[i].batteryPercentage) + " %");
+        } else {
+          Serial.println("🔋 Slot " + String(i + 1) + ": keine Powerbank (Spannung < " + String(BATTERY_PRESENT_THRESHOLD, 1) + " V)");
+        }
+        if (slots[i].batteryPresent != slots[i].lastReportedBatteryPresent) {
+          Serial.println(slots[i].batteryPresent ? "Slot " + String(i + 1) + ": Powerbank erkannt → Daten an Dashboard." : "Slot " + String(i + 1) + ": Powerbank entfernt → NULL an Dashboard.");
+          slots[i].lastReportedBatteryPresent = slots[i].batteryPresent;
+        }
+        if (!slots[i].batteryStateEverReported) slots[i].batteryStateEverReported = true;
       } else {
-        Serial.println("🔋 Powerbank: keine erkannt (Spannung < " + String(BATTERY_PRESENT_THRESHOLD, 1) + " V)");
-      }
-      // Immer senden: updated_at muss regelmäßig aktualisiert werden, damit die Station im Dashboard als "verbunden" gilt (< 60 s)
-      if (batteryPresent != lastReportedBatteryPresent) {
-        Serial.println(batteryPresent ? "Powerbank erkannt → Daten an Dashboard." : "Powerbank entfernt → NULL an Dashboard.");
-        lastReportedBatteryPresent = batteryPresent;
-      }
-      updateBatteryData();  // Sendet battery_voltage/percentage + updated_at
-      lastReportedBatteryPresent = batteryPresent;
-      if (!batteryStateEverReported) batteryStateEverReported = true;
-    } else {
-      // Fuel Gauge nicht gefunden – trotzdem updated_at senden, damit Station als verbunden angezeigt wird
-      if (isConnected) {
-        updateBatteryData();  // Sendet NULL für Batterie + updated_at
-      }
-      Serial.println("🔋 Batterie: Fuel Gauge nicht gefunden (I2C/Kanal " + String(BATTERY_CHANNEL) + ")");
-      if (initBatterySystem()) {
-        batteryInitialized = true;
-      } else {
-        batteryPresent = false;
-        updateChargingState();
+        // Versuche erneut zu initialisieren
+        slots[i].batteryInitialized = initSlotBattery(i);
+        if (!slots[i].batteryInitialized) {
+          slots[i].batteryPresent = false;
+        }
       }
     }
+    // Sende alle Slot-Daten an Supabase (inkl. updated_at für Verbindungsstatus)
+    updateAllSlotsBatteryData();
     lastBatteryUpdate = millis();
   }
   
@@ -624,18 +690,29 @@ void checkDispenseRequest() {
 }
 
 // Servo dreht, um eine Powerbank mechanisch auszugeben
+// Wählt automatisch den Slot mit dem höchsten Akkustand
 void dispensePowerbank() {
   // Hinweis: Die Prüfungen (Mindestsaldo 5 € und Distanz <= 100 m)
   // werden in der Web-App / Supabase gemacht, bevor dispense_requested gesetzt wird.
-  Serial.println("Servo: Ausgabe gestartet.");
+  Serial.println("=== Ausgabe-Vorgang gestartet ===");
   if (!servosReady) {
     Serial.println("❌ Servos nicht bereit (attach fehlgeschlagen) - Ausgabe abgebrochen.");
     return;
   }
-  if (!dispenseServoLogged) {
-    Serial.println(String("Aktiver Ausgabe-Servo: ") + (DISPENSE_TARGET_SERVO == 1 ? "A (Pin " + String(SERVO_A_PIN) + ")" : "B (Pin " + String(SERVO_B_PIN) + ")"));
-    dispenseServoLogged = true;
+
+  // Wähle den besten Slot (höchster Akku)
+  int bestSlot = chooseBestSlot();
+  if (bestSlot < 0) {
+    Serial.println("❌ Keine Powerbank verfügbar – Ausgabe abgebrochen.");
+    // Rollback: keine Powerbank zum Ausgeben
+    if (rollbackFailedDispense()) {
+      Serial.println("↩️ Ausleihe erfolgreich zurückgerollt (keine Powerbank verfügbar).");
+    }
+    return;
   }
+  
+  Serial.println("✅ Bester Slot: " + String(bestSlot + 1) + " (Akku: " + String(slots[bestSlot].batteryPercentage) + "%, " + String(slots[bestSlot].batteryVoltage, 2) + "V)");
+  Serial.println("   Servo: " + String(bestSlot == 0 ? "A" : "B") + " (Pin " + String(bestSlot == 0 ? SERVO_A_PIN : SERVO_B_PIN) + ")");
 
   // Servo vor der Ausgabe sicherheitshalber re-attachen (WiFi/HTTP können LEDC-Kanäle stören)
   if (!dispenseServoA.attached()) {
@@ -652,11 +729,11 @@ void dispensePowerbank() {
   }
 
   // Ohne Batteriesensor kann keine sichere Entnahme-Prüfung erfolgen
-  if (!batteryInitialized) {
-    Serial.println("⚠️ Batterie-Sensor nicht verfügbar: keine Entnahme-Verifikation möglich.");
-    moveDispenseServo(true);  // öffnen
+  if (!slots[bestSlot].batteryInitialized) {
+    Serial.println("⚠️ Slot " + String(bestSlot + 1) + " Batterie-Sensor nicht verfügbar: keine Entnahme-Verifikation möglich.");
+    moveDispenseServo(bestSlot, true);  // öffnen
     delay(SERVO_MOVE_DELAY_MS);
-    moveDispenseServo(false);  // schließen
+    moveDispenseServo(bestSlot, false);  // schließen
     delay(300);
     return;
   }
@@ -664,35 +741,35 @@ void dispensePowerbank() {
   bool pickupDetected = false;
 
   // Servo öffnen und bis zu 5s auf Entnahme warten
-  moveDispenseServo(true);  // öffnen
+  moveDispenseServo(bestSlot, true);  // öffnen
   delay(50);  // PWM-Signal stabilisieren bevor I2C-Operationen starten
   unsigned long waitStart = millis();
 
   while (millis() - waitStart < DISPENSE_CONFIRM_TIMEOUT_MS) {
     delay(DISPENSE_CHECK_INTERVAL_MS);
     #if !BATTERY_TEST_MODE
-      readBatteryData();  // aktualisiert batteryPresent via evaluateBatteryPresence()
+      readSlotBatteryData(bestSlot);  // aktualisiert batteryPresent via evaluateSlotBatteryPresence()
     #endif
 
-    if (!batteryPresent) {
+    if (!slots[bestSlot].batteryPresent) {
       pickupDetected = true;
       break;
     }
   }
 
   if (pickupDetected) {
-    Serial.println("✅ Entnahme erkannt: Powerbank wurde genommen.");
+    Serial.println("✅ Entnahme erkannt: Powerbank aus Slot " + String(bestSlot + 1) + " wurde genommen.");
   } else {
     Serial.println("❌ Keine Entnahme innerhalb 5s erkannt -> Ausleihe wird abgebrochen.");
   }
 
   // Servo schließen (Powerbank zurückziehen)
-  moveDispenseServo(false);  // schließen
+  moveDispenseServo(bestSlot, false);  // schließen
   delay(300);
 
   if (pickupDetected) {
     // Sofort Batterie-Status an Supabase senden, damit die App die Entnahme erkennt
-    updateBatteryData();
+    updateAllSlotsBatteryData();
     lastBatteryUpdate = millis();
   } else {
     if (rollbackFailedDispense()) {
@@ -701,6 +778,30 @@ void dispensePowerbank() {
       Serial.println("⚠️ Rückrollen fehlgeschlagen - bitte in Dashboard prüfen.");
     }
   }
+  Serial.println("=== Ausgabe-Vorgang beendet ===");
+}
+
+// Wählt den Slot mit dem höchsten Akkustand (gibt -1 zurück wenn kein Slot verfügbar)
+int chooseBestSlot() {
+  int bestSlot = -1;
+  int bestPercentage = -1;
+  
+  for (int i = 0; i < TOTAL_SLOTS; i++) {
+    if (slots[i].batteryPresent && slots[i].batteryPercentage > bestPercentage) {
+      bestPercentage = slots[i].batteryPercentage;
+      bestSlot = i;
+    }
+  }
+  
+  // Debug: Zeige alle Slots
+  for (int i = 0; i < TOTAL_SLOTS; i++) {
+    String status = slots[i].batteryPresent 
+      ? (String(slots[i].batteryPercentage) + "%, " + String(slots[i].batteryVoltage, 2) + "V")
+      : "leer";
+    Serial.println("  Slot " + String(i + 1) + ": " + status + (i == bestSlot ? " ← GEWÄHLT" : ""));
+  }
+  
+  return bestSlot;
 }
 
 void activateDispenseLED() {
@@ -778,9 +879,9 @@ bool initDispenseServos() {
   Serial.println("Servo A (Pin " + String(SERVO_A_PIN) + ") Kanal: " + String(servoChannelA));
   Serial.println("Servo B (Pin " + String(SERVO_B_PIN) + ") Kanal: " + String(servoChannelB));
 
-  bool targetServoReady = (DISPENSE_TARGET_SERVO == 1) ? servoAReady : servoBReady;
-  if (!targetServoReady) {
-    Serial.println("❌ Ziel-Servo attach fehlgeschlagen. Pins/Wiring/Power pruefen.");
+  bool targetServoReady = servoAReady && servoBReady;
+  if (!servoAReady && !servoBReady) {
+    Serial.println("❌ Beide Servos attach fehlgeschlagen. Pins/Wiring/Power pruefen.");
     return false;
   }
 
@@ -788,7 +889,7 @@ bool initDispenseServos() {
   if (servoBReady) dispenseServoB.write(SERVO_B_CLOSED_ANGLE);
   Serial.println("✅ Servos initialisiert, Startposition: geschlossen (A=" + String(SERVO_A_CLOSED_ANGLE) + "° B=" + String(SERVO_B_CLOSED_ANGLE) + "°)");
   if (!servoAReady || !servoBReady) {
-    Serial.println("⚠️ Hinweis: Ein Servo ist optional ausgefallen, Ziel-Servo bleibt nutzbar.");
+    Serial.println("⚠️ Hinweis: Ein Servo ist ausgefallen (" + String(!servoAReady ? "A" : "B") + "), der andere bleibt nutzbar.");
   }
 
 #if SERVO_STARTUP_IDENTIFY
@@ -807,12 +908,13 @@ bool initDispenseServos() {
   }
 #endif
 
-  Serial.println(String("Konfigurierter Ausgabe-Servo: ") + (DISPENSE_TARGET_SERVO == 1 ? "A" : "B"));
+  Serial.println("Servo A = Slot 1 (Pin " + String(SERVO_A_PIN) + "), Servo B = Slot 2 (Pin " + String(SERVO_B_PIN) + ")");
   return true;
 }
 
-void moveDispenseServo(bool open) {
-  if (DISPENSE_TARGET_SERVO == 1) {
+void moveDispenseServo(int slotIndex, bool open) {
+  if (slotIndex == 0) {
+    // Slot 1 → Servo A
     int angle = open ? SERVO_A_OPEN_ANGLE : SERVO_A_CLOSED_ANGLE;
     if (!dispenseServoA.attached()) {
       Serial.println("Servo A war detached – re-attach auf Pin " + String(SERVO_A_PIN));
@@ -821,8 +923,9 @@ void moveDispenseServo(bool open) {
       delay(50);
     }
     dispenseServoA.write(angle);
-    Serial.println("Servo A → " + String(angle) + "° (" + (open ? "OFFEN" : "ZU") + ")");
+    Serial.println("Servo A (Slot 1) → " + String(angle) + "° (" + (open ? "OFFEN" : "ZU") + ")");
   } else {
+    // Slot 2 → Servo B
     int angle = open ? SERVO_B_OPEN_ANGLE : SERVO_B_CLOSED_ANGLE;
     if (!dispenseServoB.attached()) {
       Serial.println("Servo B war detached – re-attach auf Pin " + String(SERVO_B_PIN));
@@ -831,7 +934,7 @@ void moveDispenseServo(bool open) {
       delay(50);
     }
     dispenseServoB.write(angle);
-    Serial.println("Servo B → " + String(angle) + "° (" + (open ? "OFFEN" : "ZU") + ")");
+    Serial.println("Servo B (Slot 2) → " + String(angle) + "° (" + (open ? "OFFEN" : "ZU") + ")");
   }
 }
 
@@ -1001,9 +1104,19 @@ void updateChargingState() {
       reason = "Lokaler Button AUS";
     } else {
       // Button ist EIN → Prüfe Batterie (falls erforderlich)
-      if (REQUIRE_BATTERY_FOR_RELAY && !batteryPresent) {
-        shouldCharge = false;
-        reason = "Keine Batterie erkannt";
+      if (REQUIRE_BATTERY_FOR_RELAY) {
+        // Prüfe ob IRGENDEIN Slot eine Powerbank hat
+        bool anyBatteryPresent = false;
+        for (int i = 0; i < TOTAL_SLOTS; i++) {
+          if (slots[i].batteryPresent) { anyBatteryPresent = true; break; }
+        }
+        if (!anyBatteryPresent) {
+          shouldCharge = false;
+          reason = "Keine Batterie erkannt (beide Slots leer)";
+        } else {
+          shouldCharge = true;
+          reason = "Alle Bedingungen erfüllt";
+        }
       } else {
         // Alles grün → Relais EIN
         shouldCharge = true;
@@ -1027,20 +1140,28 @@ void updateChargingState() {
 }
 
 void evaluateBatteryPresence() {
-  bool previousState = batteryPresent;
-  batteryPresent = batteryVoltage >= BATTERY_PRESENT_THRESHOLD;
+  // Evaluiere alle Slots
+  for (int i = 0; i < TOTAL_SLOTS; i++) {
+    evaluateSlotBatteryPresence(i);
+  }
+}
 
-  if (batteryPresent != previousState) {
-    if (batteryPresent) {
-      Serial.println("✅ Batterieanschluss erkannt (Spannung ≥ " + String(BATTERY_PRESENT_THRESHOLD, 1) + "V)");
+void evaluateSlotBatteryPresence(uint8_t slotIndex) {
+  if (slotIndex >= TOTAL_SLOTS) return;
+  bool previousState = slots[slotIndex].batteryPresent;
+  slots[slotIndex].batteryPresent = slots[slotIndex].batteryVoltage >= BATTERY_PRESENT_THRESHOLD;
+
+  if (slots[slotIndex].batteryPresent != previousState) {
+    if (slots[slotIndex].batteryPresent) {
+      Serial.println("✅ Slot " + String(slotIndex + 1) + ": Powerbank erkannt (Spannung ≥ " + String(BATTERY_PRESENT_THRESHOLD, 1) + "V)");
       // SOFORT Powerbank-ID an Supabase senden → Trigger beendet aktive Ausleihe
-      Serial.println("📤 Sende Powerbank-Rückgabe sofort an Supabase...");
-      updateBatteryData();
+      Serial.println("📤 Sende Slot " + String(slotIndex + 1) + " Powerbank-Rückgabe sofort an Supabase...");
+      updateAllSlotsBatteryData();
       lastBatteryUpdate = millis();
     } else {
-      Serial.println("❌ Batterie entfernt oder zu geringe Spannung");
+      Serial.println("❌ Slot " + String(slotIndex + 1) + ": Batterie entfernt oder zu geringe Spannung");
       // Auch sofort senden damit Station weiß: Powerbank weg
-      updateBatteryData();
+      updateAllSlotsBatteryData();
       lastBatteryUpdate = millis();
     }
     updateChargingState();
@@ -1121,9 +1242,12 @@ void writeBQ27441Register(uint8_t reg, uint16_t data) {
   delay(10);
 }
 
-// Initialisiere Batterie-System (genau wie im funktionierenden Test-Code)
-bool initBatterySystem() {
-  // Prüfe ob TCA9548A erreichbar ist (genau wie im funktionierenden Code)
+// Initialisiere Batterie-System für einen bestimmten Slot
+bool initSlotBattery(uint8_t slotIndex) {
+  if (slotIndex >= TOTAL_SLOTS) return false;
+  uint8_t channel = slots[slotIndex].batteryChannel;
+  
+  // Prüfe ob TCA9548A erreichbar ist
   Wire.beginTransmission(TCA9548A_ADDRESS);
   uint8_t err = Wire.endTransmission();
   
@@ -1132,10 +1256,10 @@ bool initBatterySystem() {
   }
   
   // Wähle Kanal für Fuel Gauge
-  selectI2CChannel(BATTERY_CHANNEL);
+  selectI2CChannel(channel);
   delay(100);
   
-  // Prüfe ob BQ27441 erreichbar ist (genau wie im funktionierenden Code)
+  // Prüfe ob BQ27441 erreichbar ist
   Wire.beginTransmission(BQ27441_ADDRESS);
   err = Wire.endTransmission();
   
@@ -1143,52 +1267,67 @@ bool initBatterySystem() {
     return false;
   }
   
-  // Test-Lesen der Daten (genau wie im funktionierenden Code)
+  // Test-Lesen der Daten
   uint16_t testVoltage = readBQ27441Register(REG_VOLTAGE);
   uint16_t testSOC = readBQ27441Register(REG_SOC);
+  (void)testVoltage;
+  (void)testSOC;
   
   delay(100);
   
   return true;
 }
 
-// Lese Batteriedaten vom Fuel Gauge (genau wie im funktionierenden Test-Code)
-void readBatteryData() {
-  if (!batteryInitialized) return;
+// Initialisiere Batterie-System (Abwärtskompatibilität – initialisiert Slot 1)
+bool initBatterySystem() {
+  return initSlotBattery(0);
+}
+
+// Lese Batteriedaten für einen bestimmten Slot
+void readSlotBatteryData(uint8_t slotIndex) {
+  if (slotIndex >= TOTAL_SLOTS) return;
+  if (!slots[slotIndex].batteryInitialized) return;
+  
+  uint8_t channel = slots[slotIndex].batteryChannel;
   
   // Wähle den richtigen I2C Kanal
-  selectI2CChannel(BATTERY_CHANNEL);
+  selectI2CChannel(channel);
   delay(50);
   
-  // Lese Spannung (Register 0x04 - Voltage) - genau wie im funktionierenden Code
+  // Lese Spannung
   uint16_t voltageRaw = readBQ27441Register(REG_VOLTAGE);
   
-  // Lese State of Charge (Register 0x1C - StateOfCharge) - genau wie im funktionierenden Code
+  // Lese State of Charge
   uint16_t socRaw = readBQ27441Register(REG_SOC);
   
-  // Konvertiere mV zu V (genau wie im funktionierenden Code zeigt mV)
-  if (voltageRaw > 0 && voltageRaw < 5000) {  // Gültiger Bereich: 0-5000mV
-    batteryVoltage = voltageRaw / 1000.0;  // Konvertiere mV zu V
+  // Konvertiere mV zu V
+  if (voltageRaw > 0 && voltageRaw < 5000) {
+    slots[slotIndex].batteryVoltage = voltageRaw / 1000.0;
   } else {
-    batteryVoltage = 0;  // Ungültiger Wert
+    slots[slotIndex].batteryVoltage = 0;
   }
   
-  // SOC ist direkt in Prozent (genau wie im funktionierenden Code)
+  // SOC ist direkt in Prozent
   if (socRaw <= 100) {
-    batteryPercentage = socRaw;
+    slots[slotIndex].batteryPercentage = socRaw;
   } else {
-    batteryPercentage = 0;  // Ungültiger Wert
+    slots[slotIndex].batteryPercentage = 0;
   }
   
   // Begrenze Werte auf sinnvolle Bereiche
-  if (batteryVoltage < 0 || batteryVoltage > 5.0) batteryVoltage = 0;
-  if (batteryPercentage < 0 || batteryPercentage > 100) batteryPercentage = 0;
+  if (slots[slotIndex].batteryVoltage < 0 || slots[slotIndex].batteryVoltage > 5.0) slots[slotIndex].batteryVoltage = 0;
+  if (slots[slotIndex].batteryPercentage < 0 || slots[slotIndex].batteryPercentage > 100) slots[slotIndex].batteryPercentage = 0;
 
-  evaluateBatteryPresence();
+  evaluateSlotBatteryPresence(slotIndex);
 }
 
-// Sende Batteriedaten an Proxy (mit Timeout + 1 Retry für stabilere Anzeige im Dashboard)
-void updateBatteryData() {
+// Lese Batteriedaten vom Fuel Gauge (Abwärtskompatibilität – liest Slot 1)
+void readBatteryData() {
+  readSlotBatteryData(0);
+}
+
+// Sende Batteriedaten für ALLE Slots an Proxy (neues Format mit slot_1_ und slot_2_ Feldern)
+void updateAllSlotsBatteryData() {
   if (!isConnected) return;
   
   for (int attempt = 0; attempt < 2; attempt++) {
@@ -1200,16 +1339,39 @@ void updateBatteryData() {
     http.addHeader("X-Station-Key", DEVICE_API_KEY);
     http.addHeader("Content-Type", "application/json");
 
-    DynamicJsonDocument doc(256);
-    String detectedPowerbankId = readPowerbankID(EEPROM_CHANNEL);
-    if (batteryPresent && batteryInitialized) {
-      if (detectedPowerbankId.length() > 0) {
-        doc["powerbank_id"] = detectedPowerbankId;
-      } else {
-        doc["powerbank_id"] = nullptr;
-      }
-      doc["battery_voltage"] = (int)(batteryVoltage * 100) / 100.0;
-      doc["battery_percentage"] = batteryPercentage;
+    DynamicJsonDocument doc(512);
+    
+    // Slot 1 Daten
+    String slot1PbId = readPowerbankID(slots[0].eepromChannel);
+    if (slots[0].batteryPresent && slots[0].batteryInitialized) {
+      doc["slot_1_powerbank_id"] = slot1PbId.length() > 0 ? slot1PbId : (const char*)nullptr;
+      doc["slot_1_battery_voltage"] = (int)(slots[0].batteryVoltage * 100) / 100.0;
+      doc["slot_1_battery_percentage"] = slots[0].batteryPercentage;
+    } else {
+      doc["slot_1_powerbank_id"] = nullptr;
+      doc["slot_1_battery_voltage"] = nullptr;
+      doc["slot_1_battery_percentage"] = nullptr;
+    }
+    
+    // Slot 2 Daten
+    String slot2PbId = readPowerbankID(slots[1].eepromChannel);
+    if (slots[1].batteryPresent && slots[1].batteryInitialized) {
+      doc["slot_2_powerbank_id"] = slot2PbId.length() > 0 ? slot2PbId : (const char*)nullptr;
+      doc["slot_2_battery_voltage"] = (int)(slots[1].batteryVoltage * 100) / 100.0;
+      doc["slot_2_battery_percentage"] = slots[1].batteryPercentage;
+    } else {
+      doc["slot_2_powerbank_id"] = nullptr;
+      doc["slot_2_battery_voltage"] = nullptr;
+      doc["slot_2_battery_percentage"] = nullptr;
+    }
+    
+    // Abwärtskompatibilität: Setze die alten Felder auf den besten Slot
+    int bestSlot = chooseBestSlot();
+    if (bestSlot >= 0) {
+      String bestPbId = readPowerbankID(slots[bestSlot].eepromChannel);
+      doc["powerbank_id"] = bestPbId.length() > 0 ? bestPbId : (const char*)nullptr;
+      doc["battery_voltage"] = (int)(slots[bestSlot].batteryVoltage * 100) / 100.0;
+      doc["battery_percentage"] = slots[bestSlot].batteryPercentage;
     } else {
       doc["powerbank_id"] = nullptr;
       doc["battery_voltage"] = nullptr;
@@ -1234,6 +1396,11 @@ void updateBatteryData() {
   }
 }
 
+// Abwärtskompatibilität: updateBatteryData() sendet jetzt alle Slots
+void updateBatteryData() {
+  updateAllSlotsBatteryData();
+}
+
 // ===== HILFSFUNKTIONEN =====
 
 void printDebugInfo() {
@@ -1251,13 +1418,14 @@ void printDebugInfo() {
 
 // ===== EEPROM FUNKTIONEN (24C02) =====
 
-// Findet EEPROM-Adresse auf dem Kanal (0x50-0x57). Auf BATTERY_CHANNEL wird 0x55 übersprungen (Fuel Gauge!).
+// Findet EEPROM-Adresse auf dem Kanal (0x50-0x57). Auf Batterie-Kanälen wird 0x55 übersprungen (Fuel Gauge!).
 uint8_t findEEPROMAddressOnChannel(uint8_t channel) {
   if (channel > 7) return 0;
   selectI2CChannel(channel);
   delay(10);
   for (uint8_t addr = 0x50; addr <= 0x57; addr++) {
-    if (channel == BATTERY_CHANNEL && addr == 0x55) continue;  // 0x55 auf diesem Kanal = Fuel Gauge
+    // 0x55 auf Batterie-Kanälen = Fuel Gauge → überspringen
+    if ((channel == SLOT_1_BATTERY_CHANNEL || channel == SLOT_2_BATTERY_CHANNEL) && addr == 0x55) continue;
     Wire.beginTransmission(addr);
     Wire.write(0x00);
     if (Wire.endTransmission() == 0) {
@@ -1414,9 +1582,12 @@ void scanAllPowerbankIDs() {
   bool foundAny = false;
   int emptyCount = 0;
 
-  Serial.println("--- EEPROM (Kanal " + String(EEPROM_CHANNEL) + ") ---");
+  Serial.println("--- EEPROM Scan (Slot 1: Kanal " + String(SLOT_1_EEPROM_CHANNEL) + ", Slot 2: Kanal " + String(SLOT_2_EEPROM_CHANNEL) + ") ---");
 
-  for (uint8_t channel = EEPROM_CHANNEL; channel <= EEPROM_CHANNEL; channel++) {
+  uint8_t eepromChannels[] = { SLOT_1_EEPROM_CHANNEL, SLOT_2_EEPROM_CHANNEL };
+  
+  for (uint8_t slotIdx = 0; slotIdx < TOTAL_SLOTS; slotIdx++) {
+    uint8_t channel = eepromChannels[slotIdx];
     if (!initEEPROM(channel)) {
       Serial.println("EEPROM FEHLER: Kanal " + String(channel) + " – kein Chip gefunden.");
       Serial.println("  → Prüfe: Verdrahtung, TCA9548A Kanal " + String(channel) + ", Adressen 0x50–0x57, Stromversorgung.");
@@ -1551,30 +1722,22 @@ void initializePowerbankIDs() {
   Serial.println("  ⚠️ ACHTUNG: Überschreibt vorhandene IDs!");
   Serial.println();
   
-  // Beispiel-IDs (ersetze durch echte UUIDs oder andere eindeutige IDs)
-  String exampleIDs[] = {
-    "PB-001",  // Kanal 0
-    "PB-002",  // Kanal 1
-    "PB-003",  // Kanal 2
-    "PB-004",  // Kanal 3
-    "PB-005",  // Kanal 4
-    "PB-006",  // Kanal 5
-    "PB-007",  // Kanal 6
-    "PB-008"   // Kanal 7
-  };
+  uint8_t eepromChannels[] = { SLOT_1_EEPROM_CHANNEL, SLOT_2_EEPROM_CHANNEL };
   
-  for (uint8_t channel = EEPROM_CHANNEL; channel <= EEPROM_CHANNEL; channel++) {
+  for (uint8_t slotIdx = 0; slotIdx < TOTAL_SLOTS; slotIdx++) {
+    uint8_t channel = eepromChannels[slotIdx];
+    String newID = generatePowerbankID(channel);
     if (initEEPROM(channel)) {
-      Serial.println("  → Kanal " + String(channel) + ": Setze ID \"" + exampleIDs[channel] + "\"...");
-      if (writePowerbankID(channel, exampleIDs[channel])) {
-        Serial.println("  ✓ Kanal " + String(channel) + " erfolgreich initialisiert");
+      Serial.println("  → Slot " + String(slotIdx + 1) + " (Kanal " + String(channel) + "): Setze ID \"" + newID + "\"...");
+      if (writePowerbankID(channel, newID)) {
+        Serial.println("  ✓ Slot " + String(slotIdx + 1) + " erfolgreich initialisiert");
       } else {
-        Serial.println("  ✗ Kanal " + String(channel) + " Fehler beim Schreiben");
+        Serial.println("  ✗ Slot " + String(slotIdx + 1) + " Fehler beim Schreiben");
       }
     } else {
       Serial.println("  EEPROM FEHLER: Kanal " + String(channel) + " – kein Chip gefunden (0x50–0x57). Verdrahtung prüfen.");
     }
-    delay(50);  // Kurze Pause zwischen Schreibvorgängen
+    delay(50);
   }
   
   Serial.println();

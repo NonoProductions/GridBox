@@ -4,43 +4,60 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Rate limiting: simple in-memory store (use Redis in production)
+// Rate limiting: in-memory store with periodic cleanup
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 30; // 30 requests per minute
+const RATE_LIMIT_MAX_ENTRIES = 500;
+let lastCleanup = Date.now();
 
 function checkRateLimit(identifier: string): boolean {
   const now = Date.now();
+
+  // Periodic cleanup: remove expired entries every 5 minutes
+  if (now - lastCleanup > 300_000) {
+    for (const [k, v] of rateLimitMap) {
+      if (now > v.resetTime) rateLimitMap.delete(k);
+    }
+    lastCleanup = now;
+  }
+
+  // Hard cap to prevent memory exhaustion
+  if (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES && !rateLimitMap.has(identifier)) {
+    return false;
+  }
+
   const record = rateLimitMap.get(identifier);
-  
+
   if (!record || now > record.resetTime) {
     rateLimitMap.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
     return true;
   }
-  
+
   if (record.count >= RATE_LIMIT_MAX_REQUESTS) {
     return false;
   }
-  
+
   record.count++;
   return true;
 }
 
-// Validate and sanitize token
+// Validate and sanitize token (JWT format: header.payload.signature)
 function extractToken(authorization: string | null): string | null {
   if (!authorization) return null;
-  
+
   // Only allow Bearer tokens
   if (!authorization.startsWith("Bearer ")) return null;
-  
+
   const token = authorization.slice(7).trim();
-  
-  // Basic validation: JWT tokens are base64url encoded and have 3 parts
-  if (!token || token.length < 20) return null;
-  
+
   // Prevent potential injection by checking for suspicious characters
-  if (!/^[A-Za-z0-9._-]+$/.test(token)) return null;
-  
+  if (!token || !/^[A-Za-z0-9._-]+$/.test(token)) return null;
+
+  // Validate JWT structure: must have 3 dot-separated parts
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts.some((p) => p.length === 0)) return null;
+
   return token;
 }
 
@@ -122,8 +139,10 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const search = (searchParams.get("search") || "").trim().slice(0, 200);
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const pageSize = Math.min(100, Math.max(10, parseInt(searchParams.get("pageSize") || "20", 10)));
+    const page = Math.min(10000, Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1));
+    const pageSize = Math.min(100, Math.max(10, parseInt(searchParams.get("pageSize") || "20", 10) || 20));
+    const roleFilter = searchParams.get("role") || "";
+    const allowedRoles = ["owner", "admin", "user"];
     const from = (page - 1) * pageSize;
     const to = from + pageSize - 1;
 
@@ -138,10 +157,14 @@ export async function GET(request: Request) {
       query = query.ilike("email", `%${escaped}%`);
     }
 
+    if (allowedRoles.includes(roleFilter)) {
+      query = query.eq("role", roleFilter);
+    }
+
     const { data, error, count } = await query;
 
     if (error) {
-      console.error("Error loading users:", error);
+      console.error("Error loading users");
       return NextResponse.json(
         { message: "Failed to load users" },
         { status: 500 }
@@ -163,7 +186,7 @@ export async function GET(request: Request) {
       totalPages: count != null ? Math.ceil(count / pageSize) : 1,
     });
   } catch (error) {
-    console.error("Unexpected error in admin/users route:", error);
+    console.error("Unexpected error in admin/users route");
     return NextResponse.json(
       { message: "Internal server error" },
       { status: 500 }

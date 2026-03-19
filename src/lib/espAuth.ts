@@ -1,16 +1,32 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServer } from "./supabaseServer";
 
-// Rate limiting: in-memory store per station key
+// Rate limiting: in-memory store per station key with periodic cleanup
 const rateLimitMap = new Map<
   string,
   { count: number; resetTime: number }
 >();
 const RATE_LIMIT_WINDOW = 60_000; // 1 minute
 const RATE_LIMIT_MAX = 120; // 120 requests per minute (ESP32 polls every ~5s + battery updates)
+const RATE_LIMIT_MAX_ENTRIES = 1000; // Prevent unbounded growth
+let lastCleanup = Date.now();
 
 function checkRateLimit(key: string): boolean {
   const now = Date.now();
+
+  // Periodic cleanup: remove expired entries every 5 minutes
+  if (now - lastCleanup > 300_000) {
+    for (const [k, v] of rateLimitMap) {
+      if (now > v.resetTime) rateLimitMap.delete(k);
+    }
+    lastCleanup = now;
+  }
+
+  // Hard cap: reject if map is full (DoS protection)
+  if (rateLimitMap.size >= RATE_LIMIT_MAX_ENTRIES && !rateLimitMap.has(key)) {
+    return false;
+  }
+
   const record = rateLimitMap.get(key);
 
   if (!record || now > record.resetTime) {
@@ -39,7 +55,7 @@ export async function authenticateStation(
     request.headers.get("x-station-key") ||
     request.headers.get("X-Station-Key");
 
-  if (!stationKey || stationKey.length < 16) {
+  if (!stationKey || stationKey.length < 32) {
     return NextResponse.json(
       { error: "Authentication required" },
       { status: 401 }

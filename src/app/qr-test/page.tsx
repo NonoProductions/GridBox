@@ -27,7 +27,7 @@ function QRTestContent() {
     try {
       const { data, error } = await supabase
         .from('stations')
-        .select('*')
+        .select('id, name, description, lat, lng, available_units, total_units, address, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, charge_enabled, opening_hours, last_seen')
         .eq('is_active', true)
         .order('created_at', { ascending: false });
 
@@ -50,7 +50,7 @@ function QRTestContent() {
     try {
       const { data, error } = await supabase
         .from('stations')
-        .select('*')
+        .select('id, name, description, lat, lng, available_units, total_units, address, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, charge_enabled, opening_hours, last_seen')
         .eq('id', stationId)
         .single();
 

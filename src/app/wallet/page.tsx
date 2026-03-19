@@ -66,21 +66,40 @@ function WalletContent() {
       setInitialLoading(true);
       setError(null);
 
-      // Prüfe ob User eingeloggt ist
-      const { data: { user } } = await supabase.auth.getUser();
-      
+      // getSession() liest aus localStorage – kein Netzwerkhop
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+
       if (!user) {
         setError("Bitte melde dich an, um dein Wallet zu sehen");
         setInitialLoading(false);
         return;
       }
 
-      // Lade Wallet-Balance
-      const { data: walletData, error: walletError } = await supabase
-        .from('wallets')
-        .select('balance')
-        .eq('user_id', user.id)
-        .single();
+      // Alle drei Queries parallel ausführen
+      const [
+        { data: walletData, error: walletError },
+        { data: rentalData, error: rentalError },
+        { data: transactionsData, error: transactionsError },
+      ] = await Promise.all([
+        supabase
+          .from('wallets')
+          .select('balance')
+          .eq('user_id', user.id)
+          .single(),
+        supabase
+          .from('rentals')
+          .select('id, station_id, started_at, start_price, price_per_minute, powerbank_id')
+          .eq('user_id', user.id)
+          .eq('status', 'active')
+          .maybeSingle(),
+        supabase
+          .from('transactions')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(3),
+      ]);
 
       if (walletError) {
         console.error("Wallet Fehler:", walletError);
@@ -89,31 +108,32 @@ function WalletContent() {
         setBalance(parseFloat(walletData.balance));
       }
 
-      // Prüfe auf aktive Ausleihe für Live-Counter
-      let { data: rentalData, error: rentalError } = await supabase
-        .from('rentals')
-        .select('id, station_id, started_at, start_price, price_per_minute, powerbank_id')
-        .eq('user_id', user.id)
-        .eq('status', 'active')
-        .maybeSingle();
-
       const missingPowerbankColumn =
         !!rentalError &&
         `${rentalError.code ?? ''} ${rentalError.message ?? ''} ${rentalError.details ?? ''}`.toLowerCase().includes('powerbank_id');
 
       if (missingPowerbankColumn) {
-        const legacy = await supabase
+        const { data: legacyData, error: legacyError } = await supabase
           .from('rentals')
           .select('id, station_id, started_at, start_price, price_per_minute')
           .eq('user_id', user.id)
           .eq('status', 'active')
           .maybeSingle();
-        rentalData = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
-        rentalError = legacy.error;
-      }
-
-      if (rentalError) {
+        if (!legacyError && legacyData) {
+          setActiveRental({
+            id: legacyData.id,
+            station_id: legacyData.station_id,
+            started_at: legacyData.started_at,
+            start_price: parseFloat(legacyData.start_price),
+            price_per_minute: parseFloat(legacyData.price_per_minute),
+            powerbank_id: null,
+          });
+        } else {
+          setActiveRental(null);
+        }
+      } else if (rentalError) {
         console.error("Rental Fehler:", rentalError);
+        setActiveRental(null);
       } else if (rentalData) {
         setActiveRental({
           id: rentalData.id,
@@ -126,14 +146,6 @@ function WalletContent() {
       } else {
         setActiveRental(null);
       }
-
-      // Lade letzte 3 Transaktionen
-      const { data: transactionsData, error: transactionsError } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(3);
 
       if (transactionsError) {
         console.error("Transaktionen Fehler:", transactionsError);
@@ -161,9 +173,9 @@ function WalletContent() {
     setError(null);
     
     try {
-      // Hole User
-      const { data: { user } } = await supabase.auth.getUser();
-      
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
+
       if (!user) {
         setError("Bitte melde dich an");
         setLoading(false);
@@ -281,10 +293,30 @@ function WalletContent() {
 
   if (initialLoading) {
     return (
-      <main className="min-h-[calc(100vh-0px)] flex items-center justify-center bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
-        <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
-          <p className="text-slate-500 dark:text-gray-400">Lade Wallet...</p>
+      <main className="min-h-[calc(100vh-0px)] bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
+        <div className="px-5 pt-20 pb-6 space-y-8 animate-pulse">
+          <div className="text-center space-y-2">
+            <div className="h-9 w-24 bg-slate-200 dark:bg-white/10 rounded-lg mx-auto" />
+            <div className="h-4 w-40 bg-slate-100 dark:bg-white/5 rounded mx-auto" />
+          </div>
+          <div className="text-center space-y-3">
+            <div className="h-12 w-32 bg-slate-200 dark:bg-white/10 rounded-xl mx-auto" />
+            <div className="h-11 w-40 bg-slate-200 dark:bg-white/10 rounded-xl mx-auto" />
+          </div>
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center justify-between py-3 border-b border-slate-100 dark:border-white/5">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-slate-200 dark:bg-white/10" />
+                  <div className="space-y-1.5">
+                    <div className="h-4 w-32 bg-slate-200 dark:bg-white/10 rounded" />
+                    <div className="h-3 w-20 bg-slate-100 dark:bg-white/5 rounded" />
+                  </div>
+                </div>
+                <div className="h-5 w-14 bg-slate-200 dark:bg-white/10 rounded" />
+              </div>
+            ))}
+          </div>
         </div>
       </main>
     );

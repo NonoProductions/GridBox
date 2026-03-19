@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
-import StationManager, { Station } from "@/components/StationManager";
+import StationManager, { Station, computeRealAvailability } from "@/components/StationManager";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
 import { notifyRentalSuccess, notifyRentalError } from "@/lib/notifications";
 import { getAbsoluteStationPhotoUrl } from "@/lib/photoUtils";
@@ -1423,17 +1423,16 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
             const { data: batteryCheck } = await supabase
               .from('stations')
-              .select('battery_voltage, battery_percentage, available_units')
+              .select('battery_voltage, battery_percentage, available_units, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, powerbank_id, total_units')
               .eq('id', currentStation.id)
               .single();
 
             if (batteryCheck) {
-              const hasBattery = batteryCheck.battery_voltage != null && batteryCheck.battery_percentage != null;
-              const shouldBeAvailable = hasBattery ? 1 : 0;
-              if ((batteryCheck.available_units ?? 0) < shouldBeAvailable) {
+              const realAvailable = computeRealAvailability(batteryCheck);
+              if ((batteryCheck.available_units ?? 0) < realAvailable) {
                 await supabase
                   .from('stations')
-                  .update({ available_units: shouldBeAvailable })
+                  .update({ available_units: realAvailable })
                   .eq('id', currentStation.id);
               }
             }
@@ -1441,7 +1440,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             const getPosition = () =>
               new Promise<GeolocationPosition>((resolve, reject) => {
                 if (!navigator.geolocation) { reject(new Error('Geolocation nicht unterstützt.')); return; }
-                navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+                navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 });
               });
 
             let userLat: number, userLng: number;

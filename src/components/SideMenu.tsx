@@ -197,8 +197,9 @@ export default function SideMenu({
               </div>
 
               {/* Anmeldebutton */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/login?theme=${isDarkMode ? "dark" : "light"}`);
                 }}
@@ -214,8 +215,9 @@ export default function SideMenu({
 
             <div className="py-2">
               {/* Hilfe - immer verfügbar */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/hilfe?theme=${isDarkMode ? "dark" : "light"}`);
                 }}
@@ -276,8 +278,9 @@ export default function SideMenu({
 
             <div className="py-2">
               {/* Wallet */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/wallet?theme=${isDarkMode ? "dark" : "light"}`);
                 }}
@@ -293,8 +296,9 @@ export default function SideMenu({
               </button>
 
               {/* Verlauf */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/verlauf?theme=${isDarkMode ? "dark" : "light"}`);
                 }}
@@ -311,8 +315,9 @@ export default function SideMenu({
               </button>
 
               {/* Reservierung */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/reservierung?theme=${isDarkMode ? "dark" : "light"}`);
                 }}
@@ -330,8 +335,9 @@ export default function SideMenu({
               </button>
 
               {/* Hilfe */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/hilfe?theme=${isDarkMode ? "dark" : "light"}`);
                 }}
@@ -351,6 +357,7 @@ export default function SideMenu({
               {userIsOwner && (
                 <button 
                   onClick={() => {
+                    window.dispatchEvent(new CustomEvent("navigation-start"));
                     onClose();
                     router.push(`/dashboard?theme=${isDarkMode ? "dark" : "light"}`);
                   }}
@@ -366,8 +373,9 @@ export default function SideMenu({
               )}
 
               {/* Einstellungen */}
-              <button 
+              <button
                 onClick={() => {
+                  window.dispatchEvent(new CustomEvent("navigation-start"));
                   onClose();
                   router.push(`/profile?theme=${isDarkMode ? "dark" : "light"}`);
                 }}

@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 
   if (!jwtSecret || !supabaseUrl) {
-    console.error("Missing SUPABASE_JWT_SECRET or NEXT_PUBLIC_SUPABASE_URL");
+    console.error("Missing required server configuration for token endpoint");
     return NextResponse.json(
       { error: "Server configuration error" },
       { status: 500 }
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   // Extract project ref from Supabase URL (e.g., "igrsoizvjyniuefyzzro" from https://igrsoizvjyniuefyzzro.supabase.co)
   const refMatch = supabaseUrl.match(/https?:\/\/([^.]+)\.supabase/);
   if (!refMatch) {
-    console.error("Cannot extract project ref from SUPABASE_URL:", supabaseUrl);
+    console.error("Cannot extract project ref from SUPABASE_URL");
     return NextResponse.json(
       { error: "Server configuration error" },
       { status: 500 }
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
       supabase_host: `${projectRef}.supabase.co`,
     });
   } catch (err) {
-    console.error("JWT signing error:", err);
+    console.error("JWT signing error");
     return NextResponse.json(
       { error: "Token generation failed" },
       { status: 500 }

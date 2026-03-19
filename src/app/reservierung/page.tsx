@@ -112,32 +112,58 @@ function ReservierungContent() {
     }
   };
 
-  // Load existing reservation
+  // Einmaliger Init: getSession() (localStorage) + Stationen & Reservierung parallel laden
   useEffect(() => {
-    const loadReservation = async () => {
-      const { data: { user: u } } = await supabase.auth.getUser();
+    const init = async () => {
+      // getSession() liest aus localStorage – kein Netzwerkhop
+      const { data: { session } } = await supabase.auth.getSession();
+      const u = session?.user ?? null;
+      setUser(u ? { id: u.id } : null);
+      setAuthChecked(true);
+
       if (!u) {
+        setStationsLoading(false);
         setReservationLoading(false);
         return;
       }
 
-      // Lade aktive/pending Reservierung
-      const { data: reservation, error: resError } = await supabase
-        .from("reservations")
-        .select(`
-          id,
-          station_id,
-          reserved_at,
-          status,
-          stations(id, name, address, lat, lng)
-        `)
-        .eq("user_id", u.id)
-        .in("status", ["pending", "confirmed"])
-        .order("reserved_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      // Stationen + aktive Reservierung parallel laden
+      const [stationsResult, reservationResult] = await Promise.all([
+        supabase
+          .from("stations")
+          .select("id, name, address, available_units, total_units, lat, lng, photo_url")
+          .eq("is_active", true)
+          .order("name"),
+        supabase
+          .from("reservations")
+          .select(`id, station_id, reserved_at, status, stations(id, name, address, lat, lng)`)
+          .eq("user_id", u.id)
+          .in("status", ["pending", "confirmed"])
+          .order("reserved_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
 
-      if (!resError && reservation && reservation.stations) {
+      // Stationen verarbeiten
+      if (stationsResult.error) {
+        setStationsError("Stationen konnten nicht geladen werden.");
+        setStations([]);
+      } else {
+        setStations((stationsResult.data || []).map((s: { id: string; name: string; address?: string; available_units?: number; total_units?: number; lat: number; lng: number; photo_url?: string }) => ({
+          id: s.id,
+          name: s.name,
+          address: s.address || "",
+          availablePowerbanks: s.available_units ?? 0,
+          totalPowerbanks: s.total_units ?? 0,
+          coordinates: { lat: Number(s.lat), lng: Number(s.lng) },
+          photo_url: s.photo_url
+        })));
+      }
+      setStationsLoading(false);
+
+      // Reservierung verarbeiten
+      const reservation = reservationResult.data;
+      if (!reservationResult.error && reservation && reservation.stations) {
         const station = Array.isArray(reservation.stations) ? reservation.stations[0] : reservation.stations;
         setExistingReservation({
           id: reservation.id,
@@ -150,80 +176,33 @@ function ReservierungContent() {
           station_lng: station.lng
         });
       }
-
       setReservationLoading(false);
     };
 
-    loadReservation();
+    init();
   }, []);
 
-  // Auth check & load stations
+  // Distanz berechnen + sortieren wenn Standort verfügbar wird (kein neuer Fetch)
   useEffect(() => {
-    const init = async () => {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      setUser(u ? { id: u.id } : null);
-      setAuthChecked(true);
+    if (!userLocation || stations.length === 0) return;
 
-      if (!u) {
-        setStationsLoading(false);
-        return;
-      }
-
-      setStationsLoading(true);
-      setStationsError(null);
-      const { data, error } = await supabase
-        .from("stations")
-        .select("id, name, address, available_units, total_units, lat, lng, photo_url")
-        .eq("is_active", true)
-        .order("name");
-
-      if (error) {
-        setStationsError("Stationen konnten nicht geladen werden.");
-        setStations([]);
-      } else {
-        let stationsWithDistance = (data || []).map((s: { id: string; name: string; address?: string; available_units?: number; total_units?: number; lat: number; lng: number; photo_url?: string }) => {
-          const station = {
-            id: s.id,
-            name: s.name,
-            address: s.address || "",
-            availablePowerbanks: s.available_units ?? 0,
-            totalPowerbanks: s.total_units ?? 0,
-            coordinates: { lat: Number(s.lat), lng: Number(s.lng) },
-            photo_url: s.photo_url
-          };
-
-          // Calculate distance if user location is available
-          if (userLocation) {
-            const distance = calculateDistance(
-              userLocation.lat,
-              userLocation.lng,
-              station.coordinates.lat,
-              station.coordinates.lng
-            );
-            return {
-              ...station,
-              distance: formatDistance(distance),
-              distanceInMeters: distance
-            };
-          }
-
-          return station;
-        });
-
-        // Sort by distance if available, otherwise by name
-        if (userLocation) {
-          stationsWithDistance.sort((a, b) => {
-            const distA = (a as Station & { distanceInMeters?: number }).distanceInMeters ?? Infinity;
-            const distB = (b as Station & { distanceInMeters?: number }).distanceInMeters ?? Infinity;
-            return distA - distB;
-          });
-        }
-
-        setStations(stationsWithDistance);
-      }
-      setStationsLoading(false);
-    };
-    init();
+    setStations((prev) => {
+      const withDistance = prev.map((station) => {
+        const distance = calculateDistance(
+          userLocation.lat,
+          userLocation.lng,
+          station.coordinates.lat,
+          station.coordinates.lng
+        );
+        return { ...station, distance: formatDistance(distance), distanceInMeters: distance };
+      });
+      withDistance.sort((a, b) => {
+        const distA = (a as Station & { distanceInMeters?: number }).distanceInMeters ?? Infinity;
+        const distB = (b as Station & { distanceInMeters?: number }).distanceInMeters ?? Infinity;
+        return distA - distB;
+      });
+      return withDistance;
+    });
   }, [userLocation]);
 
   // Pricing model: 5 cents per minute + 10 cents activation fee
@@ -561,8 +540,17 @@ function ReservierungContent() {
   if (reservationLoading) {
     return (
       <main className="min-h-[calc(100vh-0px)] bg-white dark:bg-[#282828] text-slate-900 dark:text-white">
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
+        <div className="px-5 pt-20 pb-6 space-y-6 animate-pulse">
+          <div className="text-center space-y-2">
+            <div className="h-8 w-48 bg-slate-200 dark:bg-white/10 rounded-lg mx-auto" />
+            <div className="h-4 w-36 bg-slate-100 dark:bg-white/5 rounded mx-auto" />
+          </div>
+          <div className="h-32 rounded-2xl bg-slate-100 dark:bg-white/5" />
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-20 rounded-xl bg-slate-100 dark:bg-white/5" />
+            ))}
+          </div>
         </div>
       </main>
     );

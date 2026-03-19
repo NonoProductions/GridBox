@@ -42,11 +42,20 @@ function OnboardingContent() {
       const { error: updateError } = await supabase.auth.updateUser({ data: { full_name: trimmed } });
       if (updateError) throw updateError;
       
-      // Check if there's a return URL from before login
+      // Check if there's a return URL from before login (validate to prevent open redirect)
       const returnUrl = localStorage.getItem('auth_return_url');
       if (returnUrl) {
         localStorage.removeItem('auth_return_url');
-        router.replace(returnUrl);
+        try {
+          const parsed = new URL(returnUrl, window.location.origin);
+          if (parsed.origin === window.location.origin && parsed.pathname.startsWith('/')) {
+            router.replace(parsed.pathname + parsed.search);
+          } else {
+            router.replace("/app");
+          }
+        } catch {
+          router.replace("/app");
+        }
       } else {
         router.replace("/app");
       }

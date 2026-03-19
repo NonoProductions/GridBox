@@ -5,6 +5,20 @@ import { supabase } from "@/lib/supabaseClient";
 // Always show the generic powerbank image on the rent flow
 import { isStationOnline, computeRealAvailability } from "@/components/StationManager";
 
+function getBestBatteryPercentage(s: {
+  battery_percentage?: number | null;
+  slot_1_battery_percentage?: number | null;
+  slot_2_battery_percentage?: number | null;
+}): number | null {
+  const candidates = [
+    s.slot_1_battery_percentage,
+    s.slot_2_battery_percentage,
+    s.battery_percentage,
+  ].filter((v): v is number => typeof v === "number" && v >= 0);
+  if (candidates.length === 0) return null;
+  return Math.max(...candidates);
+}
+
 interface Station {
   id: string;
   name: string;
@@ -21,6 +35,8 @@ interface Station {
   powerbank_id?: string | null;
   last_seen?: string | null;
   updated_at?: string | null;
+  slot_1_battery_percentage?: number | null;
+  slot_2_battery_percentage?: number | null;
 }
 
 interface RentalConfirmationModalProps {
@@ -50,11 +66,13 @@ export default function RentalConfirmationModal({
   // Verfügbarkeit unter Berücksichtigung des Verbindungsstatus berechnen
   const [availableUnits, setAvailableUnits] = useState<number>(computeRealAvailability(station));
   const [stationOnline, setStationOnline] = useState<boolean>(isStationOnline(station));
+  const [bestBatteryPct, setBestBatteryPct] = useState<number | null>(getBestBatteryPercentage(station));
 
   useEffect(() => {
     setAvailableUnits(computeRealAvailability(station));
     setStationOnline(isStationOnline(station));
-  }, [station.battery_voltage, station.battery_percentage, station.last_seen]);
+    setBestBatteryPct(getBestBatteryPercentage(station));
+  }, [station.battery_voltage, station.battery_percentage, station.last_seen, station.slot_1_battery_percentage, station.slot_2_battery_percentage]);
 
   // Beim Öffnen und bei Fokus: aktuelle Batterie-Daten + last_seen der Station laden
   useEffect(() => {
@@ -63,7 +81,7 @@ export default function RentalConfirmationModal({
       try {
         let { data, error: fetchError } = await supabase
           .from("stations")
-          .select("powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at")
+          .select("powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at, slot_1_battery_percentage, slot_2_battery_percentage")
           .eq("id", station.id)
           .maybeSingle();
         const missingPowerbankColumn =
@@ -75,13 +93,14 @@ export default function RentalConfirmationModal({
             .select("battery_voltage, battery_percentage, last_seen, updated_at")
             .eq("id", station.id)
             .maybeSingle();
-          data = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+          data = legacy.data ? { ...legacy.data, powerbank_id: null, slot_1_battery_percentage: null, slot_2_battery_percentage: null } : null;
           fetchError = legacy.error;
         }
         if (!fetchError && data != null) {
           const online = isStationOnline(data);
           setStationOnline(online);
           setAvailableUnits(computeRealAvailability(data));
+          setBestBatteryPct(getBestBatteryPercentage(data));
         }
       } catch {
         // Fallback: Wert von der übergebenen Station behalten
@@ -145,7 +164,7 @@ export default function RentalConfirmationModal({
             .select("battery_voltage, battery_percentage")
             .eq("id", station.id)
             .maybeSingle();
-          data = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+          data = legacy.data ? { ...legacy.data, powerbank_id: null } as typeof data : null;
         }
 
         if (data) {
@@ -383,29 +402,47 @@ export default function RentalConfirmationModal({
               >
                 {station.name}
               </h3>
-              <div className="flex items-center">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  viewBox="5 0 24 24"
-                  width="24"
-                  height="24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className={`flex-shrink-0 ${stationOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}
-                >
-                  <path d="M13 11h3l-4 6v-4H9l4-6v4z" />
-                </svg>
-                <span
-                  className={`text-base ml-2 ${
-                    isDarkMode ? "text-white" : "text-slate-900"
-                  }`}
-                >
-                  <span className="font-semibold">{availableUnits}</span>{" "}
-                  verfügbar
-                </span>
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="5 0 24 24"
+                    width="24"
+                    height="24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={`flex-shrink-0 ${stationOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'}`}
+                  >
+                    <path d="M13 11h3l-4 6v-4H9l4-6v4z" />
+                  </svg>
+                  <span
+                    className={`text-base ml-2 ${
+                      isDarkMode ? "text-white" : "text-slate-900"
+                    }`}
+                  >
+                    <span className="font-semibold">{availableUnits}</span>{" "}
+                    verfügbar
+                  </span>
+                </div>
+                {bestBatteryPct !== null && (
+                  <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-semibold ${
+                    bestBatteryPct >= 60
+                      ? isDarkMode ? "bg-emerald-900/40 text-emerald-400" : "bg-emerald-100 text-emerald-700"
+                      : bestBatteryPct >= 30
+                      ? isDarkMode ? "bg-yellow-900/40 text-yellow-400" : "bg-yellow-100 text-yellow-700"
+                      : isDarkMode ? "bg-red-900/40 text-red-400" : "bg-red-100 text-red-700"
+                  }`}>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="2" y="7" width="16" height="10" rx="2" />
+                      <path d="M22 11v2" strokeWidth="2.5" strokeLinecap="round" />
+                      <rect x="3" y="8" width={`${Math.round(bestBatteryPct / 100 * 14)}`} height="8" rx="1" fill="currentColor" stroke="none" />
+                    </svg>
+                    {Math.round(bestBatteryPct)} %
+                  </div>
+                )}
               </div>
               {/* Verbindungsstatus anzeigen */}
               {!stationOnline && (

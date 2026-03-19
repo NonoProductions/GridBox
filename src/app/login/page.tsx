@@ -14,12 +14,23 @@ function LoginContent() {
   const [supabaseConfigured, setSupabaseConfigured] = useState(true);
 
   // returnUrl aus echter URL (useSearchParams kann beim ersten Paint noch leer sein)
-  const returnUrl =
+  // Validate to prevent open redirect attacks
+  const rawReturnUrl =
     (typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("returnUrl") || "/app"
       : "/app") ||
     searchParams.get("returnUrl") ||
     "/app";
+
+  const returnUrl = (() => {
+    try {
+      const parsed = new URL(rawReturnUrl, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+      if (parsed.origin === (typeof window !== "undefined" ? window.location.origin : "http://localhost") && parsed.pathname.startsWith('/')) {
+        return parsed.pathname + parsed.search;
+      }
+    } catch { /* invalid URL */ }
+    return "/app";
+  })();
   const isFromRental = returnUrl.startsWith("/rent/");
   const [timeLeft, setTimeLeft] = useState<number | null>(null);
 

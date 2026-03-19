@@ -1,6 +1,10 @@
 "use client";
 
 export default function TestEnv() {
+  if (process.env.NODE_ENV === "production") {
+    return null;
+  }
+
   const envVars = {
     SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     SUPABASE_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? "✓ SET" : "✗ MISSING",

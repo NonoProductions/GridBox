@@ -18,6 +18,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import AnalyticsDashboard from "./AnalyticsDashboard";
 
 interface UserWithRole {
   user_id: string;
@@ -42,7 +43,7 @@ interface OwnerDashboardProps {
   variant?: "overlay" | "page";
 }
 
-type OwnerDashboardTab = 'overview' | 'stats' | 'stations' | 'users' | 'transactions';
+type OwnerDashboardTab = 'overview' | 'stats' | 'stations' | 'users' | 'transactions' | 'analytics';
 
 // Photo Manager Component
 function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onUpdate: (photos: string[]) => void; isDarkMode: boolean }) {
@@ -276,6 +277,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const [newUserRole, setNewUserRole] = useState<'admin' | 'user'>('user');
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
   const [usersCount, setUsersCount] = useState<number | null>(null);
   const [usersSearchQuery, setUsersSearchQuery] = useState("");
@@ -283,6 +285,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const [usersPageSize, setUsersPageSize] = useState(20);
   const [usersTotalCount, setUsersTotalCount] = useState<number | null>(null);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [usersRoleFilter, setUsersRoleFilter] = useState<'all' | 'owner' | 'admin' | 'user'>('all');
+  const [txPage, setTxPage] = useState(1);
+  const [txPageSize, setTxPageSize] = useState(20);
+  const [txStatusFilter, setTxStatusFilter] = useState<'all' | 'active' | 'completed'>('all');
+  const [txSearchQuery, setTxSearchQuery] = useState('');
+  const [txStationFilter, setTxStationFilter] = useState<string>('all');
   const [showOnlyConnected, setShowOnlyConnected] = useState(false);
   const [realtimeActive, setRealtimeActive] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -355,6 +363,17 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           <path d="M12 19l-7-7 7-7" />
         </svg>
       )
+    },
+    {
+      key: 'analytics',
+      label: 'Analytics',
+      icon: (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+          <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
+          <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
+          <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
+        </svg>
+      )
     }
   ];
 
@@ -382,7 +401,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       
       const { data, error } = await supabase
         .from('stations')
-        .select('*')
+        .select('id, name, description, lat, lng, available_units, total_units, address, owner_id, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, powerbank_id, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, charge_enabled, opening_hours, last_seen')
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -440,35 +459,21 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         setOwnerRentals([]);
         return;
       }
-      let { data, error } = await supabase
+      const { data, error } = await supabase
         .from("rentals")
-        .select("id, station_id, total_price, started_at, ended_at, status, powerbank_id")
+        .select("id, station_id, amount_cents, started_at, ended_at, status, powerbank_id")
         .in("station_id", stationIds)
         .order("started_at", { ascending: false });
-
-      const missingPowerbankColumn =
-        !!error &&
-        `${error.code ?? ''} ${error.message ?? ''} ${error.details ?? ''}`.toLowerCase().includes('powerbank_id');
-
-      if (missingPowerbankColumn) {
-        const legacy = await supabase
-          .from("rentals")
-          .select("id, station_id, total_price, started_at, ended_at, status")
-          .in("station_id", stationIds)
-          .order("started_at", { ascending: false });
-        data = legacy.data ? legacy.data.map((row: any) => ({ ...row, powerbank_id: null })) : [];
-        error = legacy.error;
-      }
 
       if (error) {
         logger.warn("Rentals für Statistiken (optional):", error.message);
         setOwnerRentals([]);
         return;
       }
-      const list = (data || []).map((r) => ({
+      const list = (data || []).map((r: any) => ({
         id: r.id,
         station_id: r.station_id,
-        total_price: r.total_price != null ? Number(r.total_price) : null,
+        total_price: r.amount_cents != null ? r.amount_cents / 100 : null,
         started_at: r.started_at,
         ended_at: r.ended_at ?? null,
         status: r.status ?? "",
@@ -483,8 +488,43 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     }
   }, [stations]);
 
+  // Lade Transaktionen über Admin-API (umgeht RLS)
+  const fetchTransactionRentals = React.useCallback(async () => {
+    try {
+      setStatsLoading(true);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) return;
+
+      const response = await fetch('/api/admin/rentals', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        logger.warn('Rentals API Fehler:', response.status);
+        setOwnerRentals([]);
+        return;
+      }
+      const payload = await response.json();
+      const list: Rental[] = (Array.isArray(payload?.rentals) ? payload.rentals : []).map((r: any) => ({
+        id: r.id,
+        station_id: r.station_id,
+        total_price: r.total_price != null ? Number(r.total_price) : null,
+        started_at: r.started_at,
+        ended_at: r.ended_at ?? null,
+        status: r.status ?? '',
+        powerbank_id: r.powerbank_id ?? null,
+      }));
+      setOwnerRentals(list);
+    } catch (e) {
+      logger.warn('fetchTransactionRentals Fehler:', e);
+      setOwnerRentals([]);
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
+
   // Lade Benutzer (mit Suche und Paginierung)
-  const fetchUsers = React.useCallback(async (opts?: { search?: string; page?: number; pageSize?: number }) => {
+  const fetchUsers = React.useCallback(async (opts?: { search?: string; page?: number; pageSize?: number; role?: string }) => {
     try {
       setUsersLoading(true);
       setError(null);
@@ -500,10 +540,12 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       const search = opts?.search ?? usersSearchQuery;
       const page = opts?.page ?? usersPage;
       const pageSize = opts?.pageSize ?? usersPageSize;
+      const role = opts?.role !== undefined ? opts.role : usersRoleFilter;
       const params = new URLSearchParams();
       if (search.trim()) params.set('search', search.trim());
       params.set('page', String(page));
       params.set('pageSize', String(pageSize));
+      if (role && role !== 'all') params.set('role', role);
 
       const response = await fetch(`/api/admin/users?${params.toString()}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -529,6 +571,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       if (opts?.page != null) setUsersPage(opts.page);
       if (opts?.pageSize != null) setUsersPageSize(opts.pageSize);
       if (opts?.search !== undefined) setUsersSearchQuery(opts.search);
+      if (opts?.role !== undefined) setUsersRoleFilter(opts.role as 'all' | 'owner' | 'admin' | 'user');
     } catch (err) {
       logger.error('Fehler beim Laden der Benutzer:', err);
       setError('Fehler beim Laden der Benutzer. Bitte versuchen Sie es erneut.');
@@ -538,7 +581,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     } finally {
       setUsersLoading(false);
     }
-  }, [usersSearchQuery, usersPage, usersPageSize]);
+  }, [usersSearchQuery, usersPage, usersPageSize, usersRoleFilter]);
 
   // Lösche Station (with validation and authorization check)
   const deleteStation = async (id: string) => {
@@ -848,27 +891,17 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         return;
       }
 
-      const { data: currentUserRole } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-
-      if (currentUserRole?.role !== 'owner') {
-        setError('Nur Owner können Rollen zuweisen');
-        return;
-      }
-
-      // Prevent self-demotion from owner
+      // Prevent self-demotion from owner (client-side pre-check)
       if (userId === user.id && role === 'user') {
         setError('Sie können sich nicht selbst die Owner-Rolle entziehen');
         return;
       }
 
-      const { error } = await supabase
-        .from('profiles')
-        .update({ role })
-        .eq('id', userId);
+      // Use secure server-side function for role assignment
+      const { error } = await supabase.rpc('assign_user_role', {
+        p_target_user_id: userId,
+        p_new_role: role,
+      });
 
       if (error) {
         logger.error('Role assignment error:', error);
@@ -886,10 +919,10 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   // Entferne Benutzerrolle (setzt auf 'user')
   const removeUserRole = async (userId: string) => {
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ role: 'user' })
-        .eq('id', userId);
+      const { error } = await supabase.rpc('assign_user_role', {
+        p_target_user_id: userId,
+        p_new_role: 'user',
+      });
 
       if (error) throw error;
       await fetchUsers();
@@ -945,15 +978,22 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       const variation = Math.sin(now + index) * 0.04;
       const batteryPct = Math.max(0, Math.min(100, Math.round(basePercentage + variation * 100)));
       // Unterschiedliche Auslastung: manche Stationen voll, manche leer, manche teilweise
-      const occupancyPattern = index % 3; // 0 = oft 1 belegt, 1 = oft leer, 2 = wechselnd
-      const totalUnits = station.total_units ?? 4;
-      const occupied = occupancyPattern === 0 ? 1 : occupancyPattern === 1 ? 0 : (Math.sin(now + index * 2) > 0 ? 1 : 0);
+      const totalUnits = station.total_units ?? 2;
+      const slot1Occupied = index % 3 !== 1;
+      const slot2Occupied = index % 3 === 0;
+      const occupied = (slot1Occupied ? 1 : 0) + (slot2Occupied ? 1 : 0);
       const availableUnits = Math.max(0, totalUnits - occupied);
 
       return {
         ...station,
         battery_voltage: baseVoltage + variation,
         battery_percentage: batteryPct,
+        slot_1_battery_voltage: slot1Occupied ? baseVoltage + variation : null,
+        slot_1_battery_percentage: slot1Occupied ? batteryPct : null,
+        slot_1_powerbank_id: slot1Occupied ? `PB-DEMO-${index * 2 + 1}` : null,
+        slot_2_battery_voltage: slot2Occupied ? baseVoltage + variation * 0.9 : null,
+        slot_2_battery_percentage: slot2Occupied ? Math.max(0, Math.min(100, batteryPct - 15)) : null,
+        slot_2_powerbank_id: slot2Occupied ? `PB-DEMO-${index * 2 + 2}` : null,
         available_units: availableUnits,
         updated_at: new Date().toISOString(),
         is_active: index % 10 !== 2, // eine Station gelegentlich „pausiert“
@@ -1046,6 +1086,17 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       fetchOwnerRentals();
     }
   }, [activeTab, stations.length, testDataEnabled, originalStations, fetchOwnerRentals]);
+
+  // Lade Rentals für Transaktionen-Tab (über Admin-API, umgeht RLS)
+  useEffect(() => {
+    if (activeTab !== 'transactions') return;
+    if (testDataEnabled) {
+      setOwnerRentals(generateTestRentals(originalStations.length > 0 ? originalStations : stations));
+    } else {
+      fetchTransactionRentals();
+    }
+    setTxPage(1);
+  }, [activeTab]); // fetchTransactionRentals nicht in deps
 
   // Automatische Updates: ROBUSTES System mit Realtime + Polling Backup
   useEffect(() => {
@@ -1303,32 +1354,77 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const inactiveStationsCount = stations.length - activeStationsCount;
   const totalCapacity = stations.reduce((sum, station) => sum + (station.total_units || 0), 0);
 
-  const hasStationPowerbank = (station: Station) => {
-    const hasPowerbankId = typeof station.powerbank_id === "string" && station.powerbank_id.trim().length > 0;
-    const hasLegacyBatteryData =
-      station.battery_voltage !== undefined &&
-      station.battery_voltage !== null &&
-      station.battery_percentage !== undefined &&
-      station.battery_percentage !== null;
-    return hasPowerbankId || hasLegacyBatteryData;
+  // Prüfe ob ein bestimmter Slot belegt ist
+  const isSlotOccupied = (station: Station, slotNumber: number): boolean => {
+    if (slotNumber === 1) {
+      const hasSlot1Id = typeof station.slot_1_powerbank_id === 'string' && station.slot_1_powerbank_id.trim().length > 0;
+      const hasSlot1Battery = station.slot_1_battery_voltage != null && station.slot_1_battery_percentage != null;
+      // Fallback auf Legacy-Felder für Slot 1
+      const hasLegacy = (typeof station.powerbank_id === 'string' && station.powerbank_id.trim().length > 0) ||
+        (station.battery_voltage != null && station.battery_percentage != null);
+      return hasSlot1Id || hasSlot1Battery || hasLegacy;
+    }
+    if (slotNumber === 2) {
+      const hasSlot2Id = typeof station.slot_2_powerbank_id === 'string' && station.slot_2_powerbank_id.trim().length > 0;
+      const hasSlot2Battery = station.slot_2_battery_voltage != null && station.slot_2_battery_percentage != null;
+      return hasSlot2Id || hasSlot2Battery;
+    }
+    return false;
   };
+
+  // Slot-spezifische Daten abrufen
+  const getSlotData = (station: Station, slotNumber: number) => {
+    if (slotNumber === 1) {
+      return {
+        voltage: station.slot_1_battery_voltage ?? station.battery_voltage ?? null,
+        percentage: station.slot_1_battery_percentage ?? station.battery_percentage ?? null,
+        powerbankId: station.slot_1_powerbank_id ?? station.powerbank_id ?? null,
+      };
+    }
+    if (slotNumber === 2) {
+      return {
+        voltage: station.slot_2_battery_voltage ?? null,
+        percentage: station.slot_2_battery_percentage ?? null,
+        powerbankId: station.slot_2_powerbank_id ?? null,
+      };
+    }
+    return { voltage: null, percentage: null, powerbankId: null };
+  };
+
+  // Zähle belegte Slots einer Station
+  const countOccupiedSlots = (station: Station): number => {
+    const totalSlots = station.total_units ?? 0;
+    let count = 0;
+    for (let i = 1; i <= totalSlots; i++) {
+      if (isSlotOccupied(station, i)) count++;
+    }
+    return count;
+  };
+
+  const hasStationPowerbank = (station: Station) => countOccupiedSlots(station) > 0;
   
-  // Zähle eingelegte Powerbanks (primär per powerbank_id)
+  // Zähle eingelegte Powerbanks über alle Stationen
   const totalOccupiedUnits = stations.reduce((sum, station) => {
-    return sum + (hasStationPowerbank(station) ? 1 : 0);
+    return sum + countOccupiedSlots(station);
   }, 0);
   
   const totalAvailableUnits = totalCapacity - totalOccupiedUnits;
   
-  // Durchschnittliche Batterie nur von Stationen mit Batterie-Daten
-  const stationsWithBattery = stations.filter(station => 
-    station.battery_percentage !== undefined && 
-    station.battery_percentage !== null
-  );
+  // Durchschnittliche Batterie über alle belegten Slots
+  const allBatteryPercentages: number[] = [];
+  stations.forEach(station => {
+    const totalSlots = station.total_units ?? 0;
+    for (let i = 1; i <= totalSlots; i++) {
+      if (isSlotOccupied(station, i)) {
+        const data = getSlotData(station, i);
+        if (data.percentage != null) allBatteryPercentages.push(data.percentage);
+      }
+    }
+  });
   const averageBattery =
-    stationsWithBattery.length > 0
+    allBatteryPercentages.length > 0
       ? Math.round(
-          (stationsWithBattery.reduce((sum, station) => sum + (station.battery_percentage ?? 0), 0) / stationsWithBattery.length) * 10
+          (allBatteryPercentages.reduce((sum, p) => sum + p, 0) / allBatteryPercentages.length) * 10
         ) / 10
       : null;
   const utilizationPercentage =
@@ -1410,16 +1506,38 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       .map(([date, count]) => ({ date: date.slice(5), anzahl: count }));
   }, [rentalsInRange, statsTimeRangeDays]);
 
-  const transactionsData = stations.length > 0
-    ? stations.slice(0, 8).map((station, index) => ({
-        id: station.id ?? `tx-${index}`,
-        stationName: station.name,
-        amount: station.rental_cost ?? 3.5,
-        status: station.is_active ? 'abgeschlossen' : 'wartend',
-        timestamp: station.updated_at ? new Date(station.updated_at) : null,
-        powerbanksMoved: (station.total_units || 0) - (station.available_units || 0),
-      }))
-    : [];
+  // Stations-Map für schnelle Lookups in Transaktionen
+  const stationMap = useMemo(() => {
+    const map = new Map<string, string>();
+    stations.forEach((s) => { if (s.id) map.set(s.id, s.name); });
+    return map;
+  }, [stations]);
+
+  // Transaktionen aus echten Rental-Daten mit Filtern
+  const filteredRentals = useMemo(() => {
+    let result = ownerRentals;
+    if (txStatusFilter === 'active') {
+      result = result.filter((r) => r.status === 'active' || !r.ended_at);
+    } else if (txStatusFilter === 'completed') {
+      result = result.filter((r) => r.status !== 'active' && !!r.ended_at);
+    }
+    if (txStationFilter !== 'all') {
+      result = result.filter((r) => r.station_id === txStationFilter);
+    }
+    if (txSearchQuery.trim()) {
+      const q = txSearchQuery.toLowerCase();
+      result = result.filter((r) => {
+        const name = stationMap.get(r.station_id ?? '') ?? '';
+        return name.toLowerCase().includes(q) || (r.powerbank_id ?? '').toLowerCase().includes(q);
+      });
+    }
+    return result;
+  }, [ownerRentals, txStatusFilter, txStationFilter, txSearchQuery, stationMap]);
+
+  const txTotalPages = Math.ceil(filteredRentals.length / txPageSize) || 1;
+  const txPagedRentals = filteredRentals.slice((txPage - 1) * txPageSize, txPage * txPageSize);
+  const txTotalRevenue = filteredRentals.reduce((sum, r) => sum + (r.total_price ?? 0), 0);
+  const txActiveCount = ownerRentals.filter((r) => r.status === 'active' || !r.ended_at).length;
 
   const shellClasses = [
     "flex",
@@ -1484,6 +1602,24 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               <h2 className="text-2xl font-bold leading-tight">Owner Dashboard</h2>
             </div>
           </div>
+          {/* Hamburger Button - nur auf Mobile */}
+          {isMobile && (
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className={`rounded-xl p-2 transition-colors ${
+                isDarkMode
+                  ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+              aria-label="Menü öffnen"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+            </button>
+          )}
           {/* Rechte Seite des Headers - Testdaten Switch */}
           <div className="flex items-center gap-2 sm:gap-3">
             <div className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg border transition-colors ${
@@ -1531,14 +1667,45 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         </div>
 
         <div className={`flex flex-1 overflow-hidden ${isMobile ? 'flex-col' : ''} min-h-0`}>
+          {/* Mobile Backdrop */}
+          {isMobile && (
+            <div
+              className={`fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity duration-300 ${
+                mobileMenuOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+              }`}
+              onClick={() => setMobileMenuOpen(false)}
+            />
+          )}
           {/* Tabs / Navigation */}
           <nav
             className={`flex shrink-0 gap-3 ${
               isMobile
-                ? 'w-full overflow-x-auto border-b px-2.5 py-2'
+                ? `fixed top-0 left-0 h-full z-50 w-72 flex-col px-3 py-5 overflow-y-auto overscroll-contain
+                   transform transition-transform duration-300 ease-in-out
+                   ${mobileMenuOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`
                 : 'w-52 flex-col border-r px-2 py-3.5 h-full max-h-full overflow-y-auto min-h-0 overscroll-contain'
             } ${isDarkMode ? 'bg-[#171717] border-gray-800/70' : 'bg-white border-slate-200'}`}
           >
+            {/* Schließen-Button nur auf Mobile */}
+            {isMobile && (
+              <div className="flex items-center justify-between mb-4">
+                <p className={`text-base font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Navigation</p>
+                <button
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`rounded-xl p-2 transition-colors ${
+                    isDarkMode
+                      ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  aria-label="Menü schließen"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+            )}
             <div className="flex w-full flex-1 flex-col gap-6">
               <div>
                 <p className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
@@ -1551,7 +1718,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                     return (
                       <button
                         key={tab.key}
-                        onClick={() => setActiveTab(tab.key)}
+                        onClick={() => { setActiveTab(tab.key); if (isMobile) setMobileMenuOpen(false); }}
                         className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
                           isActive
                             ? isDarkMode
@@ -1686,310 +1853,420 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               )}
 
               {activeTab === 'overview' && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    {[
-                      {
-                        label: 'Stationen',
-                        value: stations.length,
-                        hint: `${connectedStationsCount} verbunden · ${activeStationsCount} aktiv`,
-                      },
-                      {
-                        label: 'Eingelegte Powerbanks',
-                        value: totalOccupiedUnits,
-                        hint: `${totalAvailableUnits} Slots frei`,
-                      },
-                      {
-                        label: 'Durchschnittliche Batterie',
-                        value: averageBattery !== null ? `${averageBattery}%` : '—',
-                        hint: 'über alle Stationen',
-                      },
-                      {
-                        label: 'Auslastung',
-                        value: `${utilizationPercentage}%`,
-                        hint: totalCapacity > 0 ? `${totalOccupiedUnits} von ${totalCapacity}` : 'Keine Daten',
-                      },
-                    ].map((card) => (
-                      <div
-                        key={card.label}
-                        className={`rounded-2xl border p-4 ${
-                          isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
-                        }`}
-                      >
-                        <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>{card.label}</p>
-                        <p className={`mt-2 text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{card.value}</p>
-                        <p className={`text-xs uppercase tracking-[0.2em] mt-3 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>{card.hint}</p>
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+                  {/* Live-Status Hinweis */}
+                  {lastUpdate && (
+                    <div className={`flex items-center gap-2 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${realtimeActive ? 'bg-emerald-500' : 'bg-gray-400'}`} />
+                      Zuletzt aktualisiert {lastUpdate.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr
+                    </div>
+                  )}
+
+                  {/* KPI Grid */}
+                  <div className="grid grid-cols-2 gap-3">
+
+                    {/* Auslastung – Hauptkarte mit Akzentfarbe */}
+                    <div className={`rounded-2xl p-4 ${
+                      isDarkMode
+                        ? 'bg-emerald-500/10 border border-emerald-500/20'
+                        : 'bg-emerald-50 border border-emerald-100'
+                    }`}>
+                      <p className={`text-xs font-medium ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>Auslastung</p>
+                      <p className={`text-4xl font-bold mt-1.5 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        {utilizationPercentage}<span className="text-xl font-medium">%</span>
+                      </p>
+                      <div className={`mt-3 h-1 rounded-full ${isDarkMode ? 'bg-white/10' : 'bg-emerald-200/60'}`}>
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                          style={{ width: `${utilizationPercentage}%` }}
+                        />
                       </div>
-                    ))}
+                      <p className={`text-xs mt-2 ${isDarkMode ? 'text-emerald-400/70' : 'text-emerald-700/60'}`}>
+                        {totalOccupiedUnits} von {totalCapacity} Slots belegt
+                      </p>
+                    </div>
+
+                    {/* Stationen */}
+                    <div className={`rounded-2xl p-4 ${
+                      isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
+                    }`}>
+                      <div className="flex items-start justify-between gap-1">
+                        <p className={`text-xs font-medium ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`}>Stationen</p>
+                        <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded-md font-medium ${
+                          connectedStationsCount > 0
+                            ? isDarkMode ? 'bg-emerald-500/15 text-emerald-400' : 'bg-emerald-50 text-emerald-600'
+                            : isDarkMode ? 'bg-white/10 text-gray-400' : 'bg-slate-100 text-slate-400'
+                        }`}>
+                          {connectedStationsCount} online
+                        </span>
+                      </div>
+                      <p className={`text-4xl font-bold mt-1.5 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stations.length}</p>
+                      <p className={`text-xs mt-3 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                        {activeStationsCount} aktiv · {inactiveStationsCount} inaktiv
+                      </p>
+                    </div>
+
+                    {/* Powerbanks */}
+                    <div className={`rounded-2xl p-4 ${
+                      isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
+                    }`}>
+                      <p className={`text-xs font-medium ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`}>Powerbanks drin</p>
+                      <p className={`text-4xl font-bold mt-1.5 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{totalOccupiedUnits}</p>
+                      <p className={`text-xs mt-3 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>{totalAvailableUnits} Slots frei</p>
+                    </div>
+
+                    {/* Ø Batterie */}
+                    <div className={`rounded-2xl p-4 ${
+                      averageBattery !== null && averageBattery < 30
+                        ? isDarkMode ? 'bg-red-500/10 border border-red-500/20' : 'bg-red-50 border border-red-100'
+                        : isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
+                    }`}>
+                      <p className={`text-xs font-medium ${
+                        averageBattery !== null && averageBattery < 30
+                          ? isDarkMode ? 'text-red-400' : 'text-red-500'
+                          : isDarkMode ? 'text-gray-400' : 'text-slate-400'
+                      }`}>Ø Batterie</p>
+                      <p className={`text-4xl font-bold mt-1.5 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        {averageBattery !== null ? (
+                          <>{averageBattery}<span className="text-xl font-medium">%</span></>
+                        ) : '—'}
+                      </p>
+                      <p className={`text-xs mt-3 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>über alle Stationen</p>
+                    </div>
                   </div>
 
-                  <div
-                    className={`rounded-2xl border p-4 ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
-                      <div>
-                        <p className={`text-xs uppercase tracking-[0.2em] ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>Highlights</p>
-                        <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Stationsperformance</h3>
+                  {/* Aktive Ausleihen Banner */}
+                  {txActiveCount > 0 && (
+                    <div className={`rounded-2xl p-3.5 flex items-center gap-3 ${
+                      isDarkMode ? 'bg-sky-500/10 border border-sky-500/20' : 'bg-sky-50 border border-sky-100'
+                    }`}>
+                      <span className={`shrink-0 w-8 h-8 rounded-xl flex items-center justify-center ${
+                        isDarkMode ? 'bg-sky-500/20' : 'bg-sky-100'
+                      }`}>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`w-4 h-4 ${isDarkMode ? 'text-sky-400' : 'text-sky-600'}`}>
+                          <polyline points="13 17 18 12 13 7" /><line x1="6" y1="12" x2="18" y2="12" />
+                        </svg>
+                      </span>
+                      <div className="flex-1">
+                        <p className={`text-sm font-medium ${isDarkMode ? 'text-sky-300' : 'text-sky-800'}`}>
+                          {txActiveCount} aktive Ausleihe{txActiveCount !== 1 ? 'n' : ''}
+                        </p>
+                        <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-sky-400/60' : 'text-sky-600/70'}`}>Gerade in Benutzung</p>
                       </div>
                       <button
-                        onClick={() => setActiveTab('stations')}
-                        className="px-3 py-1.5 rounded-full text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                        onClick={() => setActiveTab('transactions')}
+                        className={`shrink-0 text-xs font-medium ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-600 hover:text-sky-700'} transition-colors`}
                       >
-                        Stationen öffnen
+                        Details →
                       </button>
                     </div>
+                  )}
+
+                  {/* Stationen Liste */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        Stationen
+                      </h3>
+                      <button
+                        onClick={() => setActiveTab('stations')}
+                        className={`text-xs font-medium transition-colors ${
+                          isDarkMode ? 'text-emerald-400 hover:text-emerald-300' : 'text-emerald-600 hover:text-emerald-700'
+                        }`}
+                      >
+                        Alle anzeigen →
+                      </button>
+                    </div>
+
                     {stations.length === 0 ? (
-                      <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                        Noch keine Stationen verfügbar – lege deine erste Station an.
-                      </p>
+                      <div className={`rounded-2xl border p-6 text-center ${
+                        isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
+                      }`}>
+                        <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                          Noch keine Stationen – lege deine erste an.
+                        </p>
+                      </div>
                     ) : (
-                      <div className="grid gap-3 md:grid-cols-2">
-                        {stations.slice(0, 4).map((station) => (
-                          <div
-                            key={station.id}
-                            className={`rounded-xl border p-3 ${
-                              isDarkMode ? 'bg-white/5 border-white/10' : 'border-slate-200 bg-white'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className={`inline-flex h-2 w-2 rounded-full ${
-                                    isStationConnected(station)
-                                      ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
-                                      : 'bg-gray-400'
-                                  }`}
-                                  title={isStationConnected(station) ? 'Verbunden' : 'Getrennt'}
-                                />
-                                <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{station.name}</p>
+                      <div className="space-y-2">
+                        {stations.slice(0, 5).map((station) => {
+                          const occupied = countOccupiedSlots(station);
+                          const total = station.total_units ?? 0;
+                          const pct = total > 0 ? Math.round((occupied / total) * 100) : 0;
+                          const connected = isStationConnected(station);
+                          const battPercentages: number[] = [];
+                          for (let i = 1; i <= total; i++) {
+                            if (isSlotOccupied(station, i)) {
+                              const d = getSlotData(station, i);
+                              if (d.percentage != null) battPercentages.push(d.percentage);
+                            }
+                          }
+                          const avgBatt = battPercentages.length > 0
+                            ? Math.round(battPercentages.reduce((a, b) => a + b, 0) / battPercentages.length)
+                            : null;
+                          return (
+                            <div
+                              key={station.id}
+                              className={`rounded-xl px-4 py-3 flex items-center gap-3 ${
+                                isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
+                              }`}
+                            >
+                              <span className={`shrink-0 w-2 h-2 rounded-full ${
+                                connected ? 'bg-emerald-500' : isDarkMode ? 'bg-gray-600' : 'bg-gray-300'
+                              }`} />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <p className={`font-medium text-sm truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                                    {station.name}
+                                  </p>
+                                  {!station.is_active && (
+                                    <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded-md ${
+                                      isDarkMode ? 'bg-red-500/15 text-red-400' : 'bg-red-50 text-red-500'
+                                    }`}>Aus</span>
+                                  )}
+                                </div>
+                                <div className={`mt-1.5 h-1 rounded-full ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}>
+                                  <div
+                                    className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
                               </div>
-                              <span
-                                className={`text-xs px-2 py-0.5 rounded-full ${
-                                  station.is_active
-                                    ? 'bg-emerald-500/10 text-emerald-500'
-                                    : 'bg-red-500/10 text-red-500'
-                                }`}
-                              >
-                                {station.is_active ? 'Aktiv' : 'Aus'}
-                              </span>
+                              <div className="shrink-0 text-right">
+                                <p className={`text-sm font-medium tabular-nums ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                                  {occupied}/{total}
+                                </p>
+                                {avgBatt !== null && (
+                                  <p className={`text-xs tabular-nums ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`}>{avgBatt}%</p>
+                                )}
+                              </div>
                             </div>
-                            <div className={`flex items-center justify-between text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                              <span>
-                                {hasStationPowerbank(station) ? '1' : '0'} / {station.total_units ?? 0} belegt
-                              </span>
-                              <span>
-                                {station.battery_percentage !== undefined && station.battery_percentage !== null
-                                  ? `${station.battery_percentage}%`
-                                  : '–'}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
+
                 </div>
               )}
 
               {activeTab === 'stats' && (
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                <div className="flex-1 overflow-y-auto p-4 space-y-5">
                   {stations.length === 0 ? (
                     <div className={`rounded-2xl border p-6 text-center text-sm ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
                       Keine Statistiken verfügbar. Bitte füge Stationen hinzu.
                     </div>
                   ) : (
                     <>
-                      {/* Zeitraum-Auswahl */}
-                      <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                        <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Zeitraum</p>
-                        <div className="flex flex-wrap gap-2">
-                          {([7, 14, 30, 90] as const).map((days) => (
-                            <button
-                              key={days}
-                              onClick={() => setStatsTimeRangeDays(days)}
-                              className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
-                                statsTimeRangeDays === days
-                                  ? 'bg-emerald-600 text-white shadow-md'
-                                  : isDarkMode
-                                    ? 'bg-white/10 text-gray-300 hover:bg-white/20'
-                                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                              }`}
-                            >
-                              {days === 7 ? '7 Tage' : days === 14 ? '14 Tage' : days === 30 ? '30 Tage' : '90 Tage'}
-                            </button>
-                          ))}
-                        </div>
-                        <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-                          Alle Kennzahlen und Graphen beziehen sich auf die letzten {statsTimeRangeDays} Tage.
-                        </p>
+                      {/* Zeitraum-Segmented-Control */}
+                      <div className={`inline-flex rounded-xl p-1 gap-1 ${isDarkMode ? 'bg-white/8' : 'bg-slate-100'}`}>
+                        {([7, 14, 30, 90] as const).map((days) => (
+                          <button
+                            key={days}
+                            onClick={() => setStatsTimeRangeDays(days)}
+                            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                              statsTimeRangeDays === days
+                                ? isDarkMode
+                                  ? 'bg-white/15 text-white shadow-sm'
+                                  : 'bg-white text-slate-900 shadow-sm'
+                                : isDarkMode
+                                  ? 'text-gray-400 hover:text-gray-300'
+                                  : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                          >
+                            {days === 7 ? '7T' : days === 14 ? '14T' : days === 30 ? '30T' : '90T'}
+                          </button>
+                        ))}
                       </div>
 
-                      {/* Einnahmen-KPIs */}
-                      <div>
-                        <h3 className={`text-sm font-semibold uppercase tracking-wider mb-3 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          Einnahmen & Ausleihen
-                        </h3>
-                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Gesamteinnahmen</p>
-                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
-                              {statsLoading ? '…' : `${statsRevenue.total.toFixed(2)} €`}
-                            </p>
-                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Im gewählten Zeitraum</p>
-                          </div>
-                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Ø pro Tag</p>
-                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                      {/* Hero-Metrik: Gesamteinnahmen */}
+                      <div className={`rounded-2xl p-5 ${isDarkMode ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-emerald-50 border border-emerald-100'}`}>
+                        <p className={`text-xs font-medium ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                          Einnahmen – letzte {statsTimeRangeDays} Tage
+                        </p>
+                        <p className={`text-5xl font-bold mt-2 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                          {statsLoading ? <span className="opacity-30">…</span> : `${statsRevenue.total.toFixed(2)} €`}
+                        </p>
+                        <div className={`mt-4 pt-4 border-t flex gap-6 ${isDarkMode ? 'border-emerald-500/20' : 'border-emerald-200/60'}`}>
+                          <div>
+                            <p className={`text-xs ${isDarkMode ? 'text-emerald-400/70' : 'text-emerald-700/60'}`}>Ø pro Tag</p>
+                            <p className={`text-lg font-semibold mt-0.5 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                               {statsLoading ? '…' : `${statsRevenue.avgPerDay.toFixed(2)} €`}
                             </p>
-                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Durchschnitt pro Tag im Zeitraum</p>
                           </div>
-                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Anzahl Ausleihen</p>
-                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                          <div>
+                            <p className={`text-xs ${isDarkMode ? 'text-emerald-400/70' : 'text-emerald-700/60'}`}>Ausleihen</p>
+                            <p className={`text-lg font-semibold mt-0.5 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                               {statsLoading ? '…' : statsRevenue.count}
                             </p>
-                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Im gewählten Zeitraum</p>
                           </div>
-                          <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className={`text-xs uppercase tracking-[0.2em] mb-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Ø pro Ausleihe</p>
-                            <p className={`text-2xl sm:text-3xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                          <div>
+                            <p className={`text-xs ${isDarkMode ? 'text-emerald-400/70' : 'text-emerald-700/60'}`}>Ø pro Ausleihe</p>
+                            <p className={`text-lg font-semibold mt-0.5 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                               {statsLoading ? '…' : statsRevenue.count > 0 ? `${statsRevenue.avg.toFixed(2)} €` : '—'}
                             </p>
-                            <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Durchschnittlicher Umsatz pro Ausleihe</p>
                           </div>
                         </div>
                       </div>
 
-                      {/* Graphen */}
-                      <div className="grid gap-6 lg:grid-cols-2">
-                        <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
-                          <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Einnahmen im Zeitverlauf ({statsTimeRangeDays} Tage)</p>
+                      {/* Chart: Einnahmen im Zeitverlauf */}
+                      <div>
+                        <h3 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                          Einnahmen pro Tag
+                        </h3>
+                        <div className={`rounded-2xl p-4 ${isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'}`}>
                           {revenueByDayData.some((d) => d.revenue > 0) ? (
-                            <div className="h-[240px] w-full">
+                            <div className="h-[200px] w-full">
                               <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={revenueByDayData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'} />
-                                  <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} />
-                                  <YAxis tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} tickFormatter={(v) => `${v} €`} />
+                                <LineChart data={revenueByDayData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'} />
+                                  <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke={isDarkMode ? '#6b7280' : '#94a3b8'} tickLine={false} axisLine={false} />
+                                  <YAxis tick={{ fontSize: 10 }} stroke={isDarkMode ? '#6b7280' : '#94a3b8'} tickFormatter={(v) => `${v}€`} tickLine={false} axisLine={false} />
                                   <Tooltip
-                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
+                                    contentStyle={{
+                                      borderRadius: '10px',
+                                      border: 'none',
+                                      boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+                                      backgroundColor: isDarkMode ? '#1f2937' : '#fff',
+                                      color: isDarkMode ? '#f9fafb' : '#0f172a',
+                                      fontSize: 12,
+                                    }}
                                     formatter={(value: number | undefined) => [`${value != null ? value.toFixed(2) : '0'} €`, 'Einnahmen']}
-                                    labelFormatter={(label) => `Datum: ${label}`}
+                                    labelFormatter={(label) => label}
                                   />
-                                  <Line type="monotone" dataKey="revenue" name="Einnahmen" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981', r: 3 }} />
+                                  <Line type="monotone" dataKey="revenue" stroke="#10b981" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: '#10b981' }} />
                                 </LineChart>
                               </ResponsiveContainer>
                             </div>
                           ) : (
-                            <div className={`h-[240px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
-                              <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Keine Einnahmen im gewählten Zeitraum</p>
+                            <div className={`h-[200px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/10' : 'bg-slate-50'}`}>
+                              <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>Keine Einnahmen im gewählten Zeitraum</p>
                             </div>
                           )}
                         </div>
-                        <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
-                          <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Einnahmen pro Station</p>
-                          {revenueByStationData.length > 0 ? (
-                            <div className="h-[240px] w-full">
+                      </div>
+
+                      {/* Chart: Ausleihen pro Tag */}
+                      <div>
+                        <h3 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                          Ausleihen pro Tag
+                        </h3>
+                        <div className={`rounded-2xl p-4 ${isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'}`}>
+                          {rentalsByDayData.some((d) => d.anzahl > 0) ? (
+                            <div className="h-[180px] w-full">
                               <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={revenueByStationData} layout="vertical" margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'} />
-                                  <XAxis type="number" tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} tickFormatter={(v) => `${v} €`} />
-                                  <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} />
+                                <BarChart data={rentalsByDayData} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'} />
+                                  <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke={isDarkMode ? '#6b7280' : '#94a3b8'} tickLine={false} axisLine={false} />
+                                  <YAxis tick={{ fontSize: 10 }} stroke={isDarkMode ? '#6b7280' : '#94a3b8'} allowDecimals={false} tickLine={false} axisLine={false} />
                                   <Tooltip
-                                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
-                                    formatter={(value: number | undefined) => [`${value != null ? value.toFixed(2) : '0'} €`, 'Einnahmen']}
+                                    contentStyle={{
+                                      borderRadius: '10px',
+                                      border: 'none',
+                                      boxShadow: '0 4px 20px rgba(0,0,0,0.12)',
+                                      backgroundColor: isDarkMode ? '#1f2937' : '#fff',
+                                      color: isDarkMode ? '#f9fafb' : '#0f172a',
+                                      fontSize: 12,
+                                    }}
+                                    formatter={(value) => [value ?? 0, 'Ausleihen']}
+                                    labelFormatter={(label) => label}
                                   />
-                                  <Bar dataKey="revenue" name="Einnahmen" fill="#10b981" radius={[0, 4, 4, 0]} />
+                                  <Bar dataKey="anzahl" fill="#0ea5e9" radius={[3, 3, 0, 0]} maxBarSize={32} />
                                 </BarChart>
                               </ResponsiveContainer>
                             </div>
                           ) : (
-                            <div className={`h-[240px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
-                              <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Noch keine Einnahmen pro Station</p>
+                            <div className={`h-[180px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/10' : 'bg-slate-50'}`}>
+                              <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>Keine Ausleihen im gewählten Zeitraum</p>
                             </div>
                           )}
                         </div>
                       </div>
 
-                      {/* Ausleihen pro Tag */}
-                      <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
-                        <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Ausleihen pro Tag ({statsTimeRangeDays} Tage)</p>
-                        {rentalsByDayData.some((d) => d.anzahl > 0) ? (
-                          <div className="h-[220px] w-full">
-                            <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={rentalsByDayData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)'} />
-                                <XAxis dataKey="date" tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} />
-                                <YAxis tick={{ fontSize: 11 }} stroke={isDarkMode ? '#9ca3af' : '#64748b'} allowDecimals={false} />
-                                <Tooltip
-                                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}
-                                  formatter={(value) => [value ?? 0, 'Ausleihen']}
-                                  labelFormatter={(label) => `Datum: ${label}`}
-                                />
-                                <Bar dataKey="anzahl" name="Ausleihen" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
-                              </BarChart>
-                            </ResponsiveContainer>
-                          </div>
-                        ) : (
-                          <div className={`h-[220px] flex items-center justify-center rounded-xl ${isDarkMode ? 'bg-black/20' : 'bg-slate-100/50'}`}>
-                            <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Keine Ausleihen im gewählten Zeitraum</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Letzte Ausleihen inkl. Powerbank-ID */}
-                      <div className={`rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'}`}>
-                        <p className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Letzte Ausleihen (Tracking via Powerbank-ID)</p>
-                        {ownerRentals.length > 0 ? (
+                      {/* Einnahmen pro Station */}
+                      {revenueByStationData.length > 0 && (
+                        <div>
+                          <h3 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                            Einnahmen pro Station
+                          </h3>
                           <div className="space-y-2">
-                            {ownerRentals.slice(0, 5).map((rental) => {
-                              const stationName = stations.find((s) => s.id === rental.station_id)?.name ?? "Unbekannte Station";
+                            {revenueByStationData.map((entry, idx) => {
+                              const max = revenueByStationData[0]?.revenue ?? 1;
+                              const pct = max > 0 ? Math.round((entry.revenue / max) * 100) : 0;
                               return (
                                 <div
-                                  key={rental.id}
-                                  className={`rounded-xl px-3 py-2 text-xs flex items-center justify-between ${
-                                    isDarkMode ? 'bg-black/20 text-gray-300' : 'bg-white text-slate-700'
+                                  key={idx}
+                                  className={`rounded-xl px-4 py-3 flex items-center gap-3 ${
+                                    isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
                                   }`}
                                 >
-                                  <span className="truncate mr-2">{stationName}</span>
-                                  <span className="font-mono">{rental.powerbank_id || 'ID fehlt'}</span>
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`text-sm font-medium truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{entry.name}</p>
+                                    <div className={`mt-1.5 h-1 rounded-full ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}>
+                                      <div
+                                        className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <p className={`shrink-0 text-sm font-semibold tabular-nums ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                                    {entry.revenue.toFixed(2)} €
+                                  </p>
                                 </div>
                               );
                             })}
                           </div>
-                        ) : (
-                          <p className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>Noch keine Ausleihen vorhanden</p>
-                        )}
-                      </div>
+                        </div>
+                      )}
 
-                      {/* Technik-KPIs (Auslastung & Batterie) */}
-                      <div>
-                        <h3 className={`text-sm font-semibold uppercase tracking-wider mb-3 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          Technik & Auslastung
-                        </h3>
-                        <div className="flex flex-wrap gap-4">
-                          <div className={`flex-1 min-w-[200px] rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Auslastung</p>
-                            <div className="flex items-end gap-2">
-                              <span className={`text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{utilizationPercentage}%</span>
-                              <span className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>genutzt</span>
-                            </div>
-                            <div className={`mt-3 h-3 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-200'}`}>
-                              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${utilizationPercentage}%` }} />
-                            </div>
+                      {/* Letzte Ausleihen */}
+                      {ownerRentals.length > 0 && (
+                        <div>
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Letzte Ausleihen</h3>
+                            <button
+                              onClick={() => setActiveTab('transactions')}
+                              className={`text-xs font-medium transition-colors ${isDarkMode ? 'text-emerald-400 hover:text-emerald-300' : 'text-emerald-600 hover:text-emerald-700'}`}
+                            >
+                              Alle anzeigen →
+                            </button>
                           </div>
-                          <div className={`flex-1 min-w-[200px] rounded-2xl border p-4 ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'}`}>
-                            <p className={`text-xs uppercase tracking-[0.2em] mb-2 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Durchschnitt Energie</p>
-                            <div className={`text-3xl font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                              {averageBattery !== null ? `${averageBattery}%` : '—'}
-                            </div>
-                            <p className={`text-sm mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>Batterie aller Stationen</p>
+                          <div className="space-y-2">
+                            {ownerRentals.slice(0, 5).map((rental) => {
+                              const stationName = stations.find((s) => s.id === rental.station_id)?.name ?? 'Unbekannte Station';
+                              const date = new Date(rental.started_at).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+                              const isActive = rental.status === 'active' || !rental.ended_at;
+                              return (
+                                <div
+                                  key={rental.id}
+                                  className={`rounded-xl px-4 py-3 flex items-center gap-3 ${
+                                    isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
+                                  }`}
+                                >
+                                  <span className={`shrink-0 w-2 h-2 rounded-full ${isActive ? 'bg-sky-500' : isDarkMode ? 'bg-gray-600' : 'bg-gray-300'}`} />
+                                  <div className="flex-1 min-w-0">
+                                    <p className={`text-sm font-medium truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stationName}</p>
+                                    <p className={`text-xs mt-0.5 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                                      {date}{rental.powerbank_id ? ` · ${rental.powerbank_id}` : ''}
+                                    </p>
+                                  </div>
+                                  <div className="shrink-0 text-right">
+                                    {rental.total_price != null ? (
+                                      <p className={`text-sm font-semibold tabular-nums ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                                        {rental.total_price.toFixed(2)} €
+                                      </p>
+                                    ) : (
+                                      <span className={`text-xs px-1.5 py-0.5 rounded-md ${isDarkMode ? 'bg-sky-500/15 text-sky-400' : 'bg-sky-50 text-sky-600'}`}>
+                                        aktiv
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
-                      </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -1998,212 +2275,178 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               {activeTab === 'stations' && (
             <div className="h-full flex flex-col">
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {/* Stationen Header & Auswahl */}
-                <div className={`${sectionHeaderWrapper} p-5 border ${sectionHeaderClasses}`}>
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <h3 className={`text-lg font-semibold ${
-                        isDarkMode ? 'text-white' : 'text-gray-900'
-                      }`}>
-                        Stationen ({stations.length})
-                      </h3>
-                      <p className={`text-sm mt-1 ${
-                        isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                      }`}>
-                        {connectedStationsCount} von {stations.length} verbunden
-                      </p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setShowOnlyConnected(!showOnlyConnected)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors shadow-sm ${
-                          showOnlyConnected
-                            ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                            : isDarkMode
-                              ? 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                        }`}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="12" cy="12" r="10"/>
-                          <path d="M12 6v6l4 2"/>
-                        </svg>
-                        {showOnlyConnected ? 'Alle anzeigen' : 'Nur Verbundene'}
-                      </button>
-                      <button
-                        onClick={() => setShowAddStationForm(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors shadow-sm"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
-                          <line x1="12" y1="5" x2="12" y2="19"/>
-                          <line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                        Station hinzufügen
-                      </button>
-                    </div>
-                  </div>
 
-                  {filteredStations.length > 0 && (
-                    <div className="mt-4">
-                      <label className={`block text-xs font-semibold uppercase tracking-[0.15em] mb-2 ${
-                        isDarkMode ? 'text-gray-400' : 'text-gray-500'
-                      }`}>
-                        Station auswählen
-                      </label>
-                      <select
-                        value={selectedStationId ?? ''}
-                        onChange={(event) => setSelectedStationId(event.target.value || null)}
-                        className={`w-full rounded-xl border px-4 py-3 text-base font-medium transition-colors ${
-                          isDarkMode 
-                            ? 'bg-white/10 border-white/20 text-white focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20' 
-                            : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20'
-                        }`}
-                        style={isDarkMode ? {
-                          colorScheme: 'dark'
-                        } : undefined}
-                      >
-                        {filteredStations.map((station) => (
-                          <option 
-                            key={station.id} 
-                            value={station.id}
-                            style={isDarkMode ? {
-                              backgroundColor: '#1f1f1f',
-                              color: '#ffffff'
-                            } : undefined}
-                          >
-                            {isStationConnected(station) ? '🟢 ' : '⚫ '}
-                            {station.name} {station.short_code ? `(${station.short_code})` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                {/* Toolbar */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className={`flex items-center gap-1.5 text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                    <span className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{stations.length}</span> Stationen
+                    <span className="opacity-40">·</span>
+                    <span className={`w-1.5 h-1.5 rounded-full inline-block ${connectedStationsCount > 0 ? 'bg-emerald-500' : isDarkMode ? 'bg-gray-600' : 'bg-gray-300'}`} />
+                    {connectedStationsCount} online
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowOnlyConnected(!showOnlyConnected)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                        showOnlyConnected
+                          ? isDarkMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-50 text-emerald-700'
+                          : isDarkMode ? 'bg-white/8 text-gray-400 hover:text-gray-300' : 'bg-slate-100 text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {showOnlyConnected ? 'Alle anzeigen' : 'Nur online'}
+                    </button>
+                    <button
+                      onClick={() => setShowAddStationForm(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700 transition-colors"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                      </svg>
+                      Station
+                    </button>
+                  </div>
                 </div>
+
+                {/* Station-Auswahl als Pill-Liste */}
+                {filteredStations.length > 0 && (
+                  <div className="flex gap-2 flex-wrap">
+                    {filteredStations.map((station) => {
+                      const connected = isStationConnected(station);
+                      const isSelected = selectedStationId === station.id;
+                      return (
+                        <button
+                          key={station.id}
+                          onClick={() => setSelectedStationId(station.id)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+                            isSelected
+                              ? isDarkMode
+                                ? 'bg-white/15 text-white border border-white/20'
+                                : 'bg-slate-900 text-white border border-transparent'
+                              : isDarkMode
+                                ? 'bg-white/5 text-gray-300 border border-white/8 hover:bg-white/10'
+                                : 'bg-white text-slate-700 border border-slate-100 shadow-sm hover:border-slate-200'
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                            connected ? 'bg-emerald-500' : isDarkMode ? 'bg-gray-600' : 'bg-gray-300'
+                          }`} />
+                          {station.name}
+                          {station.short_code && (
+                            <span className={`text-xs opacity-50`}>{station.short_code}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {/* Station Details */}
                 {loading ? (
                   <div className="flex items-center justify-center h-32">
-                    <div className="animate-spin rounded-full h-8 w-8 border-2 border-emerald-600 border-t-transparent"></div>
+                    <div className="animate-spin rounded-full h-8 w-8 border-2 border-emerald-600 border-t-transparent" />
                   </div>
                 ) : !selectedStation ? (
-                  <div className="flex flex-col items-center justify-center h-64 text-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" strokeWidth="1.5" className={`mb-4 ${isDarkMode ? 'text-gray-600' : 'text-gray-300'}`}>
-                      <path d="M3 3h18v13H3z"/>
-                      <path d="M7 21h10"/>
-                      <path d="M9 16v5"/>
-                      <path d="M15 16v5"/>
-                    </svg>
-                    <p className={`text-lg font-medium mb-2 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                      {filteredStations.length === 0 
-                        ? (showOnlyConnected ? 'Keine verbundenen Stationen' : 'Noch keine Stationen')
+                  <div className={`rounded-2xl border p-10 flex flex-col items-center justify-center text-center ${
+                    isDarkMode ? 'bg-white/5 border-white/8' : 'bg-slate-50 border-slate-100'
+                  }`}>
+                    <p className={`text-base font-medium ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                      {filteredStations.length === 0
+                        ? (showOnlyConnected ? 'Keine online-Stationen' : 'Noch keine Stationen')
                         : 'Station auswählen'}
                     </p>
-                    <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                      {filteredStations.length === 0 
-                        ? (showOnlyConnected 
-                          ? 'Derzeit sind keine Stationen verbunden. Stellen Sie sicher, dass ESP32-Geräte eingeschaltet sind.'
-                          : 'Erstelle deine erste Station, um zu beginnen')
-                        : 'Wähle eine Station aus der Liste oben, um Details zu sehen'}
+                    <p className={`text-sm mt-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                      {filteredStations.length === 0
+                        ? (showOnlyConnected ? 'Schalte den Filter aus oder starte eine Station.' : 'Erstelle deine erste Station.')
+                        : 'Wähle oben eine Station aus.'}
                     </p>
                     {filteredStations.length === 0 && !showOnlyConnected && !loading && (
-                      <div className={`mt-4 p-3 rounded-lg border text-xs ${
-                        isDarkMode ? 'border-yellow-900/40 bg-yellow-900/10 text-yellow-300' : 'border-yellow-200 bg-yellow-50 text-yellow-700'
+                      <div className={`mt-4 px-4 py-3 rounded-xl text-xs text-left ${
+                        isDarkMode ? 'bg-amber-500/10 text-amber-300 border border-amber-500/20' : 'bg-amber-50 text-amber-700 border border-amber-100'
                       }`}>
-                        <p className="font-medium mb-1">💡 Tipp: Keine Stationen gefunden?</p>
-                        <p>Prüfe die Browser-Konsole (F12) für Details oder siehe DASHBOARD_STATIONEN_FIX.md</p>
+                        Keine Stationen gefunden? Prüfe die Browser-Konsole (F12).
                       </div>
                     )}
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {/* Station Info Header */}
-                    <div className={`rounded-2xl border p-5 ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
+
+                    {/* Station-Header */}
+                    <div className={`rounded-2xl p-4 ${
+                      isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
                     }`}>
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 mb-2">
-                            <h4 className={`text-xl font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                               {selectedStation.name}
                             </h4>
-                            <span
-                              className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-lg text-xs font-semibold ${
-                                isStationConnected(selectedStation)
-                                  ? 'bg-emerald-500/10 text-emerald-500'
-                                  : 'bg-gray-500/10 text-gray-500'
-                              }`}
-                            >
-                              <span
-                                className={`inline-flex h-2 w-2 rounded-full ${
-                                  isStationConnected(selectedStation)
-                                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] animate-pulse'
-                                    : 'bg-gray-400'
-                                }`}
-                              />
-                              {isStationConnected(selectedStation) ? 'Verbunden' : 'Getrennt'}
+                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium ${
+                              isStationConnected(selectedStation)
+                                ? isDarkMode ? 'bg-emerald-500/15 text-emerald-400' : 'bg-emerald-50 text-emerald-600'
+                                : isDarkMode ? 'bg-white/8 text-gray-400' : 'bg-slate-100 text-slate-400'
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${
+                                isStationConnected(selectedStation) ? 'bg-emerald-500 animate-pulse' : isDarkMode ? 'bg-gray-500' : 'bg-gray-300'
+                              }`} />
+                              {isStationConnected(selectedStation) ? 'Online' : 'Offline'}
                             </span>
-                            <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${
+                            <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${
                               selectedStation.is_active
-                                ? 'bg-emerald-500/10 text-emerald-500'
-                                : 'bg-red-500/10 text-red-500'
+                                ? isDarkMode ? 'bg-emerald-500/15 text-emerald-400' : 'bg-emerald-50 text-emerald-600'
+                                : isDarkMode ? 'bg-red-500/15 text-red-400' : 'bg-red-50 text-red-500'
                             }`}>
                               {selectedStation.is_active ? 'Aktiv' : 'Inaktiv'}
                             </span>
                           </div>
-                          <div className="flex flex-wrap items-center gap-4 text-sm">
+                          <div className={`flex items-center gap-3 mt-2 text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
                             {selectedStation.short_code && (
-                              <div className={`flex items-center gap-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                                <span className="opacity-70">Code:</span>
-                                <span className="font-mono font-semibold">{selectedStation.short_code}</span>
-                              </div>
+                              <span>Code: <span className={`font-mono font-semibold ${isDarkMode ? 'text-gray-300' : 'text-slate-600'}`}>{selectedStation.short_code}</span></span>
                             )}
-                            <div className={`flex items-center gap-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                              <span className="opacity-70">ID:</span>
-                              <span className="font-mono text-xs">{selectedStation.id}</span>
-                            </div>
+                            <span className="font-mono opacity-60 truncate">{selectedStation.id}</span>
                           </div>
                         </div>
                         <button
                           onClick={() => updateStation(selectedStation.id, { is_active: !selectedStation.is_active })}
                           disabled={updatingStation === selectedStation.id}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                            updatingStation === selectedStation.id
-                              ? 'opacity-50 cursor-not-allowed'
-                              : ''
+                          className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            updatingStation === selectedStation.id ? 'opacity-50 cursor-not-allowed' : ''
                           } ${
                             selectedStation.is_active
-                              ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
-                              : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                              ? isDarkMode ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25' : 'bg-red-50 text-red-500 hover:bg-red-100'
+                              : isDarkMode ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
                           }`}
                         >
                           {updatingStation === selectedStation.id ? (
-                            <span className="flex items-center gap-2">
-                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent"></div>
-                              Aktualisiere...
+                            <span className="flex items-center gap-1.5">
+                              <span className="animate-spin rounded-full h-3 w-3 border-2 border-current border-t-transparent" />
+                              …
                             </span>
                           ) : (
                             selectedStation.is_active ? 'Deaktivieren' : 'Aktivieren'
                           )}
                         </button>
                       </div>
-                    </div>
 
-                    {/* Slots Übersicht & Kapazität */}
-                    <div className={`rounded-2xl border p-5 ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
-                    }`}>
-                      <h5 className={`text-sm font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                        Station Kapazität
-                      </h5>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className={`rounded-xl p-4 ${
-                          isDarkMode ? 'bg-white/5' : 'bg-white'
-                        }`}>
-                          <div className={`text-xs font-semibold uppercase tracking-wide mb-2 ${
-                            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                          }`}>
-                            Maximale Kapazität (Slots)
+                      {/* Kapazitäts-Schnellinfo */}
+                      <div className={`mt-4 pt-4 border-t flex items-center gap-6 ${isDarkMode ? 'border-white/8' : 'border-slate-100'}`}>
+                        <div>
+                          <p className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>Eingelegt</p>
+                          <p className={`text-xl font-bold mt-0.5 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                            {countOccupiedSlots(selectedStation)}<span className={`text-sm font-normal ml-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>/ {selectedStation.total_units ?? 0}</span>
+                          </p>
+                        </div>
+                        <div className="flex-1">
+                          <div className={`h-1.5 rounded-full ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}>
+                            <div
+                              className="h-full rounded-full bg-emerald-500 transition-all duration-700"
+                              style={{
+                                width: `${selectedStation.total_units ? Math.round((countOccupiedSlots(selectedStation) / selectedStation.total_units) * 100) : 0}%`
+                              }}
+                            />
                           </div>
+                        </div>
+                        <div className="shrink-0">
+                          <label className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>Slots max.</label>
                           <input
                             type="number"
                             min="1"
@@ -2213,273 +2456,166 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                               const newValue = parseInt(e.target.value) || 1;
                               updateStation(selectedStation.id, { total_units: newValue });
                             }}
-                            className={`w-full px-3 py-2 rounded-lg border text-lg font-bold ${
+                            className={`block w-16 mt-0.5 px-2 py-1 rounded-lg border text-sm font-semibold text-center ${
                               isDarkMode
-                                ? 'bg-white/10 border-white/20 text-white focus:border-emerald-500'
+                                ? 'bg-white/10 border-white/15 text-white focus:border-emerald-500'
                                 : 'bg-slate-50 border-slate-200 text-slate-900 focus:border-emerald-500'
-                            } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                            } focus:outline-none focus:ring-1 focus:ring-emerald-500/20`}
                           />
-                          <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-                            Anzahl der verfügbaren Powerbank-Slots
-                          </p>
-                        </div>
-                        <div className={`rounded-xl p-4 ${
-                          isDarkMode ? 'bg-white/5' : 'bg-white'
-                        }`}>
-                          <div className={`text-xs font-semibold uppercase tracking-wide mb-1 ${
-                            isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                          }`}>
-                            Aktuell eingelegt
-                          </div>
-                          <div className={`text-2xl font-bold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            {hasStationPowerbank(selectedStation) ? '1' : '0'} Powerbank{hasStationPowerbank(selectedStation) ? '' : 's'}
-                          </div>
-                          <p className={`text-xs mt-2 ${isDarkMode ? 'text-gray-500' : 'text-slate-500'}`}>
-                            Erkannt per Powerbank-ID (Fallback: Batteriesensoren)
-                          </p>
                         </div>
                       </div>
                     </div>
 
-                    {/* Powerbank Details Tabelle */}
-                    <div className={`rounded-2xl border ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
-                    }`}>
-                      <div className={`p-5 border-b ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
-                        <h5 className={`text-sm font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                          Slot-Status & Powerbank-Daten
-                        </h5>
-                        <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          Erkennung erfolgt primär über `powerbank_id` (Fallback: ESP32 Batterie-Daten)
-                        </p>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full">
-                          <thead>
-                            <tr className={`border-b ${
-                              isDarkMode ? 'border-white/10 bg-white/5' : 'border-slate-200 bg-slate-50'
-                            }`}>
-                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
-                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                              }`}>
-                                Slot
-                              </th>
-                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
-                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                              }`}>
-                                Status
-                              </th>
-                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
-                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                              }`}>
-                                Spannung
-                              </th>
-                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
-                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                              }`}>
-                                Ladezustand
-                              </th>
-                              <th className={`text-left py-3 px-5 text-xs font-semibold uppercase tracking-wide ${
-                                isDarkMode ? 'text-gray-400' : 'text-slate-500'
-                              }`}>
-                                Powerbank-ID
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {selectedStation.total_units && selectedStation.total_units > 0 ? (
-                              Array.from({ length: selectedStation.total_units }, (_, index) => {
-                                const slotNumber = index + 1;
-                                
-                                // Powerbank ist nur eingelegt wenn ESP32 Batterie-Daten sendet
-                                const hasBatteryData = hasStationPowerbank(selectedStation);
-                                
-                                // Nur Slot 1 kann eine Powerbank haben (da ESP32 nur eine Batterie messen kann)
-                                const isOccupied = slotNumber === 1 && hasBatteryData;
-
-                                return (
-                                  <tr
-                                    key={slotNumber}
-                                    className={`border-b transition-colors ${
-                                      isDarkMode 
-                                        ? 'border-gray-800 hover:bg-gray-900/50' 
-                                        : 'border-gray-100 hover:bg-gray-50'
-                                    }`}
-                                  >
-                                    <td className="py-3 px-5">
-                                      <div className="flex items-center gap-2">
-                                        <span
-                                          className={`inline-flex h-2 w-2 rounded-full ${
-                                            isOccupied
-                                              ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]'
-                                              : 'bg-gray-400'
-                                          }`}
-                                        />
-                                        <span className={`text-sm font-medium ${
-                                          isDarkMode ? 'text-gray-300' : 'text-gray-700'
-                                        }`}>
-                                          Slot {slotNumber}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td className="py-3 px-5">
-                                      <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${
-                                        isOccupied
-                                          ? 'bg-emerald-500/10 text-emerald-500'
-                                          : 'bg-gray-500/10 text-gray-500'
-                                      }`}>
-                                        {isOccupied ? 'Powerbank eingelegt' : 'Leer'}
-                                      </span>
-                                    </td>
-                                    <td className="py-3 px-5">
-                                      {isOccupied ? (
-                                        <span className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                                          {selectedStation.battery_voltage!.toFixed(2)} V
-                                        </span>
-                                      ) : (
-                                        <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                          —
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="py-3 px-5">
-                                      {isOccupied ? (
-                                        <div className="flex items-center gap-2">
-                                          <div className={`w-20 h-2 rounded-full overflow-hidden ${
-                                            isDarkMode ? 'bg-gray-800' : 'bg-gray-200'
-                                          }`}>
-                                            <div
-                                              className={`h-full transition-all ${
-                                                selectedStation.battery_percentage! < 20 ? 'bg-red-500' :
-                                                selectedStation.battery_percentage! < 50 ? 'bg-yellow-500' :
-                                                'bg-emerald-500'
-                                              }`}
-                                              style={{ width: `${selectedStation.battery_percentage}%` }}
-                                            />
-                                          </div>
-                                          <span className={`text-sm font-medium ${
-                                            selectedStation.battery_percentage! < 20 ? 'text-red-500' :
-                                            selectedStation.battery_percentage! < 50 ? 'text-yellow-500' :
-                                            'text-emerald-500'
-                                          }`}>
-                                            {selectedStation.battery_percentage}%
-                                          </span>
-                                        </div>
-                                      ) : (
-                                        <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                          —
-                                        </span>
-                                      )}
-                                    </td>
-                                    <td className="py-3 px-5">
-                                      {isOccupied && selectedStation.powerbank_id ? (
-                                        <span className={`text-sm font-mono ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                                          {selectedStation.powerbank_id}
-                                        </span>
-                                      ) : (
-                                        <span className={`text-xs ${isDarkMode ? 'text-gray-600' : 'text-gray-400'}`}>
-                                          —
-                                        </span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            ) : (
-                              <tr>
-                                <td colSpan={5} className="py-8 px-5 text-center">
-                                  <span className={`text-sm ${isDarkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-                                    Keine Slots konfiguriert. Bitte Kapazität oben einstellen.
+                    {/* Slot-Karten Grid */}
+                    <div>
+                      <h5 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        Slots
+                      </h5>
+                      {selectedStation.total_units && selectedStation.total_units > 0 ? (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                          {Array.from({ length: selectedStation.total_units }, (_, index) => {
+                            const slotNumber = index + 1;
+                            const occupied = isSlotOccupied(selectedStation, slotNumber);
+                            const slotData = getSlotData(selectedStation, slotNumber);
+                            const pct = slotData.percentage;
+                            const battColor = pct == null ? null : pct < 20 ? 'red' : pct < 50 ? 'yellow' : 'green';
+                            return (
+                              <div
+                                key={slotNumber}
+                                className={`rounded-xl p-3 transition-colors ${
+                                  occupied
+                                    ? isDarkMode
+                                      ? 'bg-white/8 border border-white/12'
+                                      : 'bg-white border border-slate-100 shadow-sm'
+                                    : isDarkMode
+                                      ? 'bg-white/3 border border-white/6'
+                                      : 'bg-slate-50 border border-slate-100'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className={`text-xs font-semibold ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`}>
+                                    Slot {slotNumber}
                                   </span>
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
+                                  <span className={`w-2 h-2 rounded-full ${
+                                    occupied
+                                      ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]'
+                                      : isDarkMode ? 'bg-gray-700' : 'bg-gray-200'
+                                  }`} />
+                                </div>
+                                {occupied ? (
+                                  <>
+                                    {pct != null && (
+                                      <>
+                                        <div className={`h-1 rounded-full mb-1.5 ${isDarkMode ? 'bg-white/10' : 'bg-slate-100'}`}>
+                                          <div
+                                            className={`h-full rounded-full transition-all ${
+                                              battColor === 'red' ? 'bg-red-500' :
+                                              battColor === 'yellow' ? 'bg-yellow-400' :
+                                              'bg-emerald-500'
+                                            }`}
+                                            style={{ width: `${pct}%` }}
+                                          />
+                                        </div>
+                                        <p className={`text-sm font-semibold tabular-nums ${
+                                          battColor === 'red' ? 'text-red-500' :
+                                          battColor === 'yellow' ? isDarkMode ? 'text-yellow-400' : 'text-yellow-600' :
+                                          isDarkMode ? 'text-emerald-400' : 'text-emerald-600'
+                                        }`}>{pct}%</p>
+                                      </>
+                                    )}
+                                    {slotData.voltage != null && (
+                                      <p className={`text-xs mt-0.5 tabular-nums ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                                        {slotData.voltage.toFixed(2)} V
+                                      </p>
+                                    )}
+                                    {slotData.powerbankId && (
+                                      <p className={`text-xs font-mono mt-1 truncate ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                                        {slotData.powerbankId}
+                                      </p>
+                                    )}
+                                  </>
+                                ) : (
+                                  <p className={`text-xs mt-1 ${isDarkMode ? 'text-gray-600' : 'text-slate-300'}`}>Leer</p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className={`rounded-xl p-4 text-center text-sm ${isDarkMode ? 'bg-white/5 text-gray-500' : 'bg-slate-50 text-slate-400'}`}>
+                          Keine Slots konfiguriert – Kapazität oben einstellen.
+                        </div>
+                      )}
                     </div>
 
                     {/* Foto-Verwaltung */}
-                    <div className={`rounded-2xl border p-5 ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
+                    <div className={`rounded-2xl p-4 ${
+                      isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
                     }`}>
-                      <h5 className={`text-sm font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                        Station Fotos (max. 3)
+                      <h5 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                        Fotos <span className={`font-normal text-xs ml-1 ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>max. 3</span>
                       </h5>
-                      <PhotoManager 
-                        station={selectedStation} 
+                      <PhotoManager
+                        station={selectedStation}
                         onUpdate={(photos) => updateStation(selectedStation.id, { photos })}
                         isDarkMode={isDarkMode}
                       />
                     </div>
 
                     {/* Öffnungszeiten */}
-                    <div className={`rounded-2xl border p-5 ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
+                    <div className={`rounded-2xl p-4 ${
+                      isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
                     }`}>
-                      <h5 className={`text-sm font-semibold mb-4 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                      <h5 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                         Öffnungszeiten
                       </h5>
-                      <div className="space-y-3">
-                        <textarea
-                          value={selectedStation.opening_hours || ''}
-                          onChange={(e) => {
-                            updateStation(selectedStation.id, { opening_hours: e.target.value });
-                          }}
-                          placeholder="z.B. Mo-Fr: 8:00-18:00, Sa: 9:00-16:00, So: geschlossen"
-                          className={`w-full px-3 py-2 rounded-lg border text-sm ${
-                            isDarkMode
-                              ? 'bg-white/10 border-white/20 text-white placeholder-gray-500 focus:border-emerald-500'
-                              : 'bg-white border-slate-200 text-slate-900 placeholder-gray-400 focus:border-emerald-500'
-                          } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
-                          rows={3}
-                        />
-                        <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          Geben Sie die Öffnungszeiten für diese Station ein. Diese werden in der Station-Detailansicht angezeigt.
-                        </p>
-                      </div>
+                      <textarea
+                        value={selectedStation.opening_hours || ''}
+                        onChange={(e) => updateStation(selectedStation.id, { opening_hours: e.target.value })}
+                        placeholder="z.B. Mo–Fr: 8:00–18:00, Sa: 9:00–16:00, So: geschlossen"
+                        rows={3}
+                        className={`w-full px-3 py-2 rounded-xl border text-sm resize-none ${
+                          isDarkMode
+                            ? 'bg-white/8 border-white/12 text-white placeholder-gray-600 focus:border-emerald-500'
+                            : 'bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-300 focus:border-emerald-500'
+                        } focus:outline-none focus:ring-2 focus:ring-emerald-500/15`}
+                      />
                     </div>
 
-                    {/* Actions */}
-                    <div className={`rounded-2xl border p-5 ${
-                      isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50 border-slate-200'
+                    {/* Aktionen */}
+                    <div className={`rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap ${
+                      isDarkMode ? 'bg-white/5 border border-white/8' : 'bg-white border border-slate-100 shadow-sm'
                     }`}>
-                      <div className="flex flex-wrap gap-3">
-                        <button
-                          onClick={() => updateStation(selectedStation.id, { charge_enabled: !(selectedStation.charge_enabled ?? true) })}
-                          disabled={updatingStation === selectedStation.id}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                            updatingStation === selectedStation.id
-                              ? 'opacity-50 cursor-not-allowed'
-                              : ''
-                          } ${
-                            (selectedStation.charge_enabled ?? true)
-                              ? 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
-                              : 'bg-gray-500/10 text-gray-500 hover:bg-gray-500/20'
-                          }`}
-                        >
-                          {updatingStation === selectedStation.id ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent"></div>
-                              Aktualisiere...
-                            </>
-                          ) : (
-                            <>
-                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-                              </svg>
-                              {(selectedStation.charge_enabled ?? true) ? 'Laden EIN' : 'Laden AUS'}
-                            </>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => deleteStation(selectedStation.id)}
-                          className="px-4 py-2 bg-red-500/10 text-red-500 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors"
-                        >
-                          Löschen
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => updateStation(selectedStation.id, { charge_enabled: !(selectedStation.charge_enabled ?? true) })}
+                        disabled={updatingStation === selectedStation.id}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                          updatingStation === selectedStation.id ? 'opacity-50 cursor-not-allowed' : ''
+                        } ${
+                          (selectedStation.charge_enabled ?? true)
+                            ? isDarkMode ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                            : isDarkMode ? 'bg-white/8 text-gray-400 hover:bg-white/12' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                        }`}
+                      >
+                        {updatingStation === selectedStation.id ? (
+                          <span className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-current border-t-transparent" />
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                          </svg>
+                        )}
+                        Laden {(selectedStation.charge_enabled ?? true) ? 'EIN' : 'AUS'}
+                      </button>
+                      <button
+                        onClick={() => deleteStation(selectedStation.id)}
+                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                          isDarkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100'
+                        }`}
+                      >
+                        Station löschen
+                      </button>
                     </div>
+
                   </div>
                 )}
               </div>
@@ -2488,62 +2624,213 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
           {activeTab === 'transactions' && (
             <div className="h-full flex flex-col">
+              {/* Header + Statistiken */}
               <div className={`${sectionHeaderWrapper} p-4 border ${sectionHeaderClasses}`}>
-                <div>
-                  <h3 className={`text-lg font-semibold ${
-                    isDarkMode ? 'text-white' : 'text-gray-900'
-                  }`}>
-                    Transaktionen
-                  </h3>
-                  <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                    Letzte Bewegungen & Auszahlungen · Automatisch aktualisiert
-                  </p>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div>
+                      <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+                        Transaktionen
+                        {filteredRentals.length > 0 && (
+                          <span className={`ml-2 text-sm font-normal ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                            ({filteredRentals.length} {filteredRentals.length === 1 ? 'Eintrag' : 'Einträge'})
+                          </span>
+                        )}
+                      </h3>
+                    </div>
+                    {/* Statistik-Pills */}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${isDarkMode ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-50 text-emerald-700'}`}>
+                        <span className="font-semibold">{txTotalRevenue.toFixed(2)} €</span>
+                        <span className={isDarkMode ? 'text-emerald-500/60' : 'text-emerald-600/60'}>Umsatz</span>
+                      </div>
+                      {txActiveCount > 0 && (
+                        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${isDarkMode ? 'bg-yellow-500/10 text-yellow-400' : 'bg-yellow-50 text-yellow-700'}`}>
+                          <span className="font-semibold">{txActiveCount}</span>
+                          <span className={isDarkMode ? 'text-yellow-500/60' : 'text-yellow-600/60'}>Aktiv</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Filter-Zeile */}
+                  <div className={`flex flex-wrap items-center gap-2 border-t pt-3 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+                    {/* Suche */}
+                    <div className="relative min-w-[160px] flex-1 sm:flex-initial">
+                      <input
+                        type="search"
+                        value={txSearchQuery}
+                        onChange={(e) => { setTxSearchQuery(e.target.value); setTxPage(1); }}
+                        placeholder="Station / Powerbank…"
+                        className={`w-full sm:w-48 px-3 py-1.5 pl-8 rounded-lg border text-sm ${
+                          isDarkMode
+                            ? 'bg-white/10 border-white/20 text-white placeholder-gray-500 focus:border-emerald-500'
+                            : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 focus:border-emerald-500'
+                        } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                      />
+                      <svg className={`absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                      </svg>
+                    </div>
+
+                    {/* Status-Filter */}
+                    <div className="flex gap-1">
+                      {(['all', 'active', 'completed'] as const).map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => { setTxStatusFilter(s); setTxPage(1); }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            txStatusFilter === s
+                              ? 'bg-emerald-600 text-white'
+                              : isDarkMode ? 'bg-white/10 text-gray-300 hover:bg-white/20' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {s === 'all' ? 'Alle' : s === 'active' ? 'Aktiv' : 'Abgeschlossen'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Station-Filter */}
+                    {stations.length > 1 && (
+                      <select
+                        value={txStationFilter}
+                        onChange={(e) => { setTxStationFilter(e.target.value); setTxPage(1); }}
+                        className={`px-2 py-1.5 rounded-lg border text-xs ${
+                          isDarkMode ? 'bg-white/10 border-white/20 text-white' : 'bg-white border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <option value="all">Alle Stationen</option>
+                        {stations.map((s) => s.id && (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    )}
+
+                    {/* Pagination rechts */}
+                    <div className="flex items-center gap-1 ml-auto">
+                      <select
+                        value={txPageSize}
+                        onChange={(e) => { setTxPageSize(Number(e.target.value)); setTxPage(1); }}
+                        className={`px-2 py-1.5 rounded-lg border text-xs ${
+                          isDarkMode ? 'bg-white/10 border-white/20 text-white' : 'bg-white border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <option value={10}>10</option>
+                        <option value={20}>20</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setTxPage((p) => Math.max(1, p - 1))}
+                        disabled={txPage <= 1}
+                        className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'}`}
+                        aria-label="Vorherige Seite"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+                      </button>
+                      <span className={`text-xs min-w-[70px] text-center ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                        {txPage} / {txTotalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setTxPage((p) => Math.min(txTotalPages, p + 1))}
+                        disabled={txPage >= txTotalPages}
+                        className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'}`}
+                        aria-label="Nächste Seite"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
+              {/* Liste */}
               <div className="flex-1 overflow-y-auto p-4">
-                <div className="space-y-3">
-                  {transactionsData.map((tx) => (
-                    <div
-                      key={tx.id}
-                      className={`rounded-2xl border p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${
-                        isDarkMode ? 'bg-white/5 border-white/10' : 'border-slate-200 bg-white'
-                      }`}
-                    >
-                      <div>
-                        <p className={`font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{tx.stationName}</p>
-                        <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          {tx.powerbanksMoved} Powerbanks bewegt
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-4 flex-wrap">
-                        <span className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{tx.amount.toFixed(2)} €</span>
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                            tx.status === 'abgeschlossen'
-                              ? 'bg-emerald-500/10 text-emerald-500'
-                              : 'bg-yellow-500/10 text-yellow-500'
+                {statsLoading ? (
+                  <div className="flex items-center justify-center min-h-[200px]">
+                    <div className="animate-spin rounded-full h-10 w-10 border-2 border-emerald-600 border-t-transparent" />
+                  </div>
+                ) : txPagedRentals.length === 0 ? (
+                  <div className={`rounded-xl border p-8 text-center ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+                    {ownerRentals.length === 0
+                      ? 'Noch keine Transaktionen vorhanden.'
+                      : 'Keine Transaktionen entsprechen dem Filter.'}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {txPagedRentals.map((rental) => {
+                      const stationName = stationMap.get(rental.station_id ?? '') ?? rental.station_id ?? '–';
+                      const isActive = rental.status === 'active' || !rental.ended_at;
+                      const startedAt = new Date(rental.started_at);
+                      const endedAt = rental.ended_at ? new Date(rental.ended_at) : null;
+                      const durationMs = endedAt ? endedAt.getTime() - startedAt.getTime() : Date.now() - startedAt.getTime();
+                      const durationMin = Math.floor(durationMs / 60000);
+                      const durationStr = durationMin < 60
+                        ? `${durationMin} Min`
+                        : `${Math.floor(durationMin / 60)}h ${durationMin % 60}m`;
+                      return (
+                        <div
+                          key={rental.id}
+                          className={`rounded-xl border p-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 ${
+                            isDarkMode ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'
                           }`}
                         >
-                          {tx.status}
-                        </span>
-                        <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                          {tx.timestamp ? tx.timestamp.toLocaleDateString() : 'offene Buchung'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                          {/* Status-Indikator */}
+                          <div className="flex-shrink-0">
+                            <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold ${
+                              isActive
+                                ? 'bg-yellow-500/10 text-yellow-500'
+                                : 'bg-emerald-500/10 text-emerald-500'
+                            }`}>
+                              <span className={`inline-block w-1.5 h-1.5 rounded-full ${isActive ? 'bg-yellow-500 animate-pulse' : 'bg-emerald-500'}`} />
+                              {isActive ? 'Aktiv' : 'Fertig'}
+                            </span>
+                          </div>
+
+                          {/* Hauptinfo */}
+                          <div className="flex-1 min-w-0">
+                            <p className={`font-medium text-sm truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {stationName}
+                            </p>
+                            {rental.powerbank_id && (
+                              <p className={`text-xs truncate ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                                PB: {rental.powerbank_id.slice(0, 8)}…
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Zeit */}
+                          <div className={`text-xs flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                            <div>{startedAt.toLocaleDateString('de-DE')} {startedAt.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</div>
+                            <div>{isActive ? <span className="text-yellow-500">läuft seit {durationStr}</span> : durationStr}</div>
+                          </div>
+
+                          {/* Betrag */}
+                          <div className={`text-sm font-semibold flex-shrink-0 min-w-[60px] text-right ${
+                            rental.total_price != null
+                              ? isDarkMode ? 'text-white' : 'text-slate-900'
+                              : isDarkMode ? 'text-gray-500' : 'text-slate-400'
+                          }`}>
+                            {rental.total_price != null ? `${rental.total_price.toFixed(2)} €` : '–'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {activeTab === 'users' && (
             <div className="h-full flex flex-col">
-              {/* Benutzer Header + Suche + Pagination */}
+              {/* Header + Filter */}
               <div className={`${sectionHeaderWrapper} p-4 border ${sectionHeaderClasses}`}>
-                <div className="flex flex-col gap-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                       Benutzer
                       {usersTotalCount != null && (
@@ -2552,48 +2839,63 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                         </span>
                       )}
                     </h3>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="relative flex-1 sm:flex-initial min-w-[180px]">
-                        <input
-                          type="search"
-                          value={usersSearchQuery}
-                          onChange={(e) => setUsersSearchQuery(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && fetchUsers({ search: usersSearchQuery, page: 1 })}
-                          placeholder="E-Mail durchsuchen…"
-                          className={`w-full sm:w-56 px-3 py-2 pl-9 rounded-lg border text-sm ${
-                            isDarkMode
-                              ? 'bg-white/10 border-white/20 text-white placeholder-gray-500 focus:border-emerald-500'
-                              : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 focus:border-emerald-500'
-                          } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
-                        />
-                        <span className={`absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`} aria-hidden>
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-                          </svg>
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => fetchUsers({ search: usersSearchQuery, page: 1 })}
-                        disabled={usersLoading}
-                        className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                      >
-                        Suchen
-                      </button>
+
+                    {/* Live-Suche */}
+                    <div className="relative flex-1 sm:flex-initial min-w-[200px] sm:max-w-xs">
+                      <input
+                        type="search"
+                        value={usersSearchQuery}
+                        onChange={(e) => {
+                          setUsersSearchQuery(e.target.value);
+                          setUsersPage(1);
+                          fetchUsers({ search: e.target.value, page: 1 });
+                        }}
+                        placeholder="E-Mail durchsuchen…"
+                        className={`w-full px-3 py-1.5 pl-8 rounded-lg border text-sm ${
+                          isDarkMode
+                            ? 'bg-white/10 border-white/20 text-white placeholder-gray-500 focus:border-emerald-500'
+                            : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 focus:border-emerald-500'
+                        } focus:outline-none focus:ring-2 focus:ring-emerald-500/20`}
+                      />
+                      <svg className={`absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none ${isDarkMode ? 'text-gray-400' : 'text-slate-400'}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+                      </svg>
                     </div>
                   </div>
-                  <div className={`flex flex-wrap items-center justify-between gap-2 border-t pt-3 mt-1 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
-                    <div className={`flex items-center gap-2 text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                      <span>Pro Seite:</span>
+
+                  {/* Rolle-Filter + Pagination */}
+                  <div className={`flex flex-wrap items-center justify-between gap-2 border-t pt-3 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+                    {/* Rolle-Filter Chips */}
+                    <div className="flex flex-wrap gap-1">
+                      {(['all', 'user', 'admin', 'owner'] as const).map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => fetchUsers({ role: r, page: 1 })}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                            usersRoleFilter === r
+                              ? r === 'owner'
+                                ? 'bg-purple-600 text-white'
+                                : r === 'admin'
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-emerald-600 text-white'
+                              : isDarkMode ? 'bg-white/10 text-gray-300 hover:bg-white/20' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {r === 'all' ? 'Alle' : r.charAt(0).toUpperCase() + r.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Pagination */}
+                    <div className="flex items-center gap-1.5">
                       <select
                         value={usersPageSize}
                         onChange={(e) => {
                           const v = Number(e.target.value);
-                          setUsersPageSize(v);
-                          setUsersPage(1);
                           fetchUsers({ pageSize: v, page: 1 });
                         }}
-                        className={`px-2 py-1 rounded border text-sm ${
+                        className={`px-2 py-1 rounded-lg border text-xs ${
                           isDarkMode ? 'bg-white/10 border-white/20 text-white' : 'bg-white border-slate-200 text-slate-700'
                         }`}
                       >
@@ -2603,85 +2905,100 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                         <option value={100}>100</option>
                       </select>
                       {usersTotalCount != null && (
-                        <span>
-                          Zeige {(usersPage - 1) * usersPageSize + 1}–{Math.min(usersPage * usersPageSize, usersTotalCount)} von {usersTotalCount}
+                        <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                          {(usersPage - 1) * usersPageSize + 1}–{Math.min(usersPage * usersPageSize, usersTotalCount)} / {usersTotalCount}
                         </span>
                       )}
-                    </div>
-                    <div className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => fetchUsers({ page: usersPage - 1 })}
                         disabled={usersLoading || usersPage <= 1}
-                        className={`p-2 rounded-lg transition-colors disabled:opacity-40 ${
-                          isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
-                        }`}
+                        className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'}`}
                         aria-label="Vorherige Seite"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M15 18l-6-6 6-6"/>
-                        </svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
                       </button>
-                      <span className={`min-w-[100px] text-center text-sm ${isDarkMode ? 'text-gray-300' : 'text-slate-600'}`}>
-                        Seite {usersPage}
-                        {usersTotalCount != null && usersPageSize > 0 && (
-                          <> von {Math.ceil(usersTotalCount / usersPageSize) || 1}</>
-                        )}
+                      <span className={`text-xs min-w-[50px] text-center ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                        {usersPage} / {usersTotalCount != null ? Math.ceil(usersTotalCount / usersPageSize) || 1 : '?'}
                       </span>
                       <button
                         type="button"
                         onClick={() => fetchUsers({ page: usersPage + 1 })}
                         disabled={usersLoading || (usersTotalCount != null && usersPage * usersPageSize >= usersTotalCount)}
-                        className={`p-2 rounded-lg transition-colors disabled:opacity-40 ${
-                          isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'
-                        }`}
+                        className={`p-1.5 rounded-lg transition-colors disabled:opacity-40 ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-slate-200'}`}
                         aria-label="Nächste Seite"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M9 18l6-6-6-6"/>
-                        </svg>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
                       </button>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Benutzer Liste */}
-              <div className="flex-1 overflow-y-auto p-4">
+              {/* Tabelle */}
+              <div className="flex-1 overflow-y-auto">
                 {usersLoading ? (
                   <div className="flex items-center justify-center min-h-[200px]">
                     <div className="animate-spin rounded-full h-10 w-10 border-2 border-emerald-600 border-t-transparent" />
                   </div>
+                ) : users.length === 0 ? (
+                  <div className={`m-4 rounded-xl border p-8 text-center ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
+                    {usersSearchQuery.trim() || usersRoleFilter !== 'all'
+                      ? 'Keine Benutzer entsprechen dem Filter.'
+                      : 'Noch keine Benutzer vorhanden.'}
+                  </div>
                 ) : (
-                  <div className="space-y-3">
-                    {users.length === 0 ? (
-                      <div className={`rounded-xl border p-6 text-center ${isDarkMode ? 'bg-white/5 border-white/10 text-gray-400' : 'bg-slate-50 border-slate-200 text-slate-500'}`}>
-                        {usersSearchQuery.trim()
-                          ? 'Keine Benutzer passen zur Suche. Versuchen Sie einen anderen Suchbegriff.'
-                          : 'Noch keine Benutzer vorhanden.'}
-                      </div>
-                    ) : (
-                      users.map((user) => (
-                        <div
-                          key={user.user_id}
-                          className={`p-4 rounded-xl border ${
-                            isDarkMode ? 'bg-white/5 border-white/10' : 'bg-slate-50/80 border-slate-200'
-                          }`}
-                        >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className={`border-t ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+                    {/* Tabellen-Header */}
+                    <div className={`grid grid-cols-[auto_1fr_auto_auto] gap-x-4 px-4 py-2 text-xs font-semibold uppercase tracking-wide ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                      <span>Avatar</span>
+                      <span>E-Mail</span>
+                      <span className="hidden sm:block">Registriert</span>
+                      <span>Rolle &amp; Aktion</span>
+                    </div>
+                    <div className={`divide-y ${isDarkMode ? 'divide-white/5' : 'divide-slate-100'}`}>
+                      {users.map((user) => {
+                        const initials = (user.email || '?').slice(0, 2).toUpperCase();
+                        const avatarColor = user.role === 'owner'
+                          ? isDarkMode ? 'bg-purple-500/20 text-purple-300' : 'bg-purple-100 text-purple-700'
+                          : user.role === 'admin'
+                            ? isDarkMode ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700'
+                            : isDarkMode ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-50 text-emerald-700';
+                        return (
+                          <div
+                            key={user.user_id}
+                            className={`grid grid-cols-[auto_1fr_auto_auto] items-center gap-x-4 px-4 py-2.5 transition-colors ${
+                              isDarkMode ? 'hover:bg-white/5' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            {/* Avatar */}
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${avatarColor}`}>
+                              {initials}
+                            </div>
+
+                            {/* E-Mail + Datum (mobil) */}
                             <div className="min-w-0">
-                              <h4 className={`font-semibold truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{user.email}</h4>
-                              <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
-                                Registriert: {new Date(user.created_at).toLocaleDateString()}
+                              <p className={`text-sm font-medium truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                                {user.email}
+                              </p>
+                              <p className={`text-xs sm:hidden ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
+                                {new Date(user.created_at).toLocaleDateString('de-DE')}
                               </p>
                             </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              <span className={`px-3 py-1 rounded-lg text-sm ${
+
+                            {/* Datum (Desktop) */}
+                            <span className={`hidden sm:block text-xs flex-shrink-0 ${isDarkMode ? 'text-gray-400' : 'text-slate-500'}`}>
+                              {new Date(user.created_at).toLocaleDateString('de-DE')}
+                            </span>
+
+                            {/* Rolle + Aktionen */}
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
                                 user.role === 'owner'
-                                  ? 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300'
+                                  ? isDarkMode ? 'bg-purple-500/20 text-purple-300' : 'bg-purple-100 text-purple-700'
                                   : user.role === 'admin'
-                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300'
-                                    : 'bg-gray-100 text-gray-700 dark:bg-gray-600 dark:text-gray-300'
+                                    ? isDarkMode ? 'bg-blue-500/20 text-blue-300' : 'bg-blue-100 text-blue-700'
+                                    : isDarkMode ? 'bg-white/10 text-gray-300' : 'bg-slate-100 text-slate-600'
                               }`}>
                                 {user.role}
                               </span>
@@ -2689,28 +3006,36 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                                 <div className="flex gap-1">
                                   <button
                                     onClick={() => assignUserRole(user.user_id, 'owner')}
-                                    className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200 dark:bg-purple-900 dark:text-purple-300 dark:hover:bg-purple-800"
+                                    title="Zu Owner befördern"
+                                    className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-purple-500/20 text-purple-400' : 'hover:bg-purple-100 text-purple-600'}`}
                                   >
-                                    Owner
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                                   </button>
-                                  <button
-                                    onClick={() => assignUserRole(user.user_id, 'user')}
-                                    className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200 dark:bg-gray-600 dark:text-gray-300 dark:hover:bg-gray-500"
-                                  >
-                                    User
-                                  </button>
+                                  {user.role !== 'user' && (
+                                    <button
+                                      onClick={() => assignUserRole(user.user_id, 'user')}
+                                      title="Zu User zurücksetzen"
+                                      className={`p-1 rounded transition-colors ${isDarkMode ? 'hover:bg-white/10 text-gray-400' : 'hover:bg-slate-200 text-slate-500'}`}
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 7-7h2a7 7 0 0 1 7 7v1"/></svg>
+                                    </button>
+                                  )}
                                 </div>
                               )}
                             </div>
                           </div>
-                        </div>
-                      ))
-                    )}
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
             </div>
             )}
+
+          {activeTab === 'analytics' && (
+            <AnalyticsDashboard isDarkMode={isDarkMode} />
+          )}
           </div>
         </div>
       </div>

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"TODO\\\\|FIXME\\\\|HACK\\\\|SECURITY\" /c/Users/noela/gridbox-pwa/src --include=*.ts --include=*.tsx)",
+      "Bash(grep -r \"SUPABASE_JWT_SECRET\\\\|JWT\\\\|Bearer\" /c/Users/noela/gridbox-pwa/src/app/api --include=*.ts)",
+      "Bash(grep -r process.env. /c/Users/noela/gridbox-pwa/src --include=*.ts --include=*.tsx)",
+      "Bash(grep -r \"console.log\\\\|console.error\\\\|console.warn\" /c/Users/noela/gridbox-pwa/src/app/api --include=*.ts)"
+    ]
+  }
+}

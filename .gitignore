@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# ESP32 local secrets
+ESP32_Gridbox_Station/secrets.h
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

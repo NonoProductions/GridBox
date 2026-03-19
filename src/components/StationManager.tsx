@@ -28,9 +28,16 @@ export interface Station {
   photos?: string[]; // Array von bis zu 3 Foto-URLs
   rental_cost?: number; // Kosten pro Stunde in Euro
   powerbanks?: Powerbank[]; // Liste der Powerbanks an dieser Station
-  battery_voltage?: number; // Batteriespannung in Volt
-  battery_percentage?: number; // Batterieprozente (0-100)
-  powerbank_id?: string | null; // Eindeutige ID der aktuell erkannten Powerbank
+  battery_voltage?: number; // Batteriespannung in Volt (bester Slot)
+  battery_percentage?: number; // Batterieprozente (0-100, bester Slot)
+  powerbank_id?: string | null; // Eindeutige ID der aktuell erkannten Powerbank (bester Slot)
+  // Dual-Slot Daten
+  slot_1_powerbank_id?: string | null;
+  slot_1_battery_voltage?: number | null;
+  slot_1_battery_percentage?: number | null;
+  slot_2_powerbank_id?: string | null;
+  slot_2_battery_voltage?: number | null;
+  slot_2_battery_percentage?: number | null;
   charge_enabled?: boolean; // Relais-Steuerung: Laden aktiviert/deaktiviert
   opening_hours?: string; // Öffnungszeiten (z.B. "Mo-Fr: 8:00-18:00, Sa: 9:00-16:00")
   last_seen?: string; // Letzter Heartbeat vom ESP32 (ISO-Zeitstempel)
@@ -57,15 +64,38 @@ export function computeRealAvailability(station: {
   powerbank_id?: string | null;
   battery_voltage?: number | null;
   battery_percentage?: number | null;
+  slot_1_powerbank_id?: string | null;
+  slot_1_battery_voltage?: number | null;
+  slot_1_battery_percentage?: number | null;
+  slot_2_powerbank_id?: string | null;
+  slot_2_battery_voltage?: number | null;
+  slot_2_battery_percentage?: number | null;
   last_seen?: string | null;
   updated_at?: string | null;
 }): number {
   // Station offline → keine Powerbanks verfügbar
   if (!isStationOnline(station)) return 0;
   
-  const hasPowerbankId = typeof station.powerbank_id === 'string' && station.powerbank_id.trim().length > 0;
-  const hasLegacyBatteryData = station.battery_voltage != null && station.battery_percentage != null;
-  return hasPowerbankId || hasLegacyBatteryData ? 1 : 0;
+  let count = 0;
+  
+  // Slot 1 prüfen
+  const slot1HasId = typeof station.slot_1_powerbank_id === 'string' && station.slot_1_powerbank_id.trim().length > 0;
+  const slot1HasBattery = station.slot_1_battery_voltage != null && station.slot_1_battery_percentage != null;
+  if (slot1HasId || slot1HasBattery) count++;
+  
+  // Slot 2 prüfen
+  const slot2HasId = typeof station.slot_2_powerbank_id === 'string' && station.slot_2_powerbank_id.trim().length > 0;
+  const slot2HasBattery = station.slot_2_battery_voltage != null && station.slot_2_battery_percentage != null;
+  if (slot2HasId || slot2HasBattery) count++;
+  
+  // Fallback: Legacy-Felder (wenn keine Slot-Daten vorhanden)
+  if (count === 0) {
+    const hasPowerbankId = typeof station.powerbank_id === 'string' && station.powerbank_id.trim().length > 0;
+    const hasLegacyBatteryData = station.battery_voltage != null && station.battery_percentage != null;
+    if (hasPowerbankId || hasLegacyBatteryData) count = 1;
+  }
+  
+  return count;
 }
 
 interface StationManagerProps {
@@ -86,7 +116,7 @@ export default function StationManager({ onStationsUpdate, isDarkMode }: Station
       
       const { data, error } = await supabase
         .from('stations')
-        .select('*')
+        .select('id, name, description, lat, lng, available_units, total_units, address, owner_id, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, powerbank_id, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, charge_enabled, opening_hours, last_seen')
         .eq('is_active', true)
         .order('created_at', { ascending: false });
 

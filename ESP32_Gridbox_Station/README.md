@@ -30,21 +30,24 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
 
 ### 3. Code konfigurieren
 
-Öffne `ESP32_Gridbox_Station.ino` und passe folgende Zeilen an:
+1. Kopiere `secrets.example.h` nach `secrets.h`
+2. Trage deine Werte in `secrets.h` ein
+3. `secrets.h` wird nicht in Git eingecheckt (siehe `.gitignore`)
+
+`secrets.h` Beispiel:
 
 ```cpp
 // WLAN Zugangsdaten
-const char* WIFI_SSID = "MeinWLAN";           // ← Dein WLAN-Name
-const char* WIFI_PASSWORD = "MeinPasswort";   // ← Dein WLAN-Passwort
+#define WIFI_SSID "MeinWLAN"                     // ← Dein WLAN-Name
+#define WIFI_PASSWORD "MeinPasswort"             // ← Dein WLAN-Passwort
 
-// Supabase Konfiguration  
-const char* SUPABASE_URL = "https://abcdefgh.supabase.co";  // ← Aus .env.local
-const char* SUPABASE_KEY = "eyJhbGc...";                    // ← Aus .env.local
+// Proxy/API Konfiguration
+#define PROXY_BASE_URL "https://deine-domain/api/esp"
+#define DEVICE_API_KEY "dein_station_device_api_key"
 
-// Station Konfiguration (eine davon):
-const char* STATION_ID = "uuid-hier";          // ← UUID aus Datenbank
-// ODER
-const char* STATION_SHORT_CODE = "AB12";       // ← Short-Code aus Datenbank
+// Station Konfiguration
+#define STATION_ID "uuid-hier"                   // ← UUID aus Datenbank
+#define STATION_SHORT_CODE "AB12"                // ← Short-Code aus Datenbank
 ```
 
 ### 4. Hochladen
@@ -124,7 +127,7 @@ int countAvailableUnits() {
 
 ### Problem: "HTTP Fehler 401"
 **Lösung:**
-- SUPABASE_KEY prüfen
+- `DEVICE_API_KEY` prüfen
 - In Supabase: Row Level Security (RLS) Policies prüfen
 
 ### Problem: "Station nicht gefunden"
