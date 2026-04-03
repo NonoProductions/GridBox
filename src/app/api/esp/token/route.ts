@@ -16,8 +16,9 @@ export async function POST(request: Request) {
 
   const jwtSecret = process.env.SUPABASE_JWT_SECRET;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (!jwtSecret || !supabaseUrl) {
+  if (!jwtSecret || !supabaseUrl || !supabaseAnonKey) {
     console.error("Missing required server configuration for token endpoint");
     return NextResponse.json(
       { error: "Server configuration error" },
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
       token,
       expires_at: now + expiresIn,
       supabase_host: `${projectRef}.supabase.co`,
+      realtime_apikey: supabaseAnonKey,
     });
   } catch (err) {
     console.error("JWT signing error");
