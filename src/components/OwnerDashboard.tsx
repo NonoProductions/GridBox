@@ -2734,7 +2734,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                         className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                           updatingStation === selectedStation.id ? 'opacity-50 cursor-not-allowed' : ''
                         } ${
-                          (selectedStation.charge_enabled ?? true)
+                          !(selectedStation.charge_enabled ?? true)
                             ? isDarkMode ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                             : isDarkMode ? 'bg-white/8 text-gray-400 hover:bg-white/12' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                         }`}
@@ -2746,7 +2746,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                             <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
                           </svg>
                         )}
-                        Laden {(selectedStation.charge_enabled ?? true) ? 'EIN' : 'AUS'}
+                        Laden {!(selectedStation.charge_enabled ?? true) ? 'EIN' : 'AUS'}
                       </button>
                       <button
                         onClick={() => deleteStation(selectedStation.id)}

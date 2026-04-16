@@ -708,11 +708,11 @@ export default function OwnerDashboardV2Content(p: V2ContentProps) {
                   disabled={p.updatingStation === sel.id}
                   className={cls("text-xs font-medium px-3 py-1.5 rounded-md transition-colors",
                     p.updatingStation === sel.id ? "opacity-50" : "",
-                    (sel.charge_enabled ?? true)
+                    !(sel.charge_enabled ?? true)
                       ? (dk ? "text-emerald-400 hover:bg-emerald-500/10" : "text-emerald-700 hover:bg-emerald-50")
                       : (dk ? "text-neutral-400 hover:bg-neutral-800" : "text-neutral-500 hover:bg-neutral-100")
                   )}>
-                  Laden {(sel.charge_enabled ?? true) ? "EIN" : "AUS"}
+                  Laden {!(sel.charge_enabled ?? true) ? "EIN" : "AUS"}
                 </button>
                 <button
                   onClick={() => p.deleteStation(sel.id)}

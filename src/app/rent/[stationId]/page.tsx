@@ -90,24 +90,24 @@ function RentPageContent() {
   /* ── Loading skeleton (full page) ── */
   if (loading) {
     return (
-      <div className="min-h-screen" style={{ background: pageBg }}>
-        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
-          <div className="pt-5">
+      <div className="h-[100dvh] overflow-hidden" style={{ background: pageBg }}>
+        <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
+          <div className="pt-3">
             <div className={`h-10 w-10 rounded-xl animate-pulse ${skel}`} />
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
-            <div className={`w-44 h-44 rounded-[28px] animate-pulse ${skel}`} />
-            <div className={`mt-5 h-7 w-48 rounded-lg animate-pulse ${skel}`} />
-            <div className="mt-3 flex gap-2">
-              <div className={`h-7 w-20 rounded-full animate-pulse ${skel}`} />
-              <div className={`h-7 w-16 rounded-full animate-pulse ${skel}`} />
-              <div className={`h-7 w-14 rounded-full animate-pulse ${skel}`} />
+          <div className="flex flex-1 flex-col items-center justify-center">
+            <div className={`h-48 w-48 rounded-[28px] animate-pulse sm:h-60 sm:w-60 ${skel}`} />
+            <div className={`mt-4 h-8 w-56 rounded-lg animate-pulse ${skel}`} />
+            <div className="mt-2 flex gap-2">
+              <div className={`h-8 w-20 rounded-full animate-pulse ${skel}`} />
+              <div className={`h-8 w-16 rounded-full animate-pulse ${skel}`} />
+              <div className={`h-8 w-14 rounded-full animate-pulse ${skel}`} />
             </div>
-            <div className={`mt-4 h-5 w-52 rounded-lg animate-pulse ${skel}`} />
+            <div className={`mt-4 h-5 w-48 rounded-lg animate-pulse ${skel}`} />
           </div>
-          <div className="pb-8 space-y-3">
-            <div className={`h-16 w-full rounded-2xl animate-pulse ${skel}`} />
-            <div className={`h-[52px] w-full rounded-2xl animate-pulse ${skel}`} />
+          <div className="space-y-2 pb-4">
+            <div className={`h-14 w-full rounded-2xl animate-pulse ${skel}`} />
+            <div className={`h-12 w-full rounded-2xl animate-pulse ${skel}`} />
           </div>
         </div>
       </div>
@@ -117,11 +117,11 @@ function RentPageContent() {
   /* ── Error state (full page) ── */
   if (error || !station) {
     return (
-      <div className="min-h-screen" style={{ background: pageBg }}>
-        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
-          <div className="h-10 pt-5" aria-hidden="true" />
+      <div className="h-[100dvh] overflow-hidden" style={{ background: pageBg }}>
+        <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
+          <div className="h-6 pt-2" aria-hidden="true" />
 
-          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+          <div className="flex flex-1 flex-col items-center justify-center">
             <div
               className={`flex h-16 w-16 items-center justify-center rounded-2xl ${isDarkMode ? "bg-red-950/40" : "bg-red-50"}`}
             >
@@ -139,10 +139,10 @@ function RentPageContent() {
             </p>
           </div>
 
-          <div className="pb-8">
+          <div className="pb-4">
             <button
               onClick={() => router.push(homeHref)}
-              className="h-[52px] w-full rounded-2xl bg-emerald-600 text-sm font-semibold text-white transition-all active:scale-[0.98]"
+              className="h-12 w-full rounded-2xl bg-emerald-600 text-sm font-semibold text-white transition-all active:scale-[0.98]"
             >
               Zur Karte
             </button>
@@ -336,24 +336,24 @@ export default function RentPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[#f4faf7] dark:bg-[#081017]">
-          <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
-            <div className="pt-5">
+        <div className="h-[100dvh] overflow-hidden bg-[#f4faf7] dark:bg-[#081017]">
+          <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
+            <div className="pt-3">
               <div className="h-10 w-10 rounded-xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
             </div>
-            <div className="flex-1 flex flex-col items-center justify-center -mt-6">
-              <div className="w-44 h-44 rounded-[28px] animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
-              <div className="mt-5 h-7 w-48 rounded-lg animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
-              <div className="mt-3 flex gap-2">
+            <div className="flex flex-1 flex-col items-center justify-center">
+              <div className="h-32 w-32 rounded-[24px] animate-pulse bg-slate-100 dark:bg-white/[0.06] sm:h-40 sm:w-40" />
+              <div className="mt-3 h-6 w-44 rounded-lg animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              <div className="mt-2 flex gap-2">
                 <div className="h-7 w-20 rounded-full animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
                 <div className="h-7 w-16 rounded-full animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
                 <div className="h-7 w-14 rounded-full animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
               </div>
-              <div className="mt-4 h-5 w-52 rounded-lg animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              <div className="mt-3 h-4 w-44 rounded-lg animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
             </div>
-            <div className="pb-8 space-y-3">
-              <div className="h-16 w-full rounded-2xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
-              <div className="h-[52px] w-full rounded-2xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+            <div className="space-y-2 pb-4">
+              <div className="h-14 w-full rounded-2xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              <div className="h-12 w-full rounded-2xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
             </div>
           </div>
         </div>

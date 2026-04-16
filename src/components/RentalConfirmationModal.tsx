@@ -320,24 +320,24 @@ export default function RentalConfirmationModal({
      ═══════════════════════════════════════ */
   if (authLoading) {
     return (
-      <div className="min-h-screen" style={{ background: pageBg }}>
-        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
-          <div className="pt-5">
+      <div className="h-[100dvh] overflow-hidden" style={{ background: pageBg }}>
+        <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
+          <div className="pt-3">
             <div className="h-10 w-10 rounded-xl animate-pulse" style={{ background: skeletonBg }} />
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
-            <div className="w-44 h-44 rounded-[28px] animate-pulse" style={{ background: skeletonBg }} />
-            <div className="mt-5 h-7 w-48 rounded-lg animate-pulse" style={{ background: skeletonBg }} />
-            <div className="mt-3 flex gap-2">
+          <div className="flex flex-1 flex-col items-center justify-center">
+            <div className="h-32 w-32 rounded-[24px] animate-pulse sm:h-40 sm:w-40" style={{ background: skeletonBg }} />
+            <div className="mt-3 h-6 w-44 rounded-lg animate-pulse" style={{ background: skeletonBg }} />
+            <div className="mt-2 flex gap-2">
               <div className="h-7 w-20 rounded-full animate-pulse" style={{ background: skeletonBg }} />
               <div className="h-7 w-16 rounded-full animate-pulse" style={{ background: skeletonBg }} />
               <div className="h-7 w-14 rounded-full animate-pulse" style={{ background: skeletonBg }} />
             </div>
-            <div className="mt-4 h-5 w-52 rounded-lg animate-pulse" style={{ background: skeletonBg }} />
+            <div className="mt-3 h-4 w-44 rounded-lg animate-pulse" style={{ background: skeletonBg }} />
           </div>
-          <div className="pb-8 space-y-3">
-            <div className="h-16 w-full rounded-2xl animate-pulse" style={{ background: skeletonBg }} />
-            <div className="h-[52px] w-full rounded-2xl animate-pulse" style={{ background: skeletonBg }} />
+          <div className="space-y-2 pb-4">
+            <div className="h-14 w-full rounded-2xl animate-pulse" style={{ background: skeletonBg }} />
+            <div className="h-12 w-full rounded-2xl animate-pulse" style={{ background: skeletonBg }} />
           </div>
         </div>
       </div>
@@ -349,12 +349,12 @@ export default function RentalConfirmationModal({
      ═══════════════════════════════════════ */
   if (phase === "pickup") {
     return (
-      <div className="min-h-screen" style={{ background: pageBg }}>
-        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+      <div className="h-[100dvh] overflow-hidden" style={{ background: pageBg }}>
+        <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
           {/* Status badge */}
-          <div className="pt-6 flex justify-center">
+          <div className="flex justify-center pt-3">
             <span
-              className="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-semibold"
+              className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold"
               style={{
                 background: isDarkMode ? "rgba(16,185,129,0.12)" : "rgba(236,253,245,0.95)",
                 color: "#10b981",
@@ -369,8 +369,8 @@ export default function RentalConfirmationModal({
           </div>
 
           {/* Center */}
-          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
-            <div className="w-44 h-44">
+          <div className="flex flex-1 flex-col items-center justify-center">
+            <div className="h-32 w-32 sm:h-40 sm:w-40">
               <Image
                 src="/Powerbank.png"
                 alt="Powerbank"
@@ -381,17 +381,17 @@ export default function RentalConfirmationModal({
               />
             </div>
 
-            <h2 className="mt-5 text-2xl font-bold text-center tracking-tight" style={{ color: textPrimary }}>
+            <h2 className="mt-3 text-xl font-bold text-center tracking-tight sm:mt-4 sm:text-2xl" style={{ color: textPrimary }}>
               Powerbank entnehmen
             </h2>
-            <p className="mt-2 text-sm text-center leading-6 max-w-[280px]" style={{ color: textSecondary }}>
+            <p className="mt-2 max-w-[280px] text-center text-sm leading-5" style={{ color: textSecondary }}>
               Die Station ist freigegeben. Bitte jetzt die Powerbank herausnehmen.
             </p>
           </div>
 
           {/* Bottom */}
-          <div className="pb-8 space-y-3">
-            <div className="rounded-2xl border px-4 py-3" style={{ background: cardBg, borderColor }}>
+          <div className="space-y-2 pb-4">
+            <div className="rounded-2xl border px-3 py-2.5" style={{ background: cardBg, borderColor }}>
               <div className="flex items-center gap-3">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/12 text-emerald-500">
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -407,7 +407,7 @@ export default function RentalConfirmationModal({
             {pickupTimeout && (
               <button
                 onClick={stableOnPickupComplete}
-                className="h-[52px] w-full rounded-2xl text-sm font-semibold text-white transition-transform active:scale-[0.99]"
+                className="h-12 w-full rounded-2xl text-sm font-semibold text-white transition-transform active:scale-[0.99]"
                 style={{ background: "#10b981" }}
               >
                 Ich habe die Powerbank entnommen
@@ -418,7 +418,7 @@ export default function RentalConfirmationModal({
               onClick={() => {
                 window.location.href = "/hilfe";
               }}
-              className="h-11 w-full rounded-2xl border text-sm font-medium transition-colors active:opacity-80"
+              className="h-10 w-full rounded-2xl border text-sm font-medium transition-colors active:opacity-80"
               style={{ borderColor, color: textMuted }}
             >
               Problem melden
@@ -433,33 +433,33 @@ export default function RentalConfirmationModal({
      CONFIRM PHASE – Full page
      ═══════════════════════════════════════ */
   return (
-    <div className="min-h-screen" style={{ background: pageBg }}>
-      <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
-        <div className="h-10 pt-5" aria-hidden="true" />
+    <div className="h-[100dvh] overflow-hidden" style={{ background: pageBg }}>
+      <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
+        <div className="h-6 pt-2" aria-hidden="true" />
 
         {/* Center content */}
-        <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+        <div className="flex flex-1 flex-col items-center justify-center">
           {/* Station image */}
-          <div className="w-48 h-48">
+          <div className="flex h-44 w-44 items-center justify-center sm:h-56 sm:w-56">
             <Image
               src="/Powerbank.png"
               alt={station.name}
-              width={160}
-              height={160}
+              width={240}
+              height={240}
               className="h-full w-full object-contain"
               priority
             />
           </div>
 
           {/* Station name */}
-          <h1 className="mt-5 text-2xl font-bold text-center leading-tight" style={{ color: textPrimary }}>
+          <h1 className="mt-4 text-center text-[2rem] font-bold leading-tight sm:mt-5 sm:text-[2.1rem]" style={{ color: textPrimary }}>
             {station.name}
           </h1>
 
           {/* Status badges */}
-          <div className="mt-3 flex flex-wrap justify-center gap-2">
+          <div className="mt-3 flex flex-wrap justify-center gap-1.5 sm:mt-4 sm:gap-2">
             <span
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold sm:px-3.5 sm:text-sm"
               style={{
                 background: stationOnline
                   ? (isDarkMode ? "rgba(16,185,129,0.12)" : "rgba(236,253,245,0.95)")
@@ -472,7 +472,7 @@ export default function RentalConfirmationModal({
             </span>
 
             <span
-              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+              className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium sm:px-3.5 sm:text-sm"
               style={{
                 background: isDarkMode ? "rgba(15,23,42,0.4)" : "rgba(241,245,249,0.9)",
                 color: textSecondary,
@@ -484,7 +484,7 @@ export default function RentalConfirmationModal({
 
             {statusBatteryPct !== null && (
               <span
-                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium sm:px-3.5 sm:text-sm"
                 style={{
                   background: isDarkMode ? "rgba(15,23,42,0.4)" : "rgba(241,245,249,0.9)",
                   color: textSecondary,
@@ -501,16 +501,16 @@ export default function RentalConfirmationModal({
           </div>
 
           {/* Price */}
-          <p className="mt-4 text-sm text-center" style={{ color: textSecondary }}>
+          <p className="mt-3 text-center text-sm sm:mt-4 sm:text-base" style={{ color: textSecondary }}>
             {formatEuro(startPrice)} zum Start · {formatEuro(pricePerMinute)} pro Minute
           </p>
         </div>
 
         {/* Bottom section */}
-        <div className="pb-8 space-y-3">
+        <div className="space-y-2 pb-4">
           {/* Account card */}
           <div
-            className="rounded-2xl border px-4 py-3"
+            className="rounded-2xl border px-3 py-2.5"
             style={{ background: cardBg, borderColor }}
           >
             {isAuthenticated ? (
@@ -564,7 +564,7 @@ export default function RentalConfirmationModal({
                 </div>
                 <button
                   onClick={handleConfirm}
-                  className="shrink-0 rounded-xl px-4 py-2 text-xs font-semibold transition-transform active:scale-[0.97]"
+                  className="shrink-0 rounded-xl px-3 py-2 text-xs font-semibold transition-transform active:scale-[0.97]"
                   style={{
                     background: isDarkMode ? "rgba(16,185,129,0.14)" : "rgba(209,250,229,0.8)",
                     color: "#10b981",
@@ -608,7 +608,7 @@ export default function RentalConfirmationModal({
             type="button"
             onClick={handleConfirm}
             disabled={loading || !readyToRent}
-            className="h-[52px] w-full rounded-2xl text-sm font-semibold text-white transition-transform active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-12 w-full rounded-2xl text-sm font-semibold text-white transition-transform active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
             style={{
               background: readyToRent ? "#10b981" : (isDarkMode ? "#334155" : "#94a3b8"),
             }}
@@ -620,7 +620,7 @@ export default function RentalConfirmationModal({
           <button
             type="button"
             onClick={onClose}
-            className="h-11 w-full rounded-2xl text-sm font-medium transition-colors active:opacity-80"
+            className="h-10 w-full rounded-2xl text-sm font-medium transition-colors active:opacity-80"
             style={{ color: textMuted }}
           >
             Abbrechen
