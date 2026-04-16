@@ -1,8 +1,15 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Station } from "./StationManager";
 import AnalyticsDashboardV2 from "./AnalyticsDashboardV2";
+import {
+  DEFAULT_HELP_PAGE_SETTINGS,
+  fetchHelpPageSettings,
+  saveHelpPageSettings,
+  type HelpFaqEntry,
+  type HelpPageSettings,
+} from "@/lib/helpPageContent";
 import {
   LineChart,
   Line,
@@ -34,7 +41,16 @@ interface UserWithRole {
   created_at: string;
 }
 
-type Tab = "overview" | "stats" | "stations" | "users" | "transactions" | "analytics";
+type Tab = "overview" | "stats" | "stations" | "users" | "transactions" | "analytics" | "help" | "settings";
+
+type HelpSettingField =
+  | "intro_title"
+  | "intro_subtitle"
+  | "support_email"
+  | "support_phone"
+  | "emergency_phone"
+  | "live_chat_hours"
+  | "website_url";
 
 export interface V2ContentProps {
   isDarkMode: boolean;
@@ -157,6 +173,107 @@ export default function OwnerDashboardV2Content(p: V2ContentProps) {
     "px-2.5 py-1 rounded-md text-xs font-medium transition-colors",
     dk ? "text-neutral-400 hover:bg-neutral-800" : "text-neutral-500 hover:bg-neutral-100"
   );
+
+  const [helpSettings, setHelpSettings] = useState<HelpPageSettings>(DEFAULT_HELP_PAGE_SETTINGS);
+  const [helpSettingsLoading, setHelpSettingsLoading] = useState(false);
+  const [helpSettingsSaving, setHelpSettingsSaving] = useState(false);
+  const [helpSettingsError, setHelpSettingsError] = useState<string | null>(null);
+  const [helpSettingsSuccess, setHelpSettingsSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (p.activeTab !== "help") {
+      return;
+    }
+
+    let cancelled = false;
+
+    setHelpSettingsLoading(true);
+    setHelpSettingsError(null);
+    setHelpSettingsSuccess(null);
+
+    (async () => {
+      try {
+        const settings = await fetchHelpPageSettings();
+        if (!cancelled) {
+          setHelpSettings(settings);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setHelpSettingsError("Die Hilfeseite konnte nicht geladen werden. Es werden die Standardwerte verwendet.");
+        }
+      } finally {
+        if (!cancelled) {
+          setHelpSettingsLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [p.activeTab]);
+
+  const updateHelpSetting = (field: HelpSettingField, value: string) => {
+    setHelpSettings((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const updateHelpFaq = (index: number, field: keyof HelpFaqEntry, value: string) => {
+    setHelpSettings((current) => ({
+      ...current,
+      faqs: current.faqs.map((faq, faqIndex) => (faqIndex === index ? { ...faq, [field]: value } : faq)),
+    }));
+  };
+
+  const addHelpFaq = () => {
+    setHelpSettings((current) => ({
+      ...current,
+      faqs: [...current.faqs, { question: "", answer: "" }].slice(0, 12),
+    }));
+  };
+
+  const removeHelpFaq = (index: number) => {
+    setHelpSettings((current) => ({
+      ...current,
+      faqs: current.faqs.filter((_, faqIndex) => faqIndex !== index),
+    }));
+  };
+
+  const saveHelpSettings = async () => {
+    setHelpSettingsError(null);
+    setHelpSettingsSuccess(null);
+
+    const faqs = helpSettings.faqs
+      .map((faq) => ({
+        question: faq.question.trim(),
+        answer: faq.answer.trim(),
+      }))
+      .filter((faq) => faq.question.length > 0 && faq.answer.length > 0)
+      .slice(0, 12);
+
+    if (faqs.length === 0) {
+      setHelpSettingsError("Mindestens eine FAQ mit Frage und Antwort ist erforderlich.");
+      return;
+    }
+
+    const payload: HelpPageSettings = {
+      ...helpSettings,
+      faqs,
+    };
+
+    setHelpSettingsSaving(true);
+    try {
+      await saveHelpPageSettings(payload);
+      setHelpSettings(payload);
+      setHelpSettingsSuccess("Hilfeseite gespeichert. Die öffentliche Seite wurde aktualisiert.");
+    } catch (error) {
+      setHelpSettingsError(error instanceof Error ? error.message : "Fehler beim Speichern der Hilfeseite.");
+    } finally {
+      setHelpSettingsSaving(false);
+    }
+  };
 
   // ── Overview Tab ─────────────────────────────────────────────────────────────
 
@@ -873,6 +990,230 @@ export default function OwnerDashboardV2Content(p: V2ContentProps) {
     );
   };
 
+  const renderSettings = () => {
+    return (
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        <div>
+          <h3 className={cls("text-xl font-semibold", text)}>Einstellungen Hilfeseite</h3>
+          <p className={cls("text-sm mt-1", textDim)}>
+            Dieser Bereich ist die Eingabe fur die offentliche Hilfeseite. Telefonnummern, Inhalte und Fragen (FAQ) kannst du hier direkt andern.
+          </p>
+        </div>
+
+        {helpSettingsError && (
+          <div className={cls("rounded-lg border px-3 py-2.5 text-sm", dk ? "border-red-900/50 bg-red-950/40 text-red-400" : "border-red-200 bg-red-50 text-red-600")}>
+            {helpSettingsError}
+          </div>
+        )}
+
+        {helpSettingsSuccess && (
+          <div className={cls("rounded-lg border px-3 py-2.5 text-sm", dk ? "border-emerald-900/50 bg-emerald-950/40 text-emerald-400" : "border-emerald-200 bg-emerald-50 text-emerald-600")}>
+            {helpSettingsSuccess}
+          </div>
+        )}
+
+        <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className={cls("rounded-2xl border overflow-hidden", border)}>
+            <div className={cls("px-4 py-3 border-b", border)}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h4 className={cls("text-sm font-semibold", text)}>Hilfeseite bearbeiten</h4>
+                  <p className={cls("text-xs mt-1", textDim)}>Änderungen erscheinen auf /hilfe nach dem Speichern.</p>
+                </div>
+                {helpSettingsLoading && (
+                  <span className={cls("text-xs", textDim)}>Lädt…</span>
+                )}
+              </div>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>Titel</span>
+                  <input
+                    type="text"
+                    value={helpSettings.intro_title}
+                    onChange={(e) => updateHelpSetting("intro_title", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>Untertitel</span>
+                  <input
+                    type="text"
+                    value={helpSettings.intro_subtitle}
+                    onChange={(e) => updateHelpSetting("intro_subtitle", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>E-Mail Support</span>
+                  <input
+                    type="email"
+                    value={helpSettings.support_email}
+                    onChange={(e) => updateHelpSetting("support_email", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>Telefon Support</span>
+                  <input
+                    type="text"
+                    value={helpSettings.support_phone}
+                    onChange={(e) => updateHelpSetting("support_phone", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>Notfall-Support</span>
+                  <input
+                    type="text"
+                    value={helpSettings.emergency_phone}
+                    onChange={(e) => updateHelpSetting("emergency_phone", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>Live-Chat Zeiten</span>
+                  <input
+                    type="text"
+                    value={helpSettings.live_chat_hours}
+                    onChange={(e) => updateHelpSetting("live_chat_hours", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  <span className={cls("text-xs font-medium", textMuted)}>Website</span>
+                  <input
+                    type="text"
+                    value={helpSettings.website_url}
+                    onChange={(e) => updateHelpSetting("website_url", e.target.value)}
+                    className={inputCls}
+                  />
+                </label>
+                <div className={cls("rounded-xl border p-3", dk ? "border-neutral-800 bg-neutral-900/30" : "border-neutral-200 bg-neutral-50")}>
+                  <p className={cls("text-xs font-semibold uppercase tracking-wide", textDim)}>Hinweis</p>
+                  <p className={cls("mt-1 text-xs leading-relaxed", textDim)}>
+                    Maximal 12 FAQ-Einträge. Leere Einträge werden beim Speichern ignoriert.
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <h5 className={cls("text-sm font-semibold", text)}>FAQ</h5>
+                  <button type="button" onClick={addHelpFaq} className={btnGhost}>
+                    + FAQ hinzufügen
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {helpSettings.faqs.map((faq, index) => (
+                    <div key={`${index}-${faq.question}`} className={cls("rounded-xl border p-3 space-y-3", border)}>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className={cls("text-xs font-medium", textMuted)}>FAQ {index + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeHelpFaq(index)}
+                          className={cls("text-xs transition-colors", dk ? "text-red-400 hover:text-red-300" : "text-red-500 hover:text-red-600")}
+                        >
+                          Entfernen
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={faq.question}
+                        onChange={(e) => updateHelpFaq(index, "question", e.target.value)}
+                        placeholder="Frage"
+                        className={inputCls}
+                      />
+                      <textarea
+                        value={faq.answer}
+                        onChange={(e) => updateHelpFaq(index, "answer", e.target.value)}
+                        placeholder="Antwort"
+                        rows={4}
+                        className={cls(inputCls, "resize-none")}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className={cls("px-4 py-3 border-t flex items-center justify-between gap-3", border, dk ? "bg-neutral-950/30" : "bg-neutral-50")}> 
+              <p className={cls("text-xs leading-relaxed", textDim)}>
+                Die Inhalte werden direkt für die öffentliche Hilfeseite verwendet.
+              </p>
+              <button
+                type="button"
+                onClick={saveHelpSettings}
+                disabled={helpSettingsSaving || helpSettingsLoading}
+                className={cls(btnPrimary, "disabled:opacity-50 disabled:cursor-not-allowed")}
+              >
+                {helpSettingsSaving ? "Speichere…" : "Speichern"}
+              </button>
+            </div>
+          </div>
+
+          <div className={cls("rounded-2xl border overflow-hidden", border)}>
+            <div className={cls("px-4 py-3 border-b", border)}>
+              <h4 className={cls("text-sm font-semibold", text)}>Vorschau</h4>
+              <p className={cls("text-xs mt-1", textDim)}>So erscheint die Seite für Nutzerinnen und Nutzer.</p>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className={cls("rounded-2xl p-4", dk ? "bg-white/5" : "bg-neutral-50") }>
+                <p className={cls("text-xs uppercase tracking-wide font-semibold", textDim)}>Header</p>
+                <h5 className={cls("mt-2 text-xl font-bold", text)}>{helpSettings.intro_title}</h5>
+                <p className={cls("mt-1 text-sm", textDim)}>{helpSettings.intro_subtitle}</p>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  ["E-Mail", helpSettings.support_email],
+                  ["Telefon", helpSettings.support_phone],
+                  ["Notfall", helpSettings.emergency_phone],
+                  ["Chat", helpSettings.live_chat_hours],
+                ].map(([label, value]) => (
+                  <div key={label} className={cls("rounded-xl border p-3", border)}>
+                    <p className={cls("text-[11px] uppercase tracking-wide font-semibold", textDim)}>{label}</p>
+                    <p className={cls("mt-1 text-sm font-medium break-words", text)}>{value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div>
+                <h6 className={cls("text-sm font-semibold mb-2", text)}>FAQ Vorschau</h6>
+                <div className="space-y-2">
+                  {helpSettings.faqs.slice(0, 3).map((faq, index) => (
+                    <div key={`${faq.question}-${index}`} className={cls("rounded-xl border p-3", border)}>
+                      <p className={cls("text-sm font-medium", text)}>{faq.question || "Unbenannte Frage"}</p>
+                      <p className={cls("mt-1 text-xs leading-relaxed whitespace-pre-line", textDim)}>{faq.answer || "Keine Antwort hinterlegt."}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className={cls("rounded-xl border p-3 text-xs leading-relaxed", border)}>
+                <p className={cls("font-semibold uppercase tracking-wide", textDim)}>Website</p>
+                <p className={cls("mt-1", text)}>{helpSettings.website_url}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Render ───────────────────────────────────────────────────────────────────
 
   switch (p.activeTab) {
@@ -888,6 +1229,8 @@ export default function OwnerDashboardV2Content(p: V2ContentProps) {
       return renderUsers();
     case "analytics":
       return <AnalyticsDashboardV2 isDarkMode={dk} />;
+    case "help":
+      return renderSettings();
     default:
       return null;
   }

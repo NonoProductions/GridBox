@@ -3,55 +3,41 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { usePageTheme } from "@/lib/usePageTheme";
+import { DEFAULT_HELP_PAGE_SETTINGS, fetchHelpPageSettings } from "@/lib/helpPageContent";
 
 function HilfeContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [expandedFAQ, setExpandedFAQ] = useState<number | null>(null);
+  const [helpSettings, setHelpSettings] = useState(DEFAULT_HELP_PAGE_SETTINGS);
+  const [contentLoading, setContentLoading] = useState(true);
+  const [contentError, setContentError] = useState<string | null>(null);
   const isDarkMode = usePageTheme(searchParams);
 
-  const faqs = [
-    {
-      id: 1,
-      question: "Wie funktioniert das Ausleihen einer Powerbank?",
-      answer: "1. Öffne die GridBox App und finde eine verfügbare Station auf der Karte\n2. Scanne den QR-Code an der Station\n3. Nimm die Powerbank aus dem Fach\n4. Lade dein Gerät auf\n5. Gib die Powerbank an einer beliebigen Station zurück"
-    },
-    {
-      id: 2,
-      question: "Was kostet das Ausleihen einer Powerbank?",
-      answer: "Das Ausleihen einer Powerbank kostet 2,50€ pro Stunde. Die Gebühr wird automatisch von deinem Wallet-Guthaben abgezogen. Du kannst dein Guthaben jederzeit in der App aufladen."
-    },
-    {
-      id: 3,
-      question: "Wo kann ich eine Powerbank zurückgeben?",
-      answer: "Du kannst deine Powerbank an jeder GridBox Station zurückgeben - nicht nur an der Station, wo du sie ausgeliehen hast. Einfach ein freies Fach an einer beliebigen Station finden und die Powerbank hineinlegen."
-    },
-    {
-      id: 4,
-      question: "Was passiert, wenn ich die Powerbank nicht zurückgebe?",
-      answer: "Wenn du die Powerbank nicht innerhalb von 24 Stunden zurückgibst, wird eine zusätzliche Gebühr von 5€ pro Tag berechnet. Nach 7 Tagen wird der volle Wert der Powerbank (25€) von deinem Guthaben abgezogen."
-    },
-    {
-      id: 5,
-      question: "Wie lade ich mein Wallet auf?",
-      answer: "Gehe in der App zu 'Wallet' und klicke auf 'Geld hinzufügen'. Du kannst zwischen vordefinierten Beträgen (5€, 10€, 20€, 50€) wählen oder einen eigenen Betrag eingeben. Die Zahlung erfolgt sicher über deine hinterlegte Zahlungsmethode."
-    },
-    {
-      id: 6,
-      question: "Ist meine Powerbank leer?",
-      answer: "Alle Powerbanks werden vor dem Ausleihen aufgeladen. Falls deine Powerbank leer ist, gib sie einfach zurück und leihe eine neue aus. Du erhältst eine Gutschrift für die nicht genutzte Zeit."
-    },
-    {
-      id: 7,
-      question: "Wie finde ich die nächste Station?",
-      answer: "Die App zeigt dir alle verfügbaren Stationen auf der Karte an. Grüne Marker zeigen Stationen mit verfügbaren Powerbanks. Du kannst auch den 'Standort zentrieren' Button verwenden, um deine Position zu finden."
-    },
-    {
-      id: 8,
-      question: "Was mache ich bei technischen Problemen?",
-      answer: "Bei technischen Problemen kannst du uns über die Support-Kontakte erreichen. Beschreibe das Problem so genau wie möglich und wir helfen dir schnell weiter. Du findest unsere Kontaktdaten unten auf dieser Seite."
-    }
-  ];
+  useEffect(() => {
+    let isCancelled = false;
+
+    (async () => {
+      try {
+        const settings = await fetchHelpPageSettings();
+        if (!isCancelled) {
+          setHelpSettings(settings);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setContentError("Die Hilfeseite konnte nicht geladen werden. Es werden die Standardinhalte angezeigt.");
+        }
+      } finally {
+        if (!isCancelled) {
+          setContentLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
 
   const toggleFAQ = (id: number) => {
     setExpandedFAQ(expandedFAQ === id ? null : id);
@@ -81,11 +67,21 @@ function HilfeContent() {
         {/* Header */}
         <div className="text-center">
           <h1 className="text-[30px] font-bold mb-2 text-slate-900 dark:text-white flex flex-col justify-start items-center gap-0 -mt-[65px]">
-            Hilfe & Support
+            {helpSettings.intro_title}
           </h1>
           <p className="text-[13px] text-slate-500 dark:text-gray-400 -mt-[5px] -mb-[5px]">
-            Häufige Fragen und Kontaktmöglichkeiten
+            {helpSettings.intro_subtitle}
           </p>
+          {contentLoading && (
+            <p className="mt-2 text-xs text-slate-400 dark:text-gray-500">
+              Inhalte werden geladen...
+            </p>
+          )}
+          {contentError && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+              {contentError}
+            </p>
+          )}
         </div>
 
         {/* Quick Help Cards */}
@@ -134,10 +130,10 @@ function HilfeContent() {
           </div>
           
           <div className="space-y-3">
-            {faqs.map((faq) => (
-              <div key={faq.id} className="py-3 border-b border-slate-200 dark:border-white/10 last:border-0">
+            {helpSettings.faqs.map((faq, index) => (
+              <div key={`${faq.question}-${index}`} className="py-3 border-b border-slate-200 dark:border-white/10 last:border-0">
                 <button
-                  onClick={() => toggleFAQ(faq.id)}
+                  onClick={() => toggleFAQ(index)}
                   className="w-full text-left"
                 >
                   <div className="flex items-center justify-between">
@@ -155,7 +151,7 @@ function HilfeContent() {
                       strokeLinecap="round" 
                       strokeLinejoin="round"
                       className={`transition-transform text-slate-500 dark:text-gray-400 ${
-                        expandedFAQ === faq.id ? 'rotate-180' : ''
+                        expandedFAQ === index ? 'rotate-180' : ''
                       }`}
                     >
                       <polyline points="6,9 12,15 18,9" />
@@ -163,7 +159,7 @@ function HilfeContent() {
                   </div>
                 </button>
                 
-                {expandedFAQ === faq.id && (
+                {expandedFAQ === index && (
                   <div className="mt-3">
                     <div className="text-sm leading-relaxed whitespace-pre-line text-slate-600 dark:text-gray-300">
                       {faq.answer}
@@ -195,7 +191,7 @@ function HilfeContent() {
                   E-Mail Support
                 </div>
                 <div className="text-sm text-slate-500 dark:text-gray-400">
-                  support@gridbox.de
+                  {helpSettings.support_email}
                 </div>
               </div>
             </div>
@@ -212,7 +208,7 @@ function HilfeContent() {
                   Telefon Support
                 </div>
                 <div className="text-sm text-slate-500 dark:text-gray-400">
-                  +49 30 123 456 789
+                  {helpSettings.support_phone}
                 </div>
               </div>
             </div>
@@ -229,7 +225,7 @@ function HilfeContent() {
                   Live Chat
                 </div>
                 <div className="text-sm text-slate-500 dark:text-gray-400">
-                  Mo-Fr 9:00-18:00 Uhr
+                  {helpSettings.live_chat_hours}
                 </div>
               </div>
             </div>
@@ -248,7 +244,7 @@ function HilfeContent() {
                   Website
                 </div>
                 <div className="text-sm text-slate-500 dark:text-gray-400">
-                  www.gridbox.de
+                  {helpSettings.website_url}
                 </div>
               </div>
             </div>
@@ -270,7 +266,7 @@ function HilfeContent() {
                 Notfall-Support
               </div>
               <div className="text-sm text-red-600 dark:text-red-300">
-                Bei dringenden Problemen: +49 30 123 456 790
+                Bei dringenden Problemen: {helpSettings.emergency_phone}
               </div>
             </div>
           </div>

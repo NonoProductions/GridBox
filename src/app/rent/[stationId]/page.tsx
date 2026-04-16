@@ -1,22 +1,17 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import RentalConfirmationModal from "@/components/RentalConfirmationModal";
+import { Station, computeRealAvailability, isStationOnline } from "@/components/StationManager";
+import { notifyRentalSuccess } from "@/lib/notifications";
 import { supabase } from "@/lib/supabaseClient";
 import { usePageTheme } from "@/lib/usePageTheme";
-import RentalConfirmationModal from "@/components/RentalConfirmationModal";
-import { Station, isStationOnline, computeRealAvailability } from "@/components/StationManager";
-import { notifyRentalSuccess } from "@/lib/notifications";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
-// CSS animations used inline in this file
-const PAGE_ANIMATIONS: string = `
-@keyframes rp-slide-up {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-`;
+const PAGE_BG_DARK = "radial-gradient(circle at top, rgba(16,185,129,0.08), transparent 42%), #081017";
+const PAGE_BG_LIGHT = "radial-gradient(circle at top, rgba(16,185,129,0.08), transparent 44%), #f4faf7";
 
 function RentPageContent() {
   const params = useParams();
@@ -27,7 +22,13 @@ function RentPageContent() {
   const [station, setStation] = useState<Station | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
   const isDarkMode = usePageTheme(searchParams);
+  const homeHref = `/?theme=${isDarkMode ? "dark" : "light"}`;
+
+  const pageBg = isDarkMode ? PAGE_BG_DARK : PAGE_BG_LIGHT;
+  const skel = isDarkMode ? "bg-white/[0.06]" : "bg-slate-100";
+  const borderColor = isDarkMode ? "rgba(148,163,184,0.14)" : "rgba(15,23,42,0.08)";
 
   useEffect(() => {
     const fetchStation = async () => {
@@ -40,34 +41,34 @@ function RentPageContent() {
       try {
         const sanitizedStationId = stationId.trim();
         if (!sanitizedStationId || sanitizedStationId.length > 100) {
-          setError("Ungültige Station-ID");
+          setError("Ungueltige Station-ID");
           setLoading(false);
           return;
         }
 
         const isShortCode = /^[A-Z0-9]{4}$/i.test(sanitizedStationId);
         let query = supabase
-          .from('stations')
-          .select('id, name, description, lat, lng, available_units, total_units, address, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, powerbank_id, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, charge_enabled, opening_hours, last_seen')
-          .eq('is_active', true);
+          .from("stations")
+          .select("id, name, description, lat, lng, available_units, total_units, address, is_active, short_code, created_at, updated_at, photos, battery_voltage, battery_percentage, powerbank_id, slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, charge_enabled, opening_hours, last_seen")
+          .eq("is_active", true);
 
         if (isShortCode) {
-          query = query.ilike('short_code', sanitizedStationId);
+          query = query.ilike("short_code", sanitizedStationId);
         } else {
           const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
           if (!uuidPattern.test(sanitizedStationId)) {
-            setError("Ungültige Station-ID");
+            setError("Ungueltige Station-ID");
             setLoading(false);
             return;
           }
-          query = query.eq('id', sanitizedStationId);
+          query = query.eq("id", sanitizedStationId);
         }
 
         const { data, error: fetchError } = await query.single();
 
         if (fetchError) {
-          if (fetchError.code === 'PGRST116') {
-            setError(`Station „${stationId}" nicht gefunden`);
+          if (fetchError.code === "PGRST116") {
+            setError(`Station "${stationId}" nicht gefunden`);
           } else {
             setError("Station konnte nicht geladen werden.");
           }
@@ -75,10 +76,9 @@ function RentPageContent() {
           return;
         }
 
-        // Erster Query lädt bereits alle Felder (*) – direkt setzen, kein zweiter Netzwerkhop nötig
         setStation(data);
       } catch {
-        setError('Station konnte nicht geladen werden.');
+        setError("Station konnte nicht geladen werden.");
       } finally {
         setLoading(false);
       }
@@ -87,262 +87,278 @@ function RentPageContent() {
     fetchStation();
   }, [stationId]);
 
+  /* ── Loading skeleton (full page) ── */
   if (loading) {
     return (
-      <div
-        className="min-h-screen flex items-center justify-center"
-        style={{ background: isDarkMode ? "#09090b" : "#fafafa" }}
-      >
-        <div className="w-5 h-5 border-2 rounded-full animate-spin"
-          style={{ borderColor: isDarkMode ? "#27272a" : "#e4e4e7", borderTopColor: isDarkMode ? "#a1a1aa" : "#71717a" }}
-        />
+      <div className="min-h-screen" style={{ background: pageBg }}>
+        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+          <div className="pt-5">
+            <div className={`h-10 w-10 rounded-xl animate-pulse ${skel}`} />
+          </div>
+          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+            <div className={`w-44 h-44 rounded-[28px] animate-pulse ${skel}`} />
+            <div className={`mt-5 h-7 w-48 rounded-lg animate-pulse ${skel}`} />
+            <div className="mt-3 flex gap-2">
+              <div className={`h-7 w-20 rounded-full animate-pulse ${skel}`} />
+              <div className={`h-7 w-16 rounded-full animate-pulse ${skel}`} />
+              <div className={`h-7 w-14 rounded-full animate-pulse ${skel}`} />
+            </div>
+            <div className={`mt-4 h-5 w-52 rounded-lg animate-pulse ${skel}`} />
+          </div>
+          <div className="pb-8 space-y-3">
+            <div className={`h-16 w-full rounded-2xl animate-pulse ${skel}`} />
+            <div className={`h-[52px] w-full rounded-2xl animate-pulse ${skel}`} />
+          </div>
+        </div>
       </div>
     );
   }
 
+  /* ── Error state (full page) ── */
   if (error || !station) {
     return (
-      <div
-        className={`min-h-screen flex flex-col items-center justify-center p-6 ${
-          isDarkMode ? "bg-[#0a0f14]" : "bg-[#f8faf9]"
-        }`}
-      >
-        <style>{PAGE_ANIMATIONS}</style>
-        <div
-          className={`w-full max-w-sm rounded-3xl p-8 text-center ${
-            isDarkMode
-              ? "bg-[#111920] text-white"
-              : "bg-white text-slate-900"
-          }`}
-          style={{
-            animation: "rp-slide-up 0.5s ease-out",
-            boxShadow: isDarkMode
-              ? "0 8px 40px rgba(0,0,0,0.4)"
-              : "0 8px 40px rgba(0,0,0,0.06)",
-          }}
-        >
-          {/* Error icon */}
-          <div
-            className={`mx-auto mb-5 flex w-16 h-16 items-center justify-center rounded-2xl ${
-              isDarkMode ? "bg-red-950/40" : "bg-red-50"
-            }`}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="15" y1="9" x2="9" y2="15" />
-              <line x1="9" y1="9" x2="15" y2="15" />
-            </svg>
+      <div className="min-h-screen" style={{ background: pageBg }}>
+        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+          <div className="h-10 pt-5" aria-hidden="true" />
+
+          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+            <div
+              className={`flex h-16 w-16 items-center justify-center rounded-2xl ${isDarkMode ? "bg-red-950/40" : "bg-red-50"}`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="15" y1="9" x2="9" y2="15" />
+                <line x1="9" y1="9" x2="15" y2="15" />
+              </svg>
+            </div>
+            <h1 className="mt-4 text-lg font-semibold text-center" style={{ color: isDarkMode ? "#f8fafc" : "#0f172a" }}>
+              Station nicht gefunden
+            </h1>
+            <p className="mt-2 text-sm text-center max-w-[280px]" style={{ color: isDarkMode ? "#94a3b8" : "#64748b" }}>
+              {error}
+            </p>
           </div>
 
-          <h1 className="text-xl font-bold tracking-tight mb-2">
-            Station nicht gefunden
-          </h1>
-          <p
-            className={`text-sm leading-relaxed mb-8 ${
-              isDarkMode ? "text-slate-400" : "text-slate-500"
-            }`}
-          >
-            {error}
-          </p>
-
-          <button
-            onClick={() => router.push(`/?theme=${isDarkMode ? "dark" : "light"}`)}
-            className="w-full h-[48px] rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 font-semibold text-white text-sm tracking-wide transition-all active:scale-[0.98]"
-            style={{ boxShadow: "0 4px 20px rgba(16,185,129,0.25)" }}
-          >
-            Zur Startseite
-          </button>
+          <div className="pb-8">
+            <button
+              onClick={() => router.push(homeHref)}
+              className="h-[52px] w-full rounded-2xl bg-emerald-600 text-sm font-semibold text-white transition-all active:scale-[0.98]"
+            >
+              Zur Karte
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`min-h-screen ${isDarkMode ? "bg-[#0a0f14]" : "bg-[#f8faf9]"}`}>
-      <RentalConfirmationModal
-        station={station}
-        onClose={() => router.push('/')}
-        onConfirm={async () => {
-          // 1. Aktuellen User holen
-          const { data: { user }, error: userError } = await supabase.auth.getUser();
-          if (userError || !user) {
-            throw new Error('Bitte melden Sie sich an, um eine Powerbank auszuleihen.');
-          }
+    <RentalConfirmationModal
+      station={station}
+      onClose={() => router.push(homeHref)}
+      onConfirm={async () => {
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
 
-          // 2. Verbindungsstatus prüfen - Station muss online sein
-          let { data: batteryCheck, error: batteryCheckError } = await supabase
-            .from('stations')
-            .select('powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at')
-            .eq('id', station.id)
+        if (userError || !user) {
+          throw new Error("Bitte melden Sie sich an, um eine Powerbank auszuleihen.");
+        }
+
+        let { data: batteryCheck, error: batteryCheckError } = await supabase
+          .from("stations")
+          .select("powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at")
+          .eq("id", station.id)
+          .single();
+
+        const missingPowerbankColumnInCheck =
+          !!batteryCheckError &&
+          `${batteryCheckError.code ?? ""} ${batteryCheckError.message ?? ""} ${batteryCheckError.details ?? ""}`
+            .toLowerCase()
+            .includes("powerbank_id");
+
+        if (missingPowerbankColumnInCheck) {
+          const legacy = await supabase
+            .from("stations")
+            .select("battery_voltage, battery_percentage, available_units, last_seen, updated_at")
+            .eq("id", station.id)
             .single();
+          batteryCheck = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+        }
 
-          const missingPowerbankColumnInCheck =
-            !!batteryCheckError &&
-            `${batteryCheckError.code ?? ''} ${batteryCheckError.message ?? ''} ${batteryCheckError.details ?? ''}`.toLowerCase().includes('powerbank_id');
+        if (batteryCheck && !isStationOnline(batteryCheck)) {
+          throw new Error("Diese Station ist derzeit nicht verbunden. Bitte versuche es spaeter erneut oder waehle eine andere Station.");
+        }
 
-          if (missingPowerbankColumnInCheck) {
+        if (batteryCheck) {
+          const realAvailable = computeRealAvailability(batteryCheck);
+          if ((batteryCheck.available_units ?? 0) < realAvailable) {
+            await supabase
+              .from("stations")
+              .update({ available_units: realAvailable })
+              .eq("id", station.id);
+          }
+        }
+
+        const getPosition = () =>
+          new Promise<GeolocationPosition>((resolve, reject) => {
+            if (!navigator.geolocation) {
+              reject(new Error("Geolocation wird von deinem Geraet oder Browser nicht unterstuetzt."));
+              return;
+            }
+
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              timeout: 15000,
+              maximumAge: 5000,
+            });
+          });
+
+        let userLat: number;
+        let userLng: number;
+
+        try {
+          const position = await getPosition();
+          userLat = position.coords.latitude;
+          userLng = position.coords.longitude;
+        } catch {
+          throw new Error("Standort konnte nicht ermittelt werden. Bitte Standortzugriff erlauben und erneut versuchen.");
+        }
+
+        const callCreateRental = async () => {
+          const withGeo = await supabase.rpc("create_rental", {
+            p_user_id: user.id,
+            p_station_id: station.id,
+            p_user_lat: userLat,
+            p_user_lng: userLng,
+          });
+
+          if (!withGeo.error) {
+            return withGeo;
+          }
+
+          const raw = `${withGeo.error.code ?? ""} ${withGeo.error.message ?? ""} ${withGeo.error.details ?? ""}`;
+          const missingGeoOverload =
+            withGeo.error.code === "PGRST202" ||
+            raw.includes("does not exist") ||
+            raw.includes("create_rental(uuid,uuid,double precision,double precision)") ||
+            raw.includes("create_rental(p_user_id, p_station_id, p_user_lat, p_user_lng)");
+
+          if (!missingGeoOverload) {
+            return withGeo;
+          }
+
+          return supabase.rpc("create_rental", {
+            p_user_id: user.id,
+            p_station_id: station.id,
+          });
+        };
+
+        let { data: rentalData, error: rentalError } = await callCreateRental();
+
+        if (rentalError?.message?.includes("NO_UNITS_AVAILABLE")) {
+          let { data: freshStation, error: freshStationError } = await supabase
+            .from("stations")
+            .select("powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at")
+            .eq("id", station.id)
+            .maybeSingle();
+
+          const missingPowerbankColumnInRetry =
+            !!freshStationError &&
+            `${freshStationError.code ?? ""} ${freshStationError.message ?? ""} ${freshStationError.details ?? ""}`
+              .toLowerCase()
+              .includes("powerbank_id");
+
+          if (missingPowerbankColumnInRetry) {
             const legacy = await supabase
-              .from('stations')
-              .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at')
-              .eq('id', station.id)
-              .single();
-            batteryCheck = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
-          }
-
-          // Station offline? Ausleihe verhindern
-          if (batteryCheck && !isStationOnline(batteryCheck)) {
-            throw new Error('Diese Station ist derzeit nicht verbunden. Bitte versuche es später erneut oder wähle eine andere Station.');
-          }
-
-          if (batteryCheck) {
-            const realAvailable = computeRealAvailability(batteryCheck);
-            if ((batteryCheck.available_units ?? 0) < realAvailable) {
-              await supabase
-                .from('stations')
-                .update({ available_units: realAvailable })
-                .eq('id', station.id);
-            }
-          }
-
-          // 3. Geolocation holen
-          const getPosition = () =>
-            new Promise<GeolocationPosition>((resolve, reject) => {
-              if (!navigator.geolocation) {
-                reject(new Error('Geolocation wird von deinem Gerät/Browser nicht unterstützt.'));
-                return;
-              }
-              navigator.geolocation.getCurrentPosition(resolve, reject, {
-                enableHighAccuracy: true, timeout: 15000, maximumAge: 5000,
-              });
-            });
-
-          let userLat: number;
-          let userLng: number;
-
-          try {
-            const position = await getPosition();
-            userLat = position.coords.latitude;
-            userLng = position.coords.longitude;
-          } catch {
-            throw new Error('Standort konnte nicht ermittelt werden. Bitte Standortzugriff erlauben und erneut versuchen.');
-          }
-
-          // 4. Ausleihe über RPC erstellen
-          const callCreateRental = async () => {
-            const withGeo = await supabase.rpc('create_rental', {
-              p_user_id: user.id,
-              p_station_id: station.id,
-              p_user_lat: userLat,
-              p_user_lng: userLng,
-            });
-
-            if (!withGeo.error) {
-              return withGeo;
-            }
-
-            const raw = `${withGeo.error.code ?? ''} ${withGeo.error.message ?? ''} ${withGeo.error.details ?? ''}`;
-            const missingGeoOverload =
-              withGeo.error.code === 'PGRST202' ||
-              raw.includes('does not exist') ||
-              raw.includes('create_rental(uuid,uuid,double precision,double precision)') ||
-              raw.includes('create_rental(p_user_id, p_station_id, p_user_lat, p_user_lng)');
-
-            if (!missingGeoOverload) {
-              return withGeo;
-            }
-
-            return supabase.rpc('create_rental', {
-              p_user_id: user.id,
-              p_station_id: station.id,
-            });
-          };
-
-          let { data: rentalData, error: rentalError } = await callCreateRental();
-
-          // Retry bei möglicher Race Condition:
-          // Batterie ist schon erkannt, available_units aber noch nicht synchron.
-          if (rentalError?.message?.includes('NO_UNITS_AVAILABLE')) {
-            let { data: freshStation, error: freshStationError } = await supabase
-              .from('stations')
-              .select('powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at')
-              .eq('id', station.id)
+              .from("stations")
+              .select("battery_voltage, battery_percentage, available_units, last_seen, updated_at")
+              .eq("id", station.id)
               .maybeSingle();
-
-            const missingPowerbankColumnInRetry =
-              !!freshStationError &&
-              `${freshStationError.code ?? ''} ${freshStationError.message ?? ''} ${freshStationError.details ?? ''}`.toLowerCase().includes('powerbank_id');
-
-            if (missingPowerbankColumnInRetry) {
-              const legacy = await supabase
-                .from('stations')
-                .select('battery_voltage, battery_percentage, available_units, last_seen, updated_at')
-                .eq('id', station.id)
-                .maybeSingle();
-              freshStation = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
-            }
-
-            // Nur retry wenn Station online ist und Powerbank erkannt wurde
-            if (freshStation && isStationOnline(freshStation) && computeRealAvailability(freshStation) > 0) {
-              await supabase
-                .from('stations')
-                .update({ available_units: 1 })
-                .eq('id', station.id);
-
-              ({ data: rentalData, error: rentalError } = await callCreateRental());
-            }
+            freshStation = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
           }
 
-          if (rentalError) {
-            const msg = (rentalError.message ?? '') + (rentalError.details ? ` ${rentalError.details}` : '') + (rentalError.hint ? ` (${rentalError.hint})` : '');
-            console.error('create_rental Fehler:', { message: rentalError.message, details: rentalError.details, code: rentalError.code, full: rentalError });
-            if (msg.includes('Unauthorized')) throw new Error('Sitzung abgelaufen. Bitte erneut anmelden.');
-            if (msg.includes('Wallet nicht gefunden')) throw new Error('Kein Wallet gefunden. Bitte kontaktieren Sie den Support.');
-            if (msg.includes('MIN_BALANCE')) throw new Error('Du benötigst mindestens 5,00 € Guthaben, um eine Powerbank auszuleihen.');
-            if (msg.includes('OUT_OF_RANGE')) throw new Error('Du bist zu weit von der Station entfernt (max. 100 m). Bitte näher an die Station gehen.');
-            if (msg.includes('STATION_NOT_FOUND')) throw new Error('Station wurde nicht gefunden.');
-            if (msg.includes('STATION_INACTIVE')) throw new Error('Diese Station ist derzeit nicht aktiv.');
-            if (msg.includes('NO_UNITS_AVAILABLE')) throw new Error('Leider sind an dieser Station aktuell keine Powerbanks verfügbar.');
-            if (msg.includes('HAS_ACTIVE_RENTAL')) throw new Error('Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurück.');
-            if (msg.includes('Keine verfügbare Powerbank')) throw new Error('Leider sind an dieser Station aktuell keine Powerbanks verfügbar.');
-            if (msg.includes('bereits eine aktive Powerbank-Ausleihe')) throw new Error('Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurück.');
-            if (msg.includes('does not exist') || msg.includes('42703')) throw new Error('Datenbank-Konfigurationsfehler. Bitte den Support kontaktieren.');
-            throw new Error(rentalError.message || 'Fehler beim Erstellen der Ausleihe. Bitte versuchen Sie es erneut.');
-          }
+          if (freshStation && isStationOnline(freshStation) && computeRealAvailability(freshStation) > 0) {
+            await supabase
+              .from("stations")
+              .update({ available_units: 1 })
+              .eq("id", station.id);
 
-          if (!rentalData || !rentalData.success) {
-            console.error('create_rental unerwartete Antwort:', rentalData);
-            throw new Error('Ausleihe konnte nicht erstellt werden.');
+            ({ data: rentalData, error: rentalError } = await callCreateRental());
           }
+        }
 
-          // 5. Push-Benachrichtigung (Fehler hier nicht weiterleiten)
-          await notifyRentalSuccess(station.name, '/').catch(() => {});
-        }}
-        onPickupComplete={() => {
-          router.push(`/?theme=${isDarkMode ? "dark" : "light"}`);
-        }}
-        isDarkMode={isDarkMode}
-      />
-    </div>
+        if (rentalError) {
+          const msg =
+            (rentalError.message ?? "") +
+            (rentalError.details ? ` ${rentalError.details}` : "") +
+            (rentalError.hint ? ` (${rentalError.hint})` : "");
+
+          console.error("create_rental Fehler:", {
+            message: rentalError.message,
+            details: rentalError.details,
+            code: rentalError.code,
+            full: rentalError,
+          });
+
+          if (msg.includes("Unauthorized")) throw new Error("Sitzung abgelaufen. Bitte erneut anmelden.");
+          if (msg.includes("Wallet nicht gefunden")) throw new Error("Kein Wallet gefunden. Bitte kontaktieren Sie den Support.");
+          if (msg.includes("MIN_BALANCE")) throw new Error("Du benoetigst mindestens 5,00 EUR Guthaben, um eine Powerbank auszuleihen.");
+          if (msg.includes("OUT_OF_RANGE")) throw new Error("Du bist zu weit von der Station entfernt (max. 100 m). Bitte naeher an die Station gehen.");
+          if (msg.includes("STATION_NOT_FOUND")) throw new Error("Station wurde nicht gefunden.");
+          if (msg.includes("STATION_INACTIVE")) throw new Error("Diese Station ist derzeit nicht aktiv.");
+          if (msg.includes("NO_UNITS_AVAILABLE")) throw new Error("Leider sind an dieser Station aktuell keine Powerbanks verfuegbar.");
+          if (msg.includes("HAS_ACTIVE_RENTAL")) throw new Error("Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurueck.");
+          if (msg.includes("Keine verfuegbare Powerbank")) throw new Error("Leider sind an dieser Station aktuell keine Powerbanks verfuegbar.");
+          if (msg.includes("bereits eine aktive Powerbank-Ausleihe")) throw new Error("Du hast bereits eine aktive Powerbank-Ausleihe. Bitte gib diese zuerst zurueck.");
+          if (msg.includes("does not exist") || msg.includes("42703")) throw new Error("Datenbank-Konfigurationsfehler. Bitte den Support kontaktieren.");
+
+          throw new Error(rentalError.message || "Fehler beim Erstellen der Ausleihe. Bitte versuchen Sie es erneut.");
+        }
+
+        if (!rentalData || !rentalData.success) {
+          console.error("create_rental unerwartete Antwort:", rentalData);
+          throw new Error("Ausleihe konnte nicht erstellt werden.");
+        }
+
+        await notifyRentalSuccess(station.name, "/").catch(() => {});
+      }}
+      onPickupComplete={() => {
+        router.push(homeHref);
+      }}
+      isDarkMode={isDarkMode}
+    />
   );
 }
 
 export default function RentPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex flex-col items-center justify-center gap-5 bg-[#0a0f14]">
-        <style>{`@keyframes rp-spin-fb { to { transform: rotate(360deg); } }`}</style>
-        <div className="relative w-14 h-14">
-          <div className="absolute inset-0 rounded-full border-[3px] border-emerald-500/15" />
-          <div
-            className="absolute inset-0 rounded-full border-[3px] border-transparent border-t-emerald-500"
-            style={{ animation: "rp-spin-fb 0.9s linear infinite" }}
-          />
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#f4faf7] dark:bg-[#081017]">
+          <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+            <div className="pt-5">
+              <div className="h-10 w-10 rounded-xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+            </div>
+            <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+              <div className="w-44 h-44 rounded-[28px] animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              <div className="mt-5 h-7 w-48 rounded-lg animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              <div className="mt-3 flex gap-2">
+                <div className="h-7 w-20 rounded-full animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+                <div className="h-7 w-16 rounded-full animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+                <div className="h-7 w-14 rounded-full animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              </div>
+              <div className="mt-4 h-5 w-52 rounded-lg animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+            </div>
+            <div className="pb-8 space-y-3">
+              <div className="h-16 w-full rounded-2xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+              <div className="h-[52px] w-full rounded-2xl animate-pulse bg-slate-100 dark:bg-white/[0.06]" />
+            </div>
+          </div>
         </div>
-        <p className="text-sm font-medium tracking-wide text-slate-500">
-          Station wird geladen...
-        </p>
-      </div>
-    }>
+      }
+    >
       <RentPageContent />
     </Suspense>
   );

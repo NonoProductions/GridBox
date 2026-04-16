@@ -44,7 +44,7 @@ interface OwnerDashboardProps {
   variant?: "overlay" | "page";
 }
 
-type OwnerDashboardTab = 'overview' | 'stats' | 'stations' | 'users' | 'transactions' | 'analytics';
+type OwnerDashboardTab = 'overview' | 'stats' | 'stations' | 'users' | 'transactions' | 'analytics' | 'help' | 'settings';
 
 // Photo Manager Component
 function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onUpdate: (photos: string[]) => void; isDarkMode: boolean }) {
@@ -203,9 +203,10 @@ function PhotoManager({ station, onUpdate, isDarkMode }: { station: Station; onU
               />
               <button
                 onClick={() => removePhoto(index)}
-                className="absolute top-1 right-1 p-1 rounded-full bg-red-500/80 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-red-500/85 text-white opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                aria-label={`Foto ${index + 1} entfernen`}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
                 </svg>
@@ -298,10 +299,15 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const [updatingStation, setUpdatingStation] = useState<string | null>(null);
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
   const [testDataEnabled, setTestDataEnabled] = useState(false);
-  const [useNewDesign, setUseNewDesign] = useState(false);
+  const [useNewDesign, setUseNewDesign] = useState(true);
   const [ownerRentals, setOwnerRentals] = useState<Rental[]>([]);
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsTimeRangeDays, setStatsTimeRangeDays] = useState<7 | 14 | 30 | 90>(14);
+  const [settingsName, setSettingsName] = useState("");
+  const [settingsEmail, setSettingsEmail] = useState("");
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
 
   const tabOptions: Array<{
     key: OwnerDashboardTab;
@@ -358,11 +364,11 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       key: 'transactions',
       label: 'Transaktionen',
       icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-          <path d="M5 12h14" />
-          <path d="M12 5l7 7-7 7" />
-          <path d="M19 5H5" />
-          <path d="M12 19l-7-7 7-7" />
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+          <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1Z" />
+          <path d="M16 8H8" />
+          <path d="M16 12H8" />
+          <path d="M12 16H8" />
         </svg>
       )
     },
@@ -376,7 +382,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
           <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
         </svg>
       )
-    }
+    },
   ];
 
   // Responsives Verhalten (Desktop vs. Mobile)
@@ -1100,6 +1106,20 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     setTxPage(1);
   }, [activeTab]); // fetchTransactionRentals nicht in deps
 
+  // Lade Profil-Daten wenn Settings-Tab geöffnet wird
+  useEffect(() => {
+    if (activeTab !== 'settings') return;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return;
+      const user = session.user;
+      setSettingsName((user.user_metadata as Record<string, unknown>)?.full_name as string || "");
+      setSettingsEmail(user.email || "");
+      setSettingsError(null);
+      setSettingsSuccess(null);
+    })();
+  }, [activeTab]);
+
   // Automatische Updates: ROBUSTES System mit Realtime + Polling Backup
   useEffect(() => {
     // Starte Updates nur wenn initial geladen wurde
@@ -1248,19 +1268,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
     };
   }, [hasInitialLoad, fetchStations]);
 
-  const getTabBadgeValue = (key: OwnerDashboardTab): string | null => {
-    if (key === 'stations' && stations.length > 0) {
-      return stations.length > 12 ? '12+' : `${stations.length}`;
-    }
-    if (key === 'users' && usersCount && usersCount > 0) {
-      return usersCount > 12 ? '12+' : `${usersCount}`;
-    }
-    if (key === 'transactions') {
-      const transactionsCount = stations.reduce((sum, station) => sum + (station.total_units ?? 0), 0);
-      if (transactionsCount > 0) {
-        return transactionsCount > 12 ? '12+' : `${transactionsCount}`;
-      }
-    }
+  const getTabBadgeValue = (_key: OwnerDashboardTab): string | null => {
     return null;
   };
 
@@ -1275,14 +1283,14 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
       key: 'settings',
       label: 'Einstellungen',
       icon: (
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
           <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33A1.65 1.65 0 0 0 14 21.1V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 8 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 8 10.6V10a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 5a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 8 1.4V1a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 5a1.65 1.65 0 0 0-.33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33H14a1.65 1.65 0 0 0-1 1.51v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 15Z" />
         </svg>
       ),
       onClick: () => {
-        onClose?.();
-        router.push(`/profile?theme=${isDarkMode ? "dark" : "light"}`);
+        setActiveTab('settings');
+        if (isMobile) setMobileMenuOpen(false);
       },
     },
     {
@@ -1296,8 +1304,9 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
         </svg>
       ),
       onClick: () => {
-        onClose?.();
-        router.push(`/hilfe?theme=${isDarkMode ? "dark" : "light"}`);
+        setUseNewDesign(true);
+        setActiveTab('help');
+        if (isMobile) setMobileMenuOpen(false);
       },
     },
     {
@@ -1356,15 +1365,23 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const inactiveStationsCount = stations.length - activeStationsCount;
   const totalCapacity = stations.reduce((sum, station) => sum + (station.total_units || 0), 0);
 
+  // Legacy-Felder nur für echte Single-Slot-Stationen verwenden
+  const shouldUseLegacySlotFallback = (station: Station): boolean => {
+    const slotCount = station.total_units ?? 1;
+    const hasSlot2Id = typeof station.slot_2_powerbank_id === 'string' && station.slot_2_powerbank_id.trim().length > 0;
+    const hasSlot2Battery = station.slot_2_battery_voltage != null && station.slot_2_battery_percentage != null;
+    return slotCount <= 1 && !hasSlot2Id && !hasSlot2Battery;
+  };
+
   // Prüfe ob ein bestimmter Slot belegt ist
   const isSlotOccupied = (station: Station, slotNumber: number): boolean => {
     if (slotNumber === 1) {
       const hasSlot1Id = typeof station.slot_1_powerbank_id === 'string' && station.slot_1_powerbank_id.trim().length > 0;
       const hasSlot1Battery = station.slot_1_battery_voltage != null && station.slot_1_battery_percentage != null;
-      // Fallback auf Legacy-Felder für Slot 1
+      // Fallback nur für alte Single-Slot-Geräte
       const hasLegacy = (typeof station.powerbank_id === 'string' && station.powerbank_id.trim().length > 0) ||
         (station.battery_voltage != null && station.battery_percentage != null);
-      return hasSlot1Id || hasSlot1Battery || hasLegacy;
+      return hasSlot1Id || hasSlot1Battery || (shouldUseLegacySlotFallback(station) && hasLegacy);
     }
     if (slotNumber === 2) {
       const hasSlot2Id = typeof station.slot_2_powerbank_id === 'string' && station.slot_2_powerbank_id.trim().length > 0;
@@ -1378,9 +1395,9 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
   const getSlotData = (station: Station, slotNumber: number) => {
     if (slotNumber === 1) {
       return {
-        voltage: station.slot_1_battery_voltage ?? station.battery_voltage ?? null,
-        percentage: station.slot_1_battery_percentage ?? station.battery_percentage ?? null,
-        powerbankId: station.slot_1_powerbank_id ?? station.powerbank_id ?? null,
+        voltage: station.slot_1_battery_voltage ?? (shouldUseLegacySlotFallback(station) ? station.battery_voltage : null) ?? null,
+        percentage: station.slot_1_battery_percentage ?? (shouldUseLegacySlotFallback(station) ? station.battery_percentage : null) ?? null,
+        powerbankId: station.slot_1_powerbank_id ?? (shouldUseLegacySlotFallback(station) ? station.powerbank_id : null) ?? null,
       };
     }
     if (slotNumber === 2) {
@@ -1799,26 +1816,37 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
                   General
                 </p>
                 <div className="mt-2 flex flex-col gap-1">
-                  {generalActions.map((action) => (
+                  {generalActions.map((action) => {
+                    const isActiveAction =
+                      (action.key === 'settings' && activeTab === 'settings') ||
+                      (action.key === 'help' && activeTab === 'help');
+                    return (
                     <button
                       key={action.key}
                       onClick={action.onClick}
                       className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors ${
-                        isDarkMode
+                        isActiveAction
+                          ? isDarkMode
+                            ? 'bg-emerald-900/30 text-emerald-400'
+                            : 'bg-emerald-50 text-emerald-700'
+                          : isDarkMode
                           ? 'text-gray-300 hover:bg-gray-900/40'
                           : 'text-gray-600 hover:bg-gray-50'
                       }`}
                     >
                       <span
                         className={`inline-flex h-9 w-9 items-center justify-center rounded-lg ${
-                          isDarkMode ? 'bg-gray-900/40 text-gray-400' : 'bg-gray-100 text-gray-500'
+                          isActiveAction
+                            ? isDarkMode ? 'bg-emerald-900/40 text-emerald-400' : 'bg-emerald-100 text-emerald-600'
+                            : isDarkMode ? 'bg-gray-900/40 text-gray-400' : 'bg-gray-100 text-gray-500'
                         }`}
                       >
                         {action.icon}
                       </span>
                       <span className="flex-1 text-left">{action.label}</span>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -1889,7 +1917,7 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
               )}
 
               {/* ── V2 Design: alle Tabs ── */}
-              {useNewDesign && (
+              {useNewDesign && activeTab !== 'settings' && (
                 <OwnerDashboardV2Content
                   isDarkMode={isDarkMode}
                   activeTab={activeTab}
@@ -3149,6 +3177,144 @@ export default function OwnerDashboard({ isDarkMode, onClose, variant = "overlay
 
           {!useNewDesign && activeTab === 'analytics' && (
             <AnalyticsDashboard isDarkMode={isDarkMode} />
+          )}
+
+          {activeTab === 'settings' && (
+            <div className="flex-1 overflow-y-auto p-5 space-y-5">
+
+              {/* Feedback */}
+              {settingsError && (
+                <div className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm ${
+                  isDarkMode ? 'border-red-900/50 bg-red-950/40 text-red-400' : 'border-red-200 bg-red-50 text-red-600'
+                }`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  {settingsError}
+                </div>
+              )}
+              {settingsSuccess && (
+                <div className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm ${
+                  isDarkMode ? 'border-emerald-900/50 bg-emerald-950/40 text-emerald-400' : 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                }`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                  {settingsSuccess}
+                </div>
+              )}
+
+              {/* Profil */}
+              <div>
+                <h3 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-neutral-100' : 'text-neutral-900'}`}>Profil</h3>
+                <div className={`rounded-lg border overflow-hidden ${isDarkMode ? 'border-neutral-800' : 'border-neutral-200'}`}>
+                  <div className="p-4 space-y-3">
+                    <div>
+                      <label className={`block text-xs font-medium mb-1.5 ${isDarkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>Name</label>
+                      <input
+                        type="text"
+                        value={settingsName}
+                        onChange={(e) => setSettingsName(e.target.value)}
+                        placeholder="Dein Name"
+                        className={`w-full px-3 py-1.5 rounded-md border text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500/40 focus:border-emerald-500 ${
+                          isDarkMode
+                            ? 'bg-neutral-900 border-neutral-700 text-white placeholder-neutral-500'
+                            : 'bg-white border-neutral-300 text-neutral-900 placeholder-neutral-400'
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-medium mb-1.5 ${isDarkMode ? 'text-neutral-400' : 'text-neutral-500'}`}>E-Mail</label>
+                      <input
+                        type="email"
+                        value={settingsEmail}
+                        disabled
+                        className={`w-full px-3 py-1.5 rounded-md border text-sm cursor-not-allowed ${
+                          isDarkMode
+                            ? 'bg-neutral-900/50 border-neutral-800 text-neutral-600'
+                            : 'bg-neutral-50 border-neutral-200 text-neutral-400'
+                        }`}
+                      />
+                      <p className={`text-xs mt-1 ${isDarkMode ? 'text-neutral-600' : 'text-neutral-400'}`}>E-Mail kann nicht geändert werden</p>
+                    </div>
+                  </div>
+                  <div className={`px-4 py-3 border-t flex justify-end ${isDarkMode ? 'border-neutral-800 bg-neutral-900/30' : 'border-neutral-100 bg-neutral-50'}`}>
+                    <button
+                      type="button"
+                      disabled={settingsLoading}
+                      onClick={async () => {
+                        setSettingsError(null);
+                        setSettingsSuccess(null);
+                        const trimmed = settingsName.trim();
+                        if (trimmed.length < 2) {
+                          setSettingsError("Bitte gib einen gültigen Namen ein.");
+                          return;
+                        }
+                        setSettingsLoading(true);
+                        try {
+                          const { error: updateError } = await supabase.auth.updateUser({ data: { full_name: trimmed } });
+                          if (updateError) throw updateError;
+                          setSettingsSuccess("Profil erfolgreich aktualisiert!");
+                        } catch (err: unknown) {
+                          setSettingsError((err as Error)?.message ?? "Fehler beim Speichern.");
+                        } finally {
+                          setSettingsLoading(false);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-md bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
+                    >
+                      {settingsLoading ? "Speichere…" : "Speichern"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Darstellung */}
+              <div>
+                <h3 className={`text-sm font-semibold mb-3 ${isDarkMode ? 'text-neutral-100' : 'text-neutral-900'}`}>Darstellung</h3>
+                <div className={`rounded-lg border overflow-hidden ${isDarkMode ? 'border-neutral-800' : 'border-neutral-200'}`}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newDark = !isDarkMode;
+                      document.documentElement.classList.toggle("dark", newDark);
+                      if (typeof localStorage !== "undefined") localStorage.setItem("theme", newDark ? "dark" : "light");
+                      window.dispatchEvent(new Event("themechange"));
+                    }}
+                    className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
+                      isDarkMode ? 'hover:bg-white/[0.03]' : 'hover:bg-neutral-50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`inline-flex h-7 w-7 items-center justify-center rounded-md ${
+                        isDarkMode ? 'bg-neutral-800 text-neutral-300' : 'bg-neutral-100 text-amber-500'
+                      }`}>
+                        {isDarkMode ? (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                          </svg>
+                        ) : (
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="12" cy="12" r="5" />
+                            <line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" />
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                            <line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" />
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+                          </svg>
+                        )}
+                      </span>
+                      <div>
+                        <p className={`text-sm font-medium ${isDarkMode ? 'text-neutral-100' : 'text-neutral-900'}`}>
+                          {isDarkMode ? 'Dark Mode' : 'Light Mode'}
+                        </p>
+                        <p className={`text-xs ${isDarkMode ? 'text-neutral-500' : 'text-neutral-400'}`}>
+                          Zum Umschalten klicken
+                        </p>
+                      </div>
+                    </div>
+                    <div className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-300 ${isDarkMode ? 'bg-emerald-600' : 'bg-neutral-300'}`}>
+                      <span className={`absolute left-0.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-white shadow transition-transform duration-300 ${isDarkMode ? 'translate-x-[1rem]' : 'translate-x-0'}`} />
+                    </div>
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
           </div>
         </div>

@@ -32,50 +32,75 @@ export default function SideMenu({
 
   useEffect(() => {
     let isMounted = true;
-    async function loadUser() {
+    async function loadUserAndStats() {
       const { data } = await supabase.auth.getUser();
       if (!isMounted) return;
+
       const u = data.user;
-      
+
       // Prüfe ob Nutzer angemeldet ist
       setIsAuthenticated(!!u);
-      
-      if (u) {
-        const name = (u?.user_metadata as Record<string, unknown>)?.full_name as string || u?.email || "";
-        setDisplayName(name);
-        
-        // Prüfe Owner-Status
-        const ownerStatus = await isOwner();
-        setUserIsOwner(ownerStatus);
-      } else {
+
+      if (!u) {
         setDisplayName("");
         setUserIsOwner(false);
+        setTotalHours(0);
+        setTotalSessions(0);
+        return;
       }
-    }
-    
-    async function loadStats() {
-      const { data } = await supabase.auth.getUser();
-      if (!isMounted || !data.user) return;
-      
-      // Lade Statistiken aus der Datenbank
-      // TODO: Anpassen an tatsächliche Tabellenstruktur
-      const { data: sessions } = await supabase
-        .from('charging_sessions')
-        .select('duration_hours')
-        .eq('user_id', data.user.id);
-      
-      if (sessions) {
+
+      const name = (u?.user_metadata as Record<string, unknown>)?.full_name as string || u?.email || "";
+      setDisplayName(name);
+
+      // Prüfe Owner-Status
+      const ownerStatus = await isOwner();
+      if (!isMounted) return;
+      setUserIsOwner(ownerStatus);
+
+      // Lade Statistiken aus der tatsächlichen Tabellenstruktur
+      const { data: rentals, error } = await supabase
+        .from('rentals')
+        .select('started_at, ended_at, status')
+        .eq('user_id', u.id);
+
+      if (!isMounted) return;
+
+      if (error) {
+        // Fallback für ältere Datenmodelle
+        const { data: sessions, error: sessionsError } = await supabase
+          .from('charging_sessions')
+          .select('duration_hours')
+          .eq('user_id', u.id);
+
+        if (!isMounted || sessionsError || !sessions) {
+          setTotalHours(0);
+          setTotalSessions(0);
+          return;
+        }
+
         setTotalSessions(sessions.length);
         const hours = sessions.reduce((sum, session) => sum + (session.duration_hours || 0), 0);
-        setTotalHours(Math.round(hours * 10) / 10); // Auf 1 Dezimalstelle runden
+        setTotalHours(Math.round(hours * 10) / 10);
+        return;
       }
+
+      const now = Date.now();
+      const totalHoursValue = (rentals ?? []).reduce((sum, rental) => {
+        const startedAt = rental.started_at ? new Date(rental.started_at).getTime() : NaN;
+        const endedAt = rental.ended_at ? new Date(rental.ended_at).getTime() : now;
+        if (Number.isNaN(startedAt) || Number.isNaN(endedAt) || endedAt < startedAt) {
+          return sum;
+        }
+        return sum + (endedAt - startedAt) / 3_600_000;
+      }, 0);
+
+      setTotalSessions(rentals?.length ?? 0);
+      setTotalHours(Math.round(totalHoursValue * 10) / 10);
     }
     
-    loadUser();
-    loadStats();
+    loadUserAndStats();
     const { data: sub } = supabase.auth.onAuthStateChange(() => {
-      loadUser();
-      loadStats();
+      loadUserAndStats();
     });
     return () => {
       isMounted = false;

@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <ESP32Servo.h>
@@ -9,7 +10,6 @@
 
 #if USE_SUPABASE_REALTIME
 #include <WebSocketsClient.h>
-#include <WiFiClientSecure.h>
 #endif
 
 #if __has_include("secrets.h")
@@ -30,7 +30,7 @@
 // Der ESP32 kommuniziert NUR mit dem Proxy (Next.js API Routes).
 // Der Proxy authentifiziert den ESP32 per DEVICE_API_KEY und leitet an Supabase weiter.
 #ifndef PROXY_BASE_URL
-#define PROXY_BASE_URL "https://gridbox-pwa.vercel.app/api/esp"
+#define PROXY_BASE_URL "https://gridbox-app.vercel.app/api/esp"
 #endif
 
 #ifndef DEVICE_API_KEY
@@ -108,13 +108,18 @@
 #define DISPENSE_CHECK_INTERVAL_MS 250        // Sensor-Prüfung während Ausgabe
 
 // Relais & Button Konfiguration
-#define RELAY_PIN 5                 // Kontrolliert das Lade-Relais (Pin 17 = funktionierender Relais-Pin aus Testskript)
+// 2 Relais: jedes Relais steuert das Laden für einen einzelnen Slot
+#define RELAY_A_PIN 6              // Relais A = Slot 1 (Lade-Relais)
+#define RELAY_B_PIN 7              // Relais B = Slot 2 (Lade-Relais)
 #define RELAY_ACTIVE_LOW false       // true = LOW aktiviert Relais, false = HIGH aktiviert Relais
                                       // Dein Relais schaltet bei HIGH (siehe funktionierendes Testskript)
 #define CHARGE_BUTTON_PIN 33         // Taster zum Ein-/Ausschalten des Ladevorgangs
 #define BUTTON_DEBOUNCE_MS 200       // Entprellzeit
 #define BATTERY_PRESENT_THRESHOLD 3.2  // ≥3.2V = Batterie erkannt
 #define REQUIRE_BATTERY_FOR_RELAY true  // false = Relais funktioniert auch ohne Batterie (für Tests)
+
+// Startup-Prime: Relais beim Booten kurz einschalten, damit EEPROM/Peripherie versorgt ist
+#define RELAY_STARTUP_PRIME_MS 800
 
 // Update-Intervalle
 const unsigned long UPDATE_INTERVAL = 15000;  // 15 Sekunden (reduziert Egress-Verbrauch um ~87%)
@@ -139,7 +144,8 @@ bool batteryPresent = false;
 bool lastButtonState = HIGH;
 bool stableButtonState = HIGH;
 unsigned long lastButtonChange = 0;
-bool relayCurrentlyOn = false;
+bool relayACurrentlyOn = false;  // Relais A (Slot 1) Status
+bool relayBCurrentlyOn = false;  // Relais B (Slot 2) Status
 bool firstDataReceived = false;  // Flag für initiales Relais-Update
 
 // ===== Per-Slot Datenstrukturen =====
@@ -157,14 +163,6 @@ struct SlotData {
 
 SlotData slots[TOTAL_SLOTS];
 unsigned long lastBatteryUpdate = 0;
-
-// Abwärtskompatibilität: Referenzen auf Slot 1 (für Code der noch alte Variablen nutzt)
-#define batteryVoltage    slots[0].batteryVoltage
-#define batteryPercentage slots[0].batteryPercentage
-#define batteryInitialized slots[0].batteryInitialized
-#define batteryPresent    slots[0].batteryPresent
-#define lastReportedBatteryPresent slots[0].lastReportedBatteryPresent
-#define batteryStateEverReported   slots[0].batteryStateEverReported
 
 // Servo-Objekte (Servo A = Slot 1, Servo B = Slot 2)
 Servo dispenseServoA;
@@ -189,9 +187,12 @@ void realtimeSendHeartbeat();
 // Realtime Token Management (kurzlebiges JWT vom Proxy)
 String realtimeToken = "";
 String realtimeSupabaseHost = "";
+String realtimeApiKey = "";
 unsigned long realtimeTokenExpiresAt = 0;  // Unix-Timestamp (Sekunden)
 const unsigned long TOKEN_REFRESH_MARGIN = 120;  // 2 Minuten vor Ablauf erneuern
 bool realtimeConnected = false;
+unsigned long lastRealtimeReconnectAttempt = 0;
+const unsigned long REALTIME_RECONNECT_INTERVAL_MS = 5000;
 bool fetchRealtimeToken();
 void connectRealtimeWebSocket();
 #endif
@@ -209,6 +210,7 @@ int chooseBestSlot();  // Wählt den Slot mit dem höchsten Akku
 bool initSlotBattery(uint8_t slotIndex);
 void readSlotBatteryData(uint8_t slotIndex);
 void updateAllSlotsBatteryData();
+bool beginProxyRequest(HTTPClient& http, WiFiClientSecure& secureClient, const String& endpoint);
 
 // EEPROM Funktionsprototypen
 bool writeEEPROMByte(uint8_t channel, uint8_t address, uint8_t data);
@@ -272,7 +274,6 @@ void setup() {
       }
       Serial.println("Slot " + String(i + 1) + " Fuel Gauge: " + (slots[i].batteryInitialized ? "OK" : "nicht gefunden") + " (Kanal " + String(slots[i].batteryChannel) + ")");
     }
-    updateChargingState();
   #endif
   
   // Pins konfigurieren - SICHER initialisieren
@@ -296,16 +297,28 @@ void setup() {
   // Servos initialisieren (Ausgabemechanik)
   servosReady = initDispenseServos();
 
-  // Relais & Button initialisieren
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, RELAY_OFF_STATE);
-  relayCurrentlyOn = false;
-  
-  // Relais-Test: Kurz ein- und ausschalten
-  digitalWrite(RELAY_PIN, RELAY_ON_STATE);
-  delay(1000);
-  digitalWrite(RELAY_PIN, RELAY_OFF_STATE);
-  delay(200);
+  // Relais A & B sofort einschalten, damit EEPROM beim Start versorgt ist
+  pinMode(RELAY_A_PIN, OUTPUT);
+  pinMode(RELAY_B_PIN, OUTPUT);
+  digitalWrite(RELAY_A_PIN, RELAY_ON_STATE);
+  digitalWrite(RELAY_B_PIN, RELAY_ON_STATE);
+  relayACurrentlyOn = true;
+  relayBCurrentlyOn = true;
+  Serial.println("Startup: Relais A und B kurz EIN fuer EEPROM-/I2C-Versorgung...");
+  delay(RELAY_STARTUP_PRIME_MS);
+
+  // Nach dem Einschalten Batterie/Fuel-Gauge noch einmal pruefen
+  #if !BATTERY_TEST_MODE
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      if (!slots[i].batteryInitialized) {
+        slots[i].batteryInitialized = initSlotBattery(i);
+      }
+      if (!slots[i].batteryInitialized) {
+        slots[i].batteryPresent = false;
+      }
+      Serial.println("Startup-Check Slot " + String(i + 1) + ": Fuel Gauge " + (slots[i].batteryInitialized ? "OK" : "nicht gefunden") + " (Kanal " + String(slots[i].batteryChannel) + ")");
+    }
+  #endif
 
   pinMode(CHARGE_BUTTON_PIN, INPUT_PULLUP);
   lastButtonState = digitalRead(CHARGE_BUTTON_PIN);
@@ -315,10 +328,18 @@ void setup() {
   chargeEnabledFromWeb = true;
   chargeEnabled = true;
   
-  updateChargingState();
-  
   // EEPROM-System initialisieren und Powerbank-IDs scannen (beide Slots)
   scanAllPowerbankIDs();
+
+  // Nach der Startup-Versorgung echte Messwerte holen und erst dann Relais final setzen
+  #if !BATTERY_TEST_MODE
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      if (slots[i].batteryInitialized) {
+        readSlotBatteryData(i);
+      }
+    }
+  #endif
+  updateChargingState();
   
   // OPTIONAL: Initialisiere Powerbank-IDs (nur beim ersten Setup oder zum Testen)
   // Entkommentiere die nächste Zeile, um IDs für alle Slots zu setzen:
@@ -327,18 +348,7 @@ void setup() {
   // WLAN verbinden
   connectWiFi();
   
-  #if USE_SUPABASE_REALTIME
-  if (isConnected) {
-    // Token vom Proxy holen und WebSocket verbinden
-    if (fetchRealtimeToken()) {
-      connectRealtimeWebSocket();
-    } else {
-      Serial.println("Realtime: Token konnte nicht geholt werden – nur Polling aktiv.");
-    }
-  }
-  #endif
-  
-  // Initiale Station-Daten abrufen
+  // Initiale Station-Daten abrufen (wärmt Vercel Cold Start auf)
   if (isConnected) {
     getStationData();
     
@@ -367,7 +377,18 @@ void setup() {
     updateAllSlotsBatteryData();
     lastBatteryUpdate = millis();
   }
-  
+
+  // Realtime Token holen NACH den initialen Requests (Vercel ist jetzt warm)
+  #if USE_SUPABASE_REALTIME
+  if (isConnected) {
+    if (fetchRealtimeToken()) {
+      connectRealtimeWebSocket();
+    } else {
+      Serial.println("Realtime: Token konnte nicht geholt werden – nur Polling aktiv.");
+    }
+  }
+  #endif
+
   Serial.println("Setup abgeschlossen – Station bereit.");
   Serial.println("====================================");
 }
@@ -440,9 +461,20 @@ void loop() {
     realtimeSendHeartbeat();
     lastRealtimeHeartbeat = millis();
   }
+
+  // Auto-Reconnect wenn WebSocket getrennt ist
+  if (!realtimeConnected && (millis() - lastRealtimeReconnectAttempt > REALTIME_RECONNECT_INTERVAL_MS)) {
+    lastRealtimeReconnectAttempt = millis();
+    if (realtimeToken.length() == 0 || realtimeSupabaseHost.length() == 0 || realtimeApiKey.length() == 0) {
+      fetchRealtimeToken();
+    }
+    connectRealtimeWebSocket();
+  }
+
   // Token-Refresh: vor Ablauf neues Token holen und WebSocket neu verbinden
   if (realtimeTokenExpiresAt > 0) {
     unsigned long nowSec = millis() / 1000;  // Uptime-basiert (nicht Unix-Zeit, aber Differenz reicht)
+    (void)nowSec;
     // Token wurde vor (expiresAt - fetchTime) Sekunden geholt; refresh TOKEN_REFRESH_MARGIN vorher
     static unsigned long tokenFetchedAtMillis = 0;
     if (tokenFetchedAtMillis == 0) tokenFetchedAtMillis = millis();
@@ -558,15 +590,31 @@ void connectWiFi() {
 
 // ===== PROXY API FUNKTIONEN =====
 
+bool beginProxyRequest(HTTPClient& http, WiFiClientSecure& secureClient, const String& endpoint) {
+  String url = String(PROXY_BASE_URL) + endpoint;
+  secureClient.setInsecure();
+  secureClient.setTimeout(HTTP_TIMEOUT_MS);
+
+  if (!http.begin(secureClient, url)) {
+    Serial.println("Proxy-Verbindung konnte nicht gestartet werden: " + url);
+    return false;
+  }
+
+  http.setReuse(false);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.addHeader("Connection", "close");
+  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  return true;
+}
+
 void getStationData() {
   if (!isConnected) return;
   
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/station";
-
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/station")) {
+    return;
+  }
 
   int httpCode = http.GET();
   
@@ -631,11 +679,10 @@ void updateAvailableUnits(int units) {
   if (!isConnected) return;
   
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/units";
-  
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/units")) {
+    return;
+  }
   http.addHeader("Content-Type", "application/json");
   
   DynamicJsonDocument doc(256);
@@ -655,11 +702,10 @@ void checkDispenseRequest() {
   if (!isConnected) return;
   
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/station";
-  
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/station")) {
+    return;
+  }
   int httpCode = http.GET();
   if (httpCode == 200) {
     String payload = http.getString();
@@ -829,11 +875,10 @@ void resetDispenseFlag() {
   if (!isConnected) return;
   
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/dispense-ack";
-  
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/dispense-ack")) {
+    return;
+  }
   http.addHeader("Content-Type", "application/json");
   
   int httpCode = http.PATCH("{}");
@@ -848,10 +893,10 @@ bool rollbackFailedDispense() {
   if (!isConnected) return false;
 
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/rollback";
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/rollback")) {
+    return false;
+  }
   http.addHeader("Content-Type", "application/json");
 
   int httpCode = http.POST("{}");
@@ -942,18 +987,45 @@ void moveDispenseServo(int slotIndex, bool open) {
 void realtimeWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
+      realtimeConnected = true;
       Serial.println("Realtime: WebSocket verbunden, sende phx_join...");
       realtimeSendJoin();
       break;
     case WStype_DISCONNECTED:
+      realtimeConnected = false;
       Serial.println("Realtime: WebSocket getrennt.");
+      if (length > 0 && payload != nullptr) {
+        String reason;
+        for (size_t i = 0; i < length; i++) reason += (char)payload[i];
+        Serial.println("Realtime: Disconnect-Details: " + reason);
+      }
+      break;
+    case WStype_ERROR:
+      Serial.println("Realtime: WebSocket Fehler.");
+      if (length > 0 && payload != nullptr) {
+        String err;
+        for (size_t i = 0; i < length; i++) err += (char)payload[i];
+        Serial.println("Realtime: Fehlerdetails: " + err);
+      }
       break;
     case WStype_TEXT: {
       if (length == 0) break;
       DynamicJsonDocument doc(1024);
       DeserializationError err = deserializeJson(doc, payload, length);
-      if (err) break;
+      if (err) {
+        Serial.println("Realtime: Konnte WebSocket-Payload nicht parsen.");
+        break;
+      }
       const char* event = doc["event"];
+      if (event && strcmp(event, "phx_error") == 0) {
+        Serial.println("Realtime: phx_error empfangen.");
+      }
+      if (event && strcmp(event, "phx_reply") == 0) {
+        JsonVariant status = doc["payload"]["status"];
+        if (!status.isNull()) {
+          Serial.println("Realtime: Join-Status = " + String((const char*)status));
+        }
+      }
       if (event && strcmp(event, "postgres_changes") == 0) {
         JsonObject data = doc["payload"]["data"];
         if (!data.isNull()) {
@@ -985,6 +1057,7 @@ void realtimeSendJoin() {
   sub["schema"] = "public";
   sub["table"] = "stations";
   sub["filter"] = String("id=eq.") + String(STATION_ID);
+  payload["access_token"] = realtimeToken;
   config["private"] = false;
   String msg;
   serializeJson(doc, msg);
@@ -1006,52 +1079,65 @@ void realtimeSendHeartbeat() {
 // Hole ein kurzlebiges JWT vom Proxy für die WebSocket-Verbindung
 bool fetchRealtimeToken() {
   if (!isConnected) return false;
-  
+
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/token";
-  
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/token")) {
+    Serial.println("Realtime: beginProxyRequest fehlgeschlagen");
+    return false;
+  }
   http.addHeader("Content-Type", "application/json");
-  
+
   int httpCode = http.POST("{}");
-  
+
   if (httpCode == 200) {
     String payload = http.getString();
-    DynamicJsonDocument doc(512);
+    Serial.println("Realtime: Raw response (" + String(payload.length()) + " bytes): " + payload.substring(0, 500));
+    DynamicJsonDocument doc(1536);
     DeserializationError error = deserializeJson(doc, payload);
-    
-    if (!error) {
-      const char* token = doc["token"];
-      const char* host = doc["supabase_host"];
-      unsigned long expiresAt = doc["expires_at"] | 0;
-      
-      if (token && host) {
-        realtimeToken = String(token);
-        realtimeSupabaseHost = String(host);
-        realtimeTokenExpiresAt = expiresAt;
-        Serial.println("Realtime: Token erhalten (gültig " + String(600) + "s)");
-        http.end();
-        return true;
-      }
+
+    if (error) {
+      Serial.println("Realtime: JSON-Parse-Fehler: " + String(error.c_str()));
+      http.end();
+      return false;
+    }
+
+    const char* token = doc["token"];
+    const char* host = doc["supabase_host"];
+    const char* apikey = doc["realtime_apikey"];
+    unsigned long expiresAt = doc["expires_at"] | 0;
+
+    if (token && host && apikey) {
+      realtimeToken = String(token);
+      realtimeSupabaseHost = String(host);
+      realtimeApiKey = String(apikey);
+      realtimeTokenExpiresAt = expiresAt;
+      Serial.println("Realtime: Token erhalten (gültig " + String(600) + "s)");
+      http.end();
+      return true;
+    } else {
+      Serial.println("Realtime: Antwort unvollständig – token=" + String(token ? "OK" : "NULL") + " host=" + String(host ? "OK" : "NULL") + " apikey=" + String(apikey ? "OK" : "NULL"));
+      http.end();
+      return false;
     }
   } else {
-    Serial.println("Realtime: Token-Fehler HTTP " + String(httpCode));
+    String body = http.getString();
+    Serial.println("Realtime: Token-Fehler HTTP " + String(httpCode) + " Body: " + body);
   }
-  
+
   http.end();
   return false;
 }
 
 // Verbinde WebSocket mit dem kurzlebigen Token
 void connectRealtimeWebSocket() {
-  if (realtimeToken.length() == 0 || realtimeSupabaseHost.length() == 0) {
+  if (realtimeToken.length() == 0 || realtimeSupabaseHost.length() == 0 || realtimeApiKey.length() == 0) {
     Serial.println("Realtime: Kein Token vorhanden – WebSocket nicht gestartet.");
     return;
   }
   
-  String path = "/realtime/v1/websocket?apikey=" + realtimeToken + "&vsn=1.0.0";
+  String path = "/realtime/v1/websocket?apikey=" + realtimeApiKey + "&vsn=1.0.0";
+  realtimeConnected = false;
   realtimeWebSocket.beginSSL(realtimeSupabaseHost.c_str(), 443, path.c_str());
   realtimeWebSocket.onEvent(realtimeWebSocketEvent);
   realtimeWebSocket.setReconnectInterval(5000);
@@ -1084,59 +1170,42 @@ void handleChargeButton() {
 }
 
 void updateChargingState() {
-  // Relais-Logik:
-  // 1. Web-Schalter AUS → Relais IMMER AUS (höchste Priorität)
-  // 2. Web-Schalter EIN → Relais hängt von Button & Batterie ab
-  
-  bool shouldCharge = false;
-  String reason = "";
-  
-  // Prüfe Web-Schalter zuerst (Master-Switch)
-  if (!chargeEnabledFromWeb) {
-    // Web-Schalter ist AUS → Relais muss AUS sein
-    shouldCharge = false;
-    reason = "Web-Schalter AUS";
-  } else {
-    // Web-Schalter ist EIN → Prüfe lokale Bedingungen
-    if (!chargeEnabled) {
-      // Lokaler Button ist AUS
+  // Relais-Logik PRO SLOT:
+  // 1. Web-Schalter AUS → BEIDE Relais IMMER AUS (höchste Priorität)
+  // 2. Lokaler Button AUS → BEIDE Relais AUS
+  // 3. Pro Slot: Relais EIN nur wenn Batterie im Slot erkannt wird
+
+  for (int i = 0; i < TOTAL_SLOTS; i++) {
+    bool shouldCharge = false;
+    String reason = "";
+
+    if (!chargeEnabledFromWeb) {
+      shouldCharge = false;
+      reason = "Web-Schalter AUS";
+    } else if (!chargeEnabled) {
       shouldCharge = false;
       reason = "Lokaler Button AUS";
+    } else if (REQUIRE_BATTERY_FOR_RELAY && !slots[i].batteryPresent) {
+      shouldCharge = false;
+      reason = "Keine Batterie in Slot " + String(i + 1);
     } else {
-      // Button ist EIN → Prüfe Batterie (falls erforderlich)
-      if (REQUIRE_BATTERY_FOR_RELAY) {
-        // Prüfe ob IRGENDEIN Slot eine Powerbank hat
-        bool anyBatteryPresent = false;
-        for (int i = 0; i < TOTAL_SLOTS; i++) {
-          if (slots[i].batteryPresent) { anyBatteryPresent = true; break; }
-        }
-        if (!anyBatteryPresent) {
-          shouldCharge = false;
-          reason = "Keine Batterie erkannt (beide Slots leer)";
-        } else {
-          shouldCharge = true;
-          reason = "Alle Bedingungen erfüllt";
-        }
-      } else {
-        // Alles grün → Relais EIN
-        shouldCharge = true;
-        reason = "Alle Bedingungen erfüllt";
-      }
+      shouldCharge = true;
+      reason = "Batterie erkannt";
     }
-  }
-  
-  // Prüfe ob Änderung nötig
-  if (shouldCharge == relayCurrentlyOn) {
-    return;
-  }
 
-  // Ändere Relais-Status
-  relayCurrentlyOn = shouldCharge;
-  uint8_t desiredState = shouldCharge ? RELAY_ON_STATE : RELAY_OFF_STATE;
-  digitalWrite(RELAY_PIN, desiredState);
-  
-  // Kurze, gut lesbare Meldung nur bei tatsächlicher Änderung
-  Serial.println(String("Relais: Laden ") + (shouldCharge ? "EIN" : "AUS") + " (" + reason + ")");
+    // Relais A (Slot 1) oder B (Slot 2)
+    bool* relayCurrentlyOn = (i == 0) ? &relayACurrentlyOn : &relayBCurrentlyOn;
+    uint8_t relayPin = (i == 0) ? RELAY_A_PIN : RELAY_B_PIN;
+    const char* relayName = (i == 0) ? "A" : "B";
+
+    if (shouldCharge == *relayCurrentlyOn) {
+      continue;  // Keine Änderung nötig
+    }
+
+    *relayCurrentlyOn = shouldCharge;
+    digitalWrite(relayPin, shouldCharge ? RELAY_ON_STATE : RELAY_OFF_STATE);
+    Serial.println(String("Relais ") + relayName + " (Slot " + String(i + 1) + "): Laden " + (shouldCharge ? "EIN" : "AUS") + " (" + reason + ")");
+  }
 }
 
 void evaluateBatteryPresence() {
@@ -1179,11 +1248,10 @@ void syncTotalUnits() {
   if (!isConnected) return;
   
   HTTPClient http;
-  String url = String(PROXY_BASE_URL) + "/units";
-  
-  http.begin(url);
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.addHeader("X-Station-Key", DEVICE_API_KEY);
+  WiFiClientSecure secureClient;
+  if (!beginProxyRequest(http, secureClient, "/units")) {
+    return;
+  }
   http.addHeader("Content-Type", "application/json");
   DynamicJsonDocument doc(256);
   doc["total_units"] = TOTAL_SLOTS;
@@ -1328,15 +1396,23 @@ void readBatteryData() {
 
 // Sende Batteriedaten für ALLE Slots an Proxy (neues Format mit slot_1_ und slot_2_ Feldern)
 void updateAllSlotsBatteryData() {
-  if (!isConnected) return;
+  if (!isConnected || WiFi.status() != WL_CONNECTED) {
+    isConnected = false;
+    Serial.println("Battery-Update übersprungen: WLAN nicht verbunden.");
+    return;
+  }
   
   for (int attempt = 0; attempt < 2; attempt++) {
     HTTPClient http;
-    String url = String(PROXY_BASE_URL) + "/battery";
-
-    http.begin(url);
-    http.setTimeout(HTTP_TIMEOUT_MS);
-    http.addHeader("X-Station-Key", DEVICE_API_KEY);
+    WiFiClientSecure secureClient;
+    if (!beginProxyRequest(http, secureClient, "/battery")) {
+      if (attempt == 0) {
+        delay(500);
+      } else {
+        Serial.println("Proxy Battery-Update fehlgeschlagen: Verbindung konnte nicht gestartet werden.");
+      }
+      continue;
+    }
     http.addHeader("Content-Type", "application/json");
 
     DynamicJsonDocument doc(512);
@@ -1381,17 +1457,22 @@ void updateAllSlotsBatteryData() {
     String jsonBody;
     serializeJson(doc, jsonBody);
     int httpCode = http.PATCH(jsonBody);
-    String responseBody = http.getString();
+    String responseBody = (httpCode > 0) ? http.getString() : "";
     http.end();
 
     if (httpCode == 200) {
       break;
     }
+
+    String httpError = HTTPClient::errorToString(httpCode);
     if (attempt == 0) {
-      Serial.println("Proxy Battery-Update Fehler (HTTP " + String(httpCode) + "), Retry...");
+      Serial.println("Proxy Battery-Update Fehler (HTTP " + String(httpCode) + ": " + httpError + "), Retry...");
       delay(500);
     } else {
-      Serial.println("Proxy Battery-Update fehlgeschlagen nach Retry: HTTP " + String(httpCode));
+      Serial.println("Proxy Battery-Update fehlgeschlagen nach Retry: HTTP " + String(httpCode) + " (" + httpError + ")");
+      if (responseBody.length() > 0) {
+        Serial.println("Proxy Antwort: " + responseBody);
+      }
     }
   }
 }
@@ -1410,8 +1491,8 @@ void printDebugInfo() {
   Serial.println("RSSI: " + String(WiFi.RSSI()) + " dBm");
   Serial.println("Free Heap: " + String(ESP.getFreeHeap()) + " bytes");
   Serial.println("Uptime: " + String(millis() / 1000) + " Sekunden");
-  if (batteryInitialized) {
-    Serial.println("Batterie: " + String(batteryVoltage, 2) + " V (" + String(batteryPercentage) + "%)");
+  if (slots[0].batteryInitialized) {
+    Serial.println("Batterie: " + String(slots[0].batteryVoltage, 2) + " V (" + String(slots[0].batteryPercentage) + "%)");
   }
   Serial.println("==================\n");
 }

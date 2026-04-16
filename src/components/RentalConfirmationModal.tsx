@@ -1,9 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-// Always show the generic powerbank image on the rent flow
-import { isStationOnline, computeRealAvailability } from "@/components/StationManager";
+import { computeRealAvailability, isStationOnline } from "@/components/StationManager";
+
+const euroFormatter = new Intl.NumberFormat("de-DE", {
+  style: "currency",
+  currency: "EUR",
+  minimumFractionDigits: 2,
+});
+
+function formatEuro(value: number) {
+  return euroFormatter.format(value);
+}
 
 function getBestBatteryPercentage(s: {
   battery_percentage?: number | null;
@@ -15,6 +25,7 @@ function getBestBatteryPercentage(s: {
     s.slot_2_battery_percentage,
     s.battery_percentage,
   ].filter((v): v is number => typeof v === "number" && v >= 0);
+
   if (candidates.length === 0) return null;
   return Math.max(...candidates);
 }
@@ -37,6 +48,8 @@ interface Station {
   updated_at?: string | null;
   slot_1_battery_percentage?: number | null;
   slot_2_battery_percentage?: number | null;
+  short_code?: string;
+  opening_hours?: string;
 }
 
 interface RentalConfirmationModalProps {
@@ -63,7 +76,6 @@ export default function RentalConfirmationModal({
   const [authLoading, setAuthLoading] = useState(true);
   const [pickupTimeout, setPickupTimeout] = useState(false);
 
-  // Verfügbarkeit unter Berücksichtigung des Verbindungsstatus berechnen
   const [availableUnits, setAvailableUnits] = useState<number>(computeRealAvailability(station));
   const [stationOnline, setStationOnline] = useState<boolean>(isStationOnline(station));
   const [bestBatteryPct, setBestBatteryPct] = useState<number | null>(getBestBatteryPercentage(station));
@@ -72,11 +84,11 @@ export default function RentalConfirmationModal({
     setAvailableUnits(computeRealAvailability(station));
     setStationOnline(isStationOnline(station));
     setBestBatteryPct(getBestBatteryPercentage(station));
-  }, [station.battery_voltage, station.battery_percentage, station.last_seen, station.slot_1_battery_percentage, station.slot_2_battery_percentage]);
+  }, [station]);
 
-  // Beim Öffnen und bei Fokus: aktuelle Batterie-Daten + last_seen der Station laden
   useEffect(() => {
     if (phase !== "confirm") return;
+
     const fetchAvailableUnits = async () => {
       try {
         let { data, error: fetchError } = await supabase
@@ -84,64 +96,81 @@ export default function RentalConfirmationModal({
           .select("powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at, slot_1_battery_percentage, slot_2_battery_percentage")
           .eq("id", station.id)
           .maybeSingle();
+
         const missingPowerbankColumn =
           !!fetchError &&
-          `${fetchError.code ?? ''} ${fetchError.message ?? ''} ${fetchError.details ?? ''}`.toLowerCase().includes('powerbank_id');
+          `${fetchError.code ?? ""} ${fetchError.message ?? ""} ${fetchError.details ?? ""}`
+            .toLowerCase()
+            .includes("powerbank_id");
+
         if (missingPowerbankColumn) {
           const legacy = await supabase
             .from("stations")
             .select("battery_voltage, battery_percentage, last_seen, updated_at")
             .eq("id", station.id)
             .maybeSingle();
-          data = legacy.data ? { ...legacy.data, powerbank_id: null, slot_1_battery_percentage: null, slot_2_battery_percentage: null } : null;
+
+          data = legacy.data
+            ? {
+                ...legacy.data,
+                powerbank_id: null,
+                slot_1_battery_percentage: null,
+                slot_2_battery_percentage: null,
+              }
+            : null;
           fetchError = legacy.error;
         }
+
         if (!fetchError && data != null) {
-          const online = isStationOnline(data);
-          setStationOnline(online);
+          setStationOnline(isStationOnline(data));
           setAvailableUnits(computeRealAvailability(data));
           setBestBatteryPct(getBestBatteryPercentage(data));
         }
       } catch {
-        // Fallback: Wert von der übergebenen Station behalten
+        // Fallback: vorhandene Werte behalten.
       }
     };
+
     fetchAvailableUnits();
-    // Alle 15 Sekunden aktualisieren, um Verbindungsstatus zu prüfen
+
     const interval = setInterval(fetchAvailableUnits, 15000);
     const onFocus = () => fetchAvailableUnits();
+
     window.addEventListener("focus", onFocus);
+
     return () => {
       clearInterval(interval);
       window.removeEventListener("focus", onFocus);
     };
   }, [station.id, phase]);
 
-  // Preis-Konfiguration
   const startPrice = 0.10;
   const pricePerMinute = 0.05;
 
-  // Prüfe ob Nutzer angemeldet ist
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
         setIsAuthenticated(!!session);
+
         if (session?.user) {
           setEmail(session.user.email || "");
           setName(session.user.user_metadata?.full_name || "");
         }
       } catch (err) {
-        console.error("Fehler beim Prüfen der Authentifizierung:", err);
+        console.error("Fehler beim Pruefen der Authentifizierung:", err);
         setIsAuthenticated(false);
       } finally {
         setAuthLoading(false);
       }
     };
+
     checkAuth();
   }, []);
 
-  // Pickup-Phase: Station alle 3 Sekunden prüfen, ob Powerbank entnommen wurde
   const stableOnPickupComplete = useCallback(onPickupComplete, [onPickupComplete]);
 
   useEffect(() => {
@@ -149,39 +178,43 @@ export default function RentalConfirmationModal({
 
     const poll = setInterval(async () => {
       try {
-        let { data, error } = await supabase
+        let { data, error: pollError } = await supabase
           .from("stations")
           .select("powerbank_id, battery_voltage, battery_percentage")
           .eq("id", station.id)
           .maybeSingle();
 
         const missingPowerbankColumn =
-          !!error &&
-          `${error.code ?? ''} ${error.message ?? ''} ${error.details ?? ''}`.toLowerCase().includes('powerbank_id');
+          !!pollError &&
+          `${pollError.code ?? ""} ${pollError.message ?? ""} ${pollError.details ?? ""}`
+            .toLowerCase()
+            .includes("powerbank_id");
+
         if (missingPowerbankColumn) {
           const legacy = await supabase
             .from("stations")
             .select("battery_voltage, battery_percentage")
             .eq("id", station.id)
             .maybeSingle();
-          data = legacy.data ? { ...legacy.data, powerbank_id: null } as typeof data : null;
+
+          data = legacy.data ? ({ ...legacy.data, powerbank_id: null } as typeof data) : null;
         }
 
         if (data) {
           const hasPowerbank =
             (typeof data.powerbank_id === "string" && data.powerbank_id.trim().length > 0) ||
             (data.battery_voltage != null && data.battery_percentage != null);
+
           if (!hasPowerbank) {
             clearInterval(poll);
             stableOnPickupComplete();
           }
         }
       } catch {
-        // Bei Netzwerkfehler weiter pollen
+        // Bei Netzwerkfehler weiter pollen.
       }
     }, 2000);
 
-    // Nach 60 Sekunden "Fertig"-Button anzeigen als Fallback
     const timeout = setTimeout(() => setPickupTimeout(true), 60000);
 
     return () => {
@@ -191,11 +224,11 @@ export default function RentalConfirmationModal({
   }, [phase, station.id, stableOnPickupComplete]);
 
   const handleConfirm = async () => {
-    // Nicht angemeldet: zur Login-Seite
     if (!isAuthenticated) {
       try {
         const currentUrl = window.location.pathname + window.location.search;
         const url = new URL(currentUrl, window.location.origin);
+
         if (url.origin === window.location.origin) {
           window.location.href = `/login?returnUrl=${encodeURIComponent(url.pathname + url.search)}`;
         } else {
@@ -214,7 +247,7 @@ export default function RentalConfirmationModal({
       await onConfirm(email, name);
       setPhase("pickup");
     } catch (err) {
-      console.error("Fehler bei der Bestätigung:", err);
+      console.error("Fehler bei der Bestaetigung:", err);
       setError(
         err instanceof Error
           ? err.message
@@ -225,258 +258,374 @@ export default function RentalConfirmationModal({
     }
   };
 
-  // Shared palette derived from isDarkMode
-  const bg = isDarkMode ? "#09090b" : "#fafafa";
-  const cardBg = isDarkMode ? "#18181b" : "#ffffff";
-  const borderColor = isDarkMode ? "#27272a" : "#e4e4e7";
-  const textPrimary = isDarkMode ? "#fafafa" : "#09090b";
-  const textSecondary = isDarkMode ? "#a1a1aa" : "#71717a";
-  const textTertiary = isDarkMode ? "#52525b" : "#a1a1aa";
+  /* ── Colours ── */
+  const bg = isDarkMode ? "#081017" : "#f4faf7";
+  const cardBg = isDarkMode ? "#111920" : "#ffffff";
+  const borderColor = isDarkMode ? "rgba(148, 163, 184, 0.14)" : "rgba(15, 23, 42, 0.08)";
+  const textPrimary = isDarkMode ? "#f8fafc" : "#0f172a";
+  const textSecondary = isDarkMode ? "#cbd5e1" : "#475569";
+  const textMuted = isDarkMode ? "#94a3b8" : "#64748b";
+  const skeletonBg = isDarkMode ? "rgba(255,255,255,0.06)" : "#f1f5f9";
+  const pageBg = isDarkMode
+    ? `radial-gradient(circle at top, rgba(16,185,129,0.08), transparent 42%), ${bg}`
+    : `radial-gradient(circle at top, rgba(16,185,129,0.08), transparent 44%), ${bg}`;
 
-  // ===== AUTH LOADING =====
+  /* ── Computed ── */
+  const statusBatteryPct = bestBatteryPct !== null ? Math.round(bestBatteryPct) : null;
+  const totalUnits = station.total_units ?? Math.max(availableUnits, station.available_units ?? 0, 1);
+  const readyToRent = stationOnline && availableUnits > 0;
+
+  const statusTitle = error
+    ? "Fehler bei der Ausleihe"
+    : stationOnline
+      ? "Gerade nichts frei"
+      : "Station nicht erreichbar";
+
+  const statusMessage = error
+    ? error
+    : stationOnline
+      ? "Im Moment ist keine geladene Powerbank verfuegbar. Bitte versuche es gleich noch einmal."
+      : "Sobald die Station wieder erreichbar ist, kannst du hier direkt ausleihen.";
+
+  const statusTone = error
+    ? {
+        bg: isDarkMode ? "rgba(127,29,29,0.2)" : "rgba(254,242,242,0.96)",
+        border: isDarkMode ? "rgba(248,113,113,0.3)" : "rgba(239,68,68,0.18)",
+        text: "#ef4444",
+      }
+    : stationOnline
+      ? {
+          bg: isDarkMode ? "rgba(120,53,15,0.2)" : "rgba(255,251,235,0.98)",
+          border: isDarkMode ? "rgba(245,158,11,0.24)" : "rgba(245,158,11,0.18)",
+          text: isDarkMode ? "#fde68a" : "#b45309",
+        }
+      : {
+          bg: isDarkMode ? "rgba(127,29,29,0.2)" : "rgba(254,242,242,0.96)",
+          border: isDarkMode ? "rgba(248,113,113,0.3)" : "rgba(239,68,68,0.18)",
+          text: "#ef4444",
+        };
+
+  const primaryButtonLabel = loading
+    ? "Wird gestartet\u2026"
+    : !readyToRent
+      ? stationOnline
+        ? "Momentan nicht verfuegbar"
+        : "Station nicht erreichbar"
+      : isAuthenticated
+        ? "Ausleihe starten"
+        : "Anmelden und starten";
+
+  /* ═══════════════════════════════════════
+     AUTH LOADING – Full-page skeleton
+     ═══════════════════════════════════════ */
   if (authLoading) {
     return (
-      <div className="fixed inset-0 z-[2000] flex items-center justify-center" style={{ background: bg }}>
-        <div className="w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: borderColor, borderTopColor: textSecondary }} />
+      <div className="min-h-screen" style={{ background: pageBg }}>
+        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+          <div className="pt-5">
+            <div className="h-10 w-10 rounded-xl animate-pulse" style={{ background: skeletonBg }} />
+          </div>
+          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+            <div className="w-44 h-44 rounded-[28px] animate-pulse" style={{ background: skeletonBg }} />
+            <div className="mt-5 h-7 w-48 rounded-lg animate-pulse" style={{ background: skeletonBg }} />
+            <div className="mt-3 flex gap-2">
+              <div className="h-7 w-20 rounded-full animate-pulse" style={{ background: skeletonBg }} />
+              <div className="h-7 w-16 rounded-full animate-pulse" style={{ background: skeletonBg }} />
+              <div className="h-7 w-14 rounded-full animate-pulse" style={{ background: skeletonBg }} />
+            </div>
+            <div className="mt-4 h-5 w-52 rounded-lg animate-pulse" style={{ background: skeletonBg }} />
+          </div>
+          <div className="pb-8 space-y-3">
+            <div className="h-16 w-full rounded-2xl animate-pulse" style={{ background: skeletonBg }} />
+            <div className="h-[52px] w-full rounded-2xl animate-pulse" style={{ background: skeletonBg }} />
+          </div>
+        </div>
       </div>
     );
   }
 
-  // ===== PICKUP SCREEN =====
+  /* ═══════════════════════════════════════
+     PICKUP PHASE – Full page
+     ═══════════════════════════════════════ */
   if (phase === "pickup") {
-    const photoSrc = "/Powerbank.png";
-
     return (
-      <div className="fixed inset-0 z-[2000] flex flex-col" style={{ background: bg }}>
-        <style>{`
-          @keyframes pickup-scan {
-            0% { top: 16px; }
-            50% { top: calc(100% - 20px); }
-            100% { top: 16px; }
-          }
-        `}</style>
-
-        <div className="flex-1 flex flex-col items-center justify-center px-6">
-          {/* Product image with scanning line */}
-          <div className="relative w-48 h-48 mb-12">
-            {/* Faint border frame */}
-            <div className="absolute inset-0 rounded-2xl" style={{ border: `1px solid ${borderColor}` }} />
-            {/* Scanning line — a single thin emerald bar moving vertically */}
-            <div
-              className="absolute left-3 right-3 h-px bg-emerald-500"
-              style={{ animation: "pickup-scan 3s ease-in-out infinite", opacity: 0.6 }}
-            />
-            <img
-              src={photoSrc}
-              alt="Powerbank"
-              className="absolute inset-0 w-full h-full object-contain p-6"
-              onError={(e) => { (e.target as HTMLImageElement).src = "/Powerbank.png"; }}
-            />
-          </div>
-
-          <p className="text-[11px] font-medium tracking-[0.2em] uppercase mb-3" style={{ color: textTertiary }}>
-            {station.name}
-          </p>
-
-          <h2 className="text-[28px] font-bold tracking-tight text-center leading-none mb-3" style={{ color: textPrimary }}>
-            Powerbank entnehmen
-          </h2>
-
-          <p className="text-[15px] text-center leading-relaxed max-w-[260px]" style={{ color: textSecondary }}>
-            Die Station gibt Ihre Powerbank aus. Bitte jetzt entnehmen.
-          </p>
-
-          {/* Subtle waiting indicator — a thin line */}
-          <div className="w-16 mt-8 mb-10">
-            <div className="h-[2px] rounded-full overflow-hidden" style={{ background: borderColor }}>
-              <div className="h-full w-1/3 rounded-full bg-emerald-500 animate-pulse" />
-            </div>
-          </div>
-
-          {pickupTimeout && (
-            <button
-              onClick={stableOnPickupComplete}
-              className="w-full max-w-xs h-14 rounded-[14px] bg-emerald-600 text-white text-[15px] font-semibold tracking-wide mb-4 active:opacity-90 transition-opacity"
-            >
-              Fertig
-            </button>
-          )}
-
-          <button
-            onClick={() => { window.location.href = "/hilfe"; }}
-            className="text-[13px] font-medium underline decoration-1 underline-offset-4 transition-opacity active:opacity-70"
-            style={{ color: textTertiary }}
-          >
-            Problem melden
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ===== CONFIRMATION SCREEN =====
-  const batteryPct = bestBatteryPct !== null ? Math.round(bestBatteryPct) : null;
-  const batteryColor =
-    batteryPct !== null
-      ? batteryPct >= 60 ? "#10b981" : batteryPct >= 30 ? "#eab308" : "#ef4444"
-      : "#52525b";
-
-  return (
-    <div className="fixed inset-0 z-[2000] flex flex-col" style={{ background: bg }}>
-      {/* Top bar — close + status */}
-      <div className="flex items-center justify-between px-5 pt-4 pb-2 flex-shrink-0">
-        <button
-          onClick={onClose}
-          className="w-10 h-10 -ml-2 flex items-center justify-center rounded-lg transition-opacity active:opacity-60"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke={textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6L6 18M6 6l12 12" />
-          </svg>
-        </button>
-        <div className="flex items-center gap-2">
-          <div className={`w-[6px] h-[6px] rounded-full ${stationOnline ? "bg-emerald-500" : "bg-red-500"}`} />
-          <span className="text-[12px] font-medium" style={{ color: textTertiary }}>
-            {stationOnline ? "Online" : "Offline"}
-          </span>
-        </div>
-      </div>
-
-      {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto">
-        {/* Product image — static, confident, on a subtle card */}
-        <div className="px-5 pt-2 pb-4">
-          <div
-            className="w-full aspect-square rounded-2xl flex items-center justify-center overflow-hidden"
-            style={{ background: isDarkMode ? "#111113" : "#f4f4f5", border: `1px solid ${borderColor}` }}
-          >
-            <img
-              src="/Powerbank.png"
-              alt={station.name}
-              className="w-3/5 h-3/5 object-contain"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                if (!target.src.includes("/Powerbank.png")) target.src = "/Powerbank.png";
+      <div className="min-h-screen" style={{ background: pageBg }}>
+        <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+          {/* Status badge */}
+          <div className="pt-6 flex justify-center">
+            <span
+              className="inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-xs font-semibold"
+              style={{
+                background: isDarkMode ? "rgba(16,185,129,0.12)" : "rgba(236,253,245,0.95)",
+                color: "#10b981",
               }}
-            />
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              </span>
+              Ausgabe laeuft
+            </span>
           </div>
-        </div>
 
-        {/* Station name — big and bold */}
-        <div className="px-5 mb-5">
-          <h1 className="text-[32px] font-bold tracking-tight leading-[1.1]" style={{ color: textPrimary }}>
-            {station.name}
-          </h1>
-          {station.address && (
-            <p className="text-[13px] mt-1.5" style={{ color: textTertiary }}>
-              {station.address}
-            </p>
-          )}
-        </div>
-
-        {/* Info grid — pricing + availability as big numbers */}
-        <div className="px-5 mb-5">
-          <div className="grid grid-cols-3 gap-3">
-            {/* Start price */}
-            <div className="rounded-xl p-3" style={{ background: cardBg, border: `1px solid ${borderColor}` }}>
-              <p className="text-[22px] font-bold tracking-tight leading-none mb-1" style={{ color: textPrimary }}>
-                {startPrice.toFixed(2)}€
-              </p>
-              <p className="text-[11px] font-medium tracking-wide uppercase" style={{ color: textTertiary }}>
-                Start
-              </p>
-            </div>
-            {/* Per minute */}
-            <div className="rounded-xl p-3" style={{ background: cardBg, border: `1px solid ${borderColor}` }}>
-              <p className="text-[22px] font-bold tracking-tight leading-none mb-1" style={{ color: textPrimary }}>
-                {pricePerMinute.toFixed(2)}€
-              </p>
-              <p className="text-[11px] font-medium tracking-wide uppercase" style={{ color: textTertiary }}>
-                / Min
-              </p>
-            </div>
-            {/* Available */}
-            <div className="rounded-xl p-3" style={{ background: cardBg, border: `1px solid ${borderColor}` }}>
-              <p className="text-[22px] font-bold tracking-tight leading-none mb-1" style={{ color: textPrimary }}>
-                {stationOnline
-                  ? availableUnits
-                  : (station.available_units ?? 0)}
-              </p>
-              <p className="text-[11px] font-medium tracking-wide uppercase" style={{ color: textTertiary }}>
-                {stationOnline ? "Verfügbar" : (station.available_units ?? 0) !== 1 ? "Powerbanks" : "Powerbank"}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Battery bar — thin, functional */}
-        {batteryPct !== null && (
-          <div className="px-5 mb-5">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[12px] font-medium" style={{ color: textSecondary }}>Akku</span>
-              <span className="text-[12px] font-bold tabular-nums" style={{ color: textSecondary }}>{batteryPct}%</span>
-            </div>
-            <div className="h-[3px] w-full rounded-full overflow-hidden" style={{ background: borderColor }}>
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${batteryPct}%`, background: batteryColor }}
+          {/* Center */}
+          <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+            <div className="w-44 h-44">
+              <Image
+                src="/Powerbank.png"
+                alt="Powerbank"
+                width={144}
+                height={144}
+                className="h-full w-full object-contain"
+                priority
               />
             </div>
-          </div>
-        )}
 
-        {/* Offline warning — plain text, not a card */}
-        {!stationOnline && (
-          <div className="px-5 mb-4">
-            <p className="text-[13px] font-medium text-red-500">
-              Station ist offline — Ausleihe derzeit nicht möglich.
+            <h2 className="mt-5 text-2xl font-bold text-center tracking-tight" style={{ color: textPrimary }}>
+              Powerbank entnehmen
+            </h2>
+            <p className="mt-2 text-sm text-center leading-6 max-w-[280px]" style={{ color: textSecondary }}>
+              Die Station ist freigegeben. Bitte jetzt die Powerbank herausnehmen.
             </p>
           </div>
-        )}
 
-        {/* Auth status — minimal */}
-        <div className="px-5 mb-4">
-          {isAuthenticated ? (
-            <p className="text-[12px] truncate" style={{ color: textTertiary }}>{email}</p>
-          ) : (
-            <p className="text-[13px] font-medium" style={{ color: isDarkMode ? "#fbbf24" : "#d97706" }}>
-              Anmeldung erforderlich
-            </p>
-          )}
+          {/* Bottom */}
+          <div className="pb-8 space-y-3">
+            <div className="rounded-2xl border px-4 py-3" style={{ background: cardBg, borderColor }}>
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/12 text-emerald-500">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 7 9 18l-5-5" />
+                  </svg>
+                </div>
+                <p className="text-sm leading-5" style={{ color: textSecondary }}>
+                  Sobald die Powerbank entnommen wurde, geht es automatisch weiter.
+                </p>
+              </div>
+            </div>
+
+            {pickupTimeout && (
+              <button
+                onClick={stableOnPickupComplete}
+                className="h-[52px] w-full rounded-2xl text-sm font-semibold text-white transition-transform active:scale-[0.99]"
+                style={{ background: "#10b981" }}
+              >
+                Ich habe die Powerbank entnommen
+              </button>
+            )}
+
+            <button
+              onClick={() => {
+                window.location.href = "/hilfe";
+              }}
+              className="h-11 w-full rounded-2xl border text-sm font-medium transition-colors active:opacity-80"
+              style={{ borderColor, color: textMuted }}
+            >
+              Problem melden
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ═══════════════════════════════════════
+     CONFIRM PHASE – Full page
+     ═══════════════════════════════════════ */
+  return (
+    <div className="min-h-screen" style={{ background: pageBg }}>
+      <div className="flex min-h-screen flex-col px-6 mx-auto max-w-md">
+        <div className="h-10 pt-5" aria-hidden="true" />
+
+        {/* Center content */}
+        <div className="flex-1 flex flex-col items-center justify-center -mt-6">
+          {/* Station image */}
+          <div className="w-48 h-48">
+            <Image
+              src="/Powerbank.png"
+              alt={station.name}
+              width={160}
+              height={160}
+              className="h-full w-full object-contain"
+              priority
+            />
+          </div>
+
+          {/* Station name */}
+          <h1 className="mt-5 text-2xl font-bold text-center leading-tight" style={{ color: textPrimary }}>
+            {station.name}
+          </h1>
+
+          {/* Status badges */}
+          <div className="mt-3 flex flex-wrap justify-center gap-2">
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+              style={{
+                background: stationOnline
+                  ? (isDarkMode ? "rgba(16,185,129,0.12)" : "rgba(236,253,245,0.95)")
+                  : (isDarkMode ? "rgba(239,68,68,0.12)" : "rgba(254,242,242,0.95)"),
+                color: stationOnline ? "#10b981" : "#ef4444",
+              }}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${stationOnline ? "bg-emerald-500" : "bg-red-500"}`} />
+              {stationOnline ? "Geoeffnet" : "Geschlossen"}
+            </span>
+
+            <span
+              className="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium"
+              style={{
+                background: isDarkMode ? "rgba(15,23,42,0.4)" : "rgba(241,245,249,0.9)",
+                color: textSecondary,
+                border: `1px solid ${borderColor}`,
+              }}
+            >
+              {availableUnits}/{totalUnits} frei
+            </span>
+
+            {statusBatteryPct !== null && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium"
+                style={{
+                  background: isDarkMode ? "rgba(15,23,42,0.4)" : "rgba(241,245,249,0.9)",
+                  color: textSecondary,
+                  border: `1px solid ${borderColor}`,
+                }}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="7" width="16" height="10" rx="2" ry="2" />
+                  <line x1="22" y1="11" x2="22" y2="13" />
+                </svg>
+                {statusBatteryPct}%
+              </span>
+            )}
+          </div>
+
+          {/* Price */}
+          <p className="mt-4 text-sm text-center" style={{ color: textSecondary }}>
+            {formatEuro(startPrice)} zum Start · {formatEuro(pricePerMinute)} pro Minute
+          </p>
         </div>
 
-        {/* Error — just red text */}
-        {error && (
-          <div className="px-5 mb-4">
-            <p className="text-[13px] font-medium text-red-500">{error}</p>
+        {/* Bottom section */}
+        <div className="pb-8 space-y-3">
+          {/* Account card */}
+          <div
+            className="rounded-2xl border px-4 py-3"
+            style={{ background: cardBg, borderColor }}
+          >
+            {isAuthenticated ? (
+              <div className="flex items-center gap-3">
+                <div
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                  style={{
+                    background: isDarkMode ? "rgba(16,185,129,0.14)" : "rgba(209,250,229,0.92)",
+                    color: "#10b981",
+                  }}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 21a8 8 0 1 0-16 0" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold" style={{ color: textPrimary }}>
+                    {name || "Angemeldet"}
+                  </p>
+                  {email && (
+                    <p className="truncate text-xs" style={{ color: textMuted }}>
+                      {email}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full"
+                    style={{
+                      background: isDarkMode ? "rgba(245,158,11,0.12)" : "rgba(254,243,199,0.9)",
+                      color: isDarkMode ? "#fde68a" : "#b45309",
+                    }}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 21a8 8 0 1 0-16 0" />
+                      <circle cx="12" cy="7" r="4" />
+                    </svg>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold" style={{ color: textPrimary }}>
+                      Nicht angemeldet
+                    </p>
+                    <p className="text-xs" style={{ color: textMuted }}>
+                      Zum Ausleihen anmelden
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleConfirm}
+                  className="shrink-0 rounded-xl px-4 py-2 text-xs font-semibold transition-transform active:scale-[0.97]"
+                  style={{
+                    background: isDarkMode ? "rgba(16,185,129,0.14)" : "rgba(209,250,229,0.8)",
+                    color: "#10b981",
+                  }}
+                >
+                  Anmelden
+                </button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* Bottom actions — pinned */}
-      <div className="flex-shrink-0 px-5 pt-2 pb-6" style={{ borderTop: `1px solid ${borderColor}` }}>
-        <button
-          type="button"
-          onClick={handleConfirm}
-          disabled={loading || (!stationOnline && availableUnits <= 0)}
-          className="w-full h-14 rounded-[14px] text-[15px] font-semibold tracking-wide text-white transition-opacity active:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{ background: !stationOnline ? (isDarkMode ? "#27272a" : "#a1a1aa") : "#10b981" }}
-        >
-          {loading
-            ? "Wird bestätigt..."
-            : !stationOnline
-              ? "Station offline"
-              : isAuthenticated
-                ? "Ausleihe bestätigen"
-                : "Anmelden & Ausleihen"}
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-full h-10 mt-1 text-[13px] font-medium transition-opacity active:opacity-60"
-          style={{ color: textTertiary }}
-        >
-          Abbrechen
-        </button>
+          {/* Error */}
+          {error && (
+            <div
+              className="rounded-2xl border px-4 py-3"
+              style={{ background: statusTone.bg, borderColor: statusTone.border }}
+            >
+              <p className="text-sm" style={{ color: statusTone.text }}>
+                {error}
+              </p>
+            </div>
+          )}
+
+          {/* Not ready */}
+          {!error && !readyToRent && (
+            <div
+              className="rounded-2xl border px-4 py-3"
+              style={{ background: statusTone.bg, borderColor: statusTone.border }}
+            >
+              <p className="text-sm font-semibold" style={{ color: statusTone.text }}>
+                {statusTitle}
+              </p>
+              <p className="mt-1 text-sm leading-5" style={{ color: textSecondary }}>
+                {statusMessage}
+              </p>
+            </div>
+          )}
+
+          {/* CTA */}
+          <button
+            type="button"
+            onClick={handleConfirm}
+            disabled={loading || !readyToRent}
+            className="h-[52px] w-full rounded-2xl text-sm font-semibold text-white transition-transform active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+            style={{
+              background: readyToRent ? "#10b981" : (isDarkMode ? "#334155" : "#94a3b8"),
+            }}
+          >
+            {primaryButtonLabel}
+          </button>
+
+          {/* Cancel */}
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-11 w-full rounded-2xl text-sm font-medium transition-colors active:opacity-80"
+            style={{ color: textMuted }}
+          >
+            Abbrechen
+          </button>
+        </div>
       </div>
     </div>
   );
