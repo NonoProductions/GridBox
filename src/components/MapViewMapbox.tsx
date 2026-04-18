@@ -204,10 +204,18 @@ function isStationOpen(openingHours: string | undefined): boolean {
     // Check if current day matches
     let matchesDay = false;
     
+    // Extract day part (before colon)
+    const colonIdx = part.indexOf(':');
+    if (colonIdx === -1) continue; // Skip if no colon
+    
+    const dayRange = part.substring(0, colonIdx).trim();
+    
     // Check for day ranges (Mo-Fr, Mo-Sa, etc.)
-    if (part.includes('-')) {
-      const [dayRange, times] = part.split(':').map(s => s.trim());
+    if (dayRange.includes('-')) {
       const [startDay, endDay] = dayRange.split('-').map(d => d.trim());
+      
+      // Guard against undefined endDay
+      if (!startDay || !endDay) continue;
       
       // Find day indices
       let startIdx = -1, endIdx = -1;
@@ -231,9 +239,8 @@ function isStationOpen(openingHours: string | undefined): boolean {
       }
     } else {
       // Single day (e.g., "Mo: 8:00-18:00")
-      const dayPart = part.split(':')[0].trim();
       matchesDay = currentDayNames.some(name => 
-        name.toLowerCase().startsWith(dayPart.toLowerCase())
+        name.toLowerCase().startsWith(dayRange.toLowerCase())
       );
     }
     
@@ -871,31 +878,35 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         // Add navigation route source
         const sourceId = 'navigation-route';
-        map.addSource(sourceId, {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            properties: {},
-            geometry: routeGeometry
-          }
-        });
+        if (!map.getSource(sourceId)) {
+          map.addSource(sourceId, {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              properties: {},
+              geometry: routeGeometry
+            }
+          });
+        }
         
         // Add navigation route layer
         const layerId = 'navigation-route-layer';
-        map.addLayer({
-          id: layerId,
-          type: 'line',
-          source: sourceId,
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round'
-          },
-          paint: {
-            'line-color': '#10b981', // Emerald color for navigation
-            'line-width': 6,
-            'line-opacity': 0.9
-          }
-        });
+        if (!map.getLayer(layerId)) {
+          map.addLayer({
+            id: layerId,
+            type: 'line',
+            source: sourceId,
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round'
+            },
+            paint: {
+              'line-color': '#10b981', // Emerald color for navigation
+              'line-width': 6,
+              'line-opacity': 0.9
+            }
+          });
+        }
         
         navigationLayerRef.current = layerId;
         navigationSourceRef.current = sourceId;
@@ -967,32 +978,36 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         
         // Add route source
         const sourceId = 'walking-route';
-        map.addSource(sourceId, {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            properties: {},
-            geometry: routeGeometry
-          }
-        });
+        if (!map.getSource(sourceId)) {
+          map.addSource(sourceId, {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              properties: {},
+              geometry: routeGeometry
+            }
+          });
+        }
         
         // Add route layer with dashed line
         const layerId = 'walking-route-layer';
-        map.addLayer({
-          id: layerId,
-          type: 'line',
-          source: sourceId,
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round'
-          },
-          paint: {
-            'line-color': '#3b82f6', // Helles, leuchtendes Blau für beide Modi
-            'line-width': 4, // Dickere Linie für bessere Sichtbarkeit
-            'line-dasharray': [2, 2], // Kürzere Striche für feinere Optik
-            'line-opacity': 0.9 // Leichte Transparenz für besseren Kontrast
-          }
-        });
+        if (!map.getLayer(layerId)) {
+          map.addLayer({
+            id: layerId,
+            type: 'line',
+            source: sourceId,
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round'
+            },
+            paint: {
+              'line-color': '#3b82f6', // Helles, leuchtendes Blau für beide Modi
+              'line-width': 4, // Dickere Linie für bessere Sichtbarkeit
+              'line-dasharray': [2, 2], // Kürzere Striche für feinere Optik
+              'line-opacity': 0.9 // Leichte Transparenz für besseren Kontrast
+            }
+          });
+        }
         
         routeLayerRef.current = layerId;
         
@@ -2167,7 +2182,15 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const newStyle = isDarkMode ? darkStyle : lightStyle;
         logger.dev("Switching to Mapbox style:", newStyle);
         
-        map.setStyle(newStyle);
+        // Only change style if it's different from the current one
+        if (map.getStyle().name !== newStyle) {
+          map.setStyle(newStyle);
+          
+          // Wait for style to load before continuing
+          map.once('style.load', () => {
+            logger.dev("Map style loaded:", newStyle);
+          });
+        }
       } catch (error) {
         logger.error('Error changing map style:', error);
       }
