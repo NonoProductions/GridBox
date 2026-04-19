@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import CameraOverlay from "@/components/CameraOverlay";
 import SideMenu from "@/components/SideMenu";
@@ -176,6 +176,37 @@ function PhotoCarousel({ photos, isDarkMode }: { photos: string[]; isDarkMode: b
   );
 }
 
+function RentTransitionSkeleton({ isDarkMode }: { isDarkMode: boolean }) {
+  const pageBg = isDarkMode
+    ? "radial-gradient(circle at top, rgba(16,185,129,0.08), transparent 42%), #081017"
+    : "radial-gradient(circle at top, rgba(16,185,129,0.08), transparent 44%), #f4faf7";
+  const skel = isDarkMode ? "bg-white/[0.06]" : "bg-slate-100";
+
+  return (
+    <div className="fixed inset-0 z-[1400] h-[100dvh] overflow-hidden" style={{ background: pageBg }}>
+      <div className="mx-auto flex h-full max-w-md flex-col px-4 sm:px-6">
+        <div className="pt-3">
+          <div className={`h-10 w-10 rounded-xl animate-pulse ${skel}`} />
+        </div>
+        <div className="flex flex-1 flex-col items-center justify-center">
+          <div className={`h-40 w-40 rounded-[24px] animate-pulse sm:h-52 sm:w-52 ${skel}`} />
+          <div className={`mt-4 h-8 w-56 rounded-lg animate-pulse ${skel}`} />
+          <div className="mt-2 flex gap-2">
+            <div className={`h-8 w-20 rounded-full animate-pulse ${skel}`} />
+            <div className={`h-8 w-16 rounded-full animate-pulse ${skel}`} />
+            <div className={`h-8 w-14 rounded-full animate-pulse ${skel}`} />
+          </div>
+          <div className={`mt-4 h-5 w-44 rounded-lg animate-pulse ${skel}`} />
+        </div>
+        <div className="space-y-2 pb-4">
+          <div className={`h-14 w-full rounded-2xl animate-pulse ${skel}`} />
+          <div className={`h-12 w-full rounded-2xl animate-pulse ${skel}`} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Function to check if station is currently open based on opening hours
 function isStationOpen(openingHours: string | undefined): boolean {
   if (!openingHours) return true; // If no opening hours, assume always open
@@ -267,7 +298,9 @@ function isStationOpen(openingHours: string | undefined): boolean {
 
 // Internal component that handles the actual map rendering
 function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
+  const router = useRouter();
   const [scanning, setScanning] = useState(false);
+  const [scanRedirecting, setScanRedirecting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean | null>(null); // Start with null to wait for theme detection
   const [userLocation, setUserLocation] = useState<{lat: number, lng: number} | null>(null);
@@ -336,6 +369,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const hasCompassDataRef = useRef(false);
   const orientationListenerAddedRef = useRef(false);
   const orientationThrottleRef = useRef(0);
+  const currentMapStyleRef = useRef<string | null>(null);
+  const requestedMapStyleRef = useRef<string | null>(null);
   // Refs that mirror state to avoid stale closures inside watchPosition callback
   const isNavigatingRef = useRef(false);
   const isFollowingLocationRef = useRef(false);
@@ -346,6 +381,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const prevActiveRentalRef = useRef<string | null>(null);
   const lastLocationRef = useRef<{lat: number, lng: number} | null>(null);
   const isLocationFixedRef = useRef(false);
+  const isRoutingAfterScanRef = useRef(false);
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
   const stationManager = StationManager({ 
     onStationsUpdate: () => {}, // Leere Funktion, wir verwenden stationManager.stations direkt
@@ -2047,9 +2083,11 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const lightStyle = process.env.NEXT_PUBLIC_MAPBOX_LIGHT_STYLE || 'mapbox://styles/mapbox/light-v11';
         const darkStyle = process.env.NEXT_PUBLIC_MAPBOX_DARK_STYLE || 'mapbox://styles/mapbox/dark-v11';
         
+        const initialStyle = isDarkMode ? darkStyle : lightStyle;
+
         const map = new mapboxgl.Map({
           container: mapContainer,
-          style: isDarkMode ? darkStyle : lightStyle,
+          style: initialStyle,
           center: [center.lng, center.lat], // Use current user location
           zoom: 17,
           pitch: 0,
@@ -2059,6 +2097,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         });
 
         mapRef.current = map;
+        currentMapStyleRef.current = initialStyle;
+        requestedMapStyleRef.current = initialStyle;
         logger.dev('Mapbox map initialized successfully');
         logger.dev('Map center set to:', center);
 
@@ -2127,6 +2167,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             mapRef.current.remove();
             mapRef.current = null;
           }
+          currentMapStyleRef.current = null;
+          requestedMapStyleRef.current = null;
         };
       } catch (error) {
         logger.error('Error initializing Mapbox map:', error);
@@ -2161,6 +2203,8 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         mapRef.current.remove();
         mapRef.current = null;
       }
+      currentMapStyleRef.current = null;
+      requestedMapStyleRef.current = null;
     };
   }, []);
 
@@ -2180,16 +2224,36 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
         const darkStyle = process.env.NEXT_PUBLIC_MAPBOX_DARK_STYLE || 'mapbox://styles/mapbox/dark-v11';
         
         const newStyle = isDarkMode ? darkStyle : lightStyle;
+        requestedMapStyleRef.current = newStyle;
         logger.dev("Switching to Mapbox style:", newStyle);
-        
-        // Only change style if it's different from the current one
-        if (map.getStyle().name !== newStyle) {
-          map.setStyle(newStyle);
-          
-          // Wait for style to load before continuing
-          map.once('style.load', () => {
+
+        // Avoid calling getStyle() while style is still loading
+        if (currentMapStyleRef.current === newStyle) {
+          return;
+        }
+
+        const applyStyle = () => {
+          const activeMap = mapRef.current;
+          if (!activeMap) return;
+
+          // Skip stale callbacks when theme changes quickly
+          if (requestedMapStyleRef.current !== newStyle || currentMapStyleRef.current === newStyle) {
+            return;
+          }
+
+          activeMap.setStyle(newStyle);
+          currentMapStyleRef.current = newStyle;
+
+          // Wait for style to load before logging
+          activeMap.once('style.load', () => {
             logger.dev("Map style loaded:", newStyle);
           });
+        };
+
+        if (map.isStyleLoaded()) {
+          applyStyle();
+        } else {
+          map.once('style.load', applyStyle);
         }
       } catch (error) {
         logger.error('Error changing map style:', error);
@@ -2662,7 +2726,26 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
               : 'bg-white text-slate-900 border border-gray-200'
           }`}>
             <div className="flex items-center gap-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-2 border-emerald-600 border-t-transparent"></div>
+              <svg
+                className="h-4 w-4 animate-spin"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-hidden
+              >
+                <circle
+                  cx="12"
+                  cy="12"
+                  r="9"
+                  className={isDarkMode === true ? 'stroke-emerald-400/25' : 'stroke-emerald-600/25'}
+                  strokeWidth="3"
+                />
+                <path
+                  d="M21 12a9 9 0 0 0-9-9"
+                  className={isDarkMode === true ? 'stroke-emerald-300' : 'stroke-emerald-600'}
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                />
+              </svg>
               <span className="text-xs font-medium">Standort wird ermittelt...</span>
             </div>
           </div>
@@ -3544,9 +3627,13 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       {scanning && (
         <CameraOverlay 
-          onClose={() => setScanning(false)}
-          onStationScanned={async (stationId: string) => {
+          onClose={() => {
+            if (scanRedirecting) return;
             setScanning(false);
+          }}
+          onStationScanned={async (stationId: string) => {
+            if (isRoutingAfterScanRef.current) return;
+
             const scannedId = stationId.trim();
             if (!scannedId) {
               alert("Ungueltiger QR-Code.");
@@ -3558,10 +3645,25 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
             }
 
             const theme = isDarkMode === true ? "dark" : "light";
-            window.location.href = `/rent/${encodeURIComponent(scannedId)}?theme=${theme}`;
+            const rentHref = `/rent/${encodeURIComponent(scannedId)}?theme=${theme}`;
+
+            isRoutingAfterScanRef.current = true;
+            setScanRedirecting(true);
+            setScanning(false);
+
+            requestAnimationFrame(() => {
+              router.push(rentHref);
+            });
+
+            // Fallback: Falls Navigation unerwartet fehlschlaegt, Overlay wieder entfernen.
+            window.setTimeout(() => {
+              isRoutingAfterScanRef.current = false;
+              setScanRedirecting(false);
+            }, 8000);
           }}
         />
       )}
+      {scanRedirecting && <RentTransitionSkeleton isDarkMode={isDarkMode === true} />}
       {showRentalModal && scannedStation && (
         <RentalConfirmationModal
           station={stations.find((s) => s.id === scannedStation.id) ?? scannedStation}

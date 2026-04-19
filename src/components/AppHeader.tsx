@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import ThemeToggle from "@/components/ThemeToggle";
 
-const HIDE_ON = new Set(["/", "/auth/callback", "/onboarding", "/profile", "/wallet", "/verlauf", "/hilfe", "/reservierung","/dashboard", "/app", "/login"]);
+const HIDE_ON = new Set(["/", "/auth/callback", "/onboarding", "/profile", "/wallet", "/verlauf", "/hilfe", "/reservierung","/dashboard", "/app", "/login", "/demo"]);
 
 export default function AppHeader() {
   const pathname = usePathname();

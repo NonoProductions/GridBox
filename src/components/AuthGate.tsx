@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 import { logger } from "@/lib/logger";
 
-const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding", "/login", "/hilfe"]);
+const PUBLIC_ROUTES = new Set(["/", "/auth/callback", "/onboarding", "/login", "/hilfe", "/demo"]);
 
 // Check if route is public or starts with a public path
 const isPublicRoute = (path: string): boolean => {
