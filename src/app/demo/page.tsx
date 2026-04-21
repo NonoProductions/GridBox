@@ -27,6 +27,16 @@ export const dynamic = "force-dynamic";
 export default function DemoPage() {
   return (
     <div className="fixed inset-0 overflow-hidden flex flex-col bg-[radial-gradient(ellipse_at_top,#0f2420_0%,#05100e_42%,#020706_100%)]">
+      {/* Grain overlay */}
+      <div
+        className="pointer-events-none absolute inset-0 z-0 opacity-[0.38]"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+          backgroundRepeat: "repeat",
+          backgroundSize: "200px 200px",
+        }}
+      />
+
       {/* Ambient glows */}
       <div className="pointer-events-none absolute -top-48 -right-48 h-[520px] w-[520px] rounded-full bg-emerald-500/15 blur-[140px]" />
       <div className="pointer-events-none absolute -bottom-56 -left-48 h-[520px] w-[520px] rounded-full bg-emerald-400/10 blur-[140px]" />

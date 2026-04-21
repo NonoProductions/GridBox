@@ -56,11 +56,7 @@ export function isStationOnline(station: { last_seen?: string | null; updated_at
   return diffSeconds < 60;
 }
 
-/**
- * Berechnet die tatsächlich verfügbaren Powerbanks unter Berücksichtigung des Verbindungsstatus.
- * Gibt 0 zurück, wenn die Station offline ist.
- */
-export function computeRealAvailability(station: {
+export type StationSlotShape = {
   powerbank_id?: string | null;
   battery_voltage?: number | null;
   battery_percentage?: number | null;
@@ -72,29 +68,70 @@ export function computeRealAvailability(station: {
   slot_2_battery_percentage?: number | null;
   last_seen?: string | null;
   updated_at?: string | null;
-}): number {
-  // Station offline → keine Powerbanks verfügbar
-  if (!isStationOnline(station)) return 0;
-  
+};
+
+function slotHasEepromId(id: unknown): boolean {
+  return typeof id === 'string' && id.trim().length > 0;
+}
+
+function slotHasBattery(voltage: unknown, percentage: unknown): boolean {
+  return voltage != null && percentage != null;
+}
+
+/**
+ * Zählt, wie viele Slots aktuell physisch eine Powerbank haben (unabhängig von EEPROM).
+ * Genutzt für Pickup-Detektion: wir wollen wissen, ob SICH der Bestand verringert hat,
+ * auch wenn die entnommene Powerbank keinen lesbaren EEPROM hatte.
+ */
+export function countPhysicallyPresentSlots(station: StationSlotShape): number {
   let count = 0;
-  
-  // Slot 1 prüfen
-  const slot1HasId = typeof station.slot_1_powerbank_id === 'string' && station.slot_1_powerbank_id.trim().length > 0;
-  const slot1HasBattery = station.slot_1_battery_voltage != null && station.slot_1_battery_percentage != null;
-  if (slot1HasId || slot1HasBattery) count++;
-  
-  // Slot 2 prüfen
-  const slot2HasId = typeof station.slot_2_powerbank_id === 'string' && station.slot_2_powerbank_id.trim().length > 0;
-  const slot2HasBattery = station.slot_2_battery_voltage != null && station.slot_2_battery_percentage != null;
-  if (slot2HasId || slot2HasBattery) count++;
-  
-  // Fallback: Legacy-Felder (wenn keine Slot-Daten vorhanden)
+  const slot1Present =
+    slotHasEepromId(station.slot_1_powerbank_id) ||
+    slotHasBattery(station.slot_1_battery_voltage, station.slot_1_battery_percentage);
+  if (slot1Present) count++;
+  const slot2Present =
+    slotHasEepromId(station.slot_2_powerbank_id) ||
+    slotHasBattery(station.slot_2_battery_voltage, station.slot_2_battery_percentage);
+  if (slot2Present) count++;
+
   if (count === 0) {
-    const hasPowerbankId = typeof station.powerbank_id === 'string' && station.powerbank_id.trim().length > 0;
-    const hasLegacyBatteryData = station.battery_voltage != null && station.battery_percentage != null;
-    if (hasPowerbankId || hasLegacyBatteryData) count = 1;
+    const legacyPresent =
+      slotHasEepromId(station.powerbank_id) ||
+      slotHasBattery(station.battery_voltage, station.battery_percentage);
+    if (legacyPresent) count = 1;
   }
-  
+  return count;
+}
+
+/**
+ * Berechnet die tatsächlich AUSLEIHBAREN Powerbanks (mit lesbarer EEPROM-ID).
+ * Powerbanks ohne lesbare EEPROM-ID werden nicht als verfügbar gezählt,
+ * damit nur verifizierte Powerbanks ausgeliehen werden können.
+ * Gibt 0 zurück, wenn die Station offline ist.
+ */
+export function computeRealAvailability(station: StationSlotShape): number {
+  if (!isStationOnline(station)) return 0;
+
+  let count = 0;
+
+  // Per-Slot: nur Slots mit lesbarer EEPROM-ID zählen
+  if (slotHasEepromId(station.slot_1_powerbank_id)) count++;
+  if (slotHasEepromId(station.slot_2_powerbank_id)) count++;
+
+  // Legacy-Fallback nur für Stationen ohne Per-Slot-Daten:
+  // Wenn weder slot_1_* noch slot_2_* irgendeinen Wert haben, verlasse dich auf powerbank_id.
+  const hasAnyPerSlotData =
+    station.slot_1_powerbank_id != null ||
+    station.slot_1_battery_voltage != null ||
+    station.slot_1_battery_percentage != null ||
+    station.slot_2_powerbank_id != null ||
+    station.slot_2_battery_voltage != null ||
+    station.slot_2_battery_percentage != null;
+
+  if (!hasAnyPerSlotData && count === 0) {
+    if (slotHasEepromId(station.powerbank_id)) count = 1;
+  }
+
   return count;
 }
 

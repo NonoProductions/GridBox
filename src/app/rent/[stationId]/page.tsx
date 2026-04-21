@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import RentalConfirmationModal from "@/components/RentalConfirmationModal";
+import type { StationSlotShape } from "@/components/StationManager";
 import { Station, computeRealAvailability, isStationOnline } from "@/components/StationManager";
 import { notifyRentalSuccess } from "@/lib/notifications";
 import { supabase } from "@/lib/supabaseClient";
@@ -166,25 +167,52 @@ function RentPageContent() {
           throw new Error("Bitte melden Sie sich an, um eine Powerbank auszuleihen.");
         }
 
-        let { data: batteryCheck, error: batteryCheckError } = await supabase
+        type BatteryCheckShape = StationSlotShape & { available_units?: number | null };
+        const perSlotColumns =
+          "powerbank_id, battery_voltage, battery_percentage, " +
+          "slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, " +
+          "slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage, " +
+          "available_units, last_seen, updated_at";
+
+        const initialQuery = await supabase
           .from("stations")
-          .select("powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at")
+          .select(perSlotColumns)
           .eq("id", station.id)
           .single();
+        let batteryCheck: BatteryCheckShape | null =
+          (initialQuery.data as unknown as BatteryCheckShape) ?? null;
+        const batteryCheckError = initialQuery.error;
 
-        const missingPowerbankColumnInCheck =
+        const missingColumnInCheck =
           !!batteryCheckError &&
-          `${batteryCheckError.code ?? ""} ${batteryCheckError.message ?? ""} ${batteryCheckError.details ?? ""}`
-            .toLowerCase()
-            .includes("powerbank_id");
+          /(powerbank_id|slot_1_|slot_2_)/i.test(
+            `${batteryCheckError.code ?? ""} ${batteryCheckError.message ?? ""} ${batteryCheckError.details ?? ""}`,
+          );
 
-        if (missingPowerbankColumnInCheck) {
+        if (missingColumnInCheck) {
           const legacy = await supabase
             .from("stations")
             .select("battery_voltage, battery_percentage, available_units, last_seen, updated_at")
             .eq("id", station.id)
             .single();
-          batteryCheck = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+          batteryCheck = legacy.data
+            ? {
+                ...(legacy.data as unknown as {
+                  battery_voltage: number | null;
+                  battery_percentage: number | null;
+                  available_units: number | null;
+                  last_seen: string | null;
+                  updated_at: string | null;
+                }),
+                powerbank_id: null,
+                slot_1_powerbank_id: null,
+                slot_1_battery_voltage: null,
+                slot_1_battery_percentage: null,
+                slot_2_powerbank_id: null,
+                slot_2_battery_voltage: null,
+                slot_2_battery_percentage: null,
+              }
+            : null;
         }
 
         if (batteryCheck && !isStationOnline(batteryCheck)) {
@@ -258,25 +286,45 @@ function RentPageContent() {
         let { data: rentalData, error: rentalError } = await callCreateRental();
 
         if (rentalError?.message?.includes("NO_UNITS_AVAILABLE")) {
-          let { data: freshStation, error: freshStationError } = await supabase
+          const freshQuery = await supabase
             .from("stations")
-            .select("powerbank_id, battery_voltage, battery_percentage, available_units, last_seen, updated_at")
+            .select(perSlotColumns)
             .eq("id", station.id)
             .maybeSingle();
+          let freshStation: BatteryCheckShape | null =
+            (freshQuery.data as unknown as BatteryCheckShape) ?? null;
+          const freshStationError = freshQuery.error;
 
-          const missingPowerbankColumnInRetry =
+          const missingColumnInRetry =
             !!freshStationError &&
-            `${freshStationError.code ?? ""} ${freshStationError.message ?? ""} ${freshStationError.details ?? ""}`
-              .toLowerCase()
-              .includes("powerbank_id");
+            /(powerbank_id|slot_1_|slot_2_)/i.test(
+              `${freshStationError.code ?? ""} ${freshStationError.message ?? ""} ${freshStationError.details ?? ""}`,
+            );
 
-          if (missingPowerbankColumnInRetry) {
+          if (missingColumnInRetry) {
             const legacy = await supabase
               .from("stations")
               .select("battery_voltage, battery_percentage, available_units, last_seen, updated_at")
               .eq("id", station.id)
               .maybeSingle();
-            freshStation = legacy.data ? { ...legacy.data, powerbank_id: null } : null;
+            freshStation = legacy.data
+              ? {
+                  ...(legacy.data as unknown as {
+                    battery_voltage: number | null;
+                    battery_percentage: number | null;
+                    available_units: number | null;
+                    last_seen: string | null;
+                    updated_at: string | null;
+                  }),
+                  powerbank_id: null,
+                  slot_1_powerbank_id: null,
+                  slot_1_battery_voltage: null,
+                  slot_1_battery_percentage: null,
+                  slot_2_powerbank_id: null,
+                  slot_2_battery_voltage: null,
+                  slot_2_battery_percentage: null,
+                }
+              : null;
           }
 
           if (freshStation && isStationOnline(freshStation) && computeRealAvailability(freshStation) > 0) {

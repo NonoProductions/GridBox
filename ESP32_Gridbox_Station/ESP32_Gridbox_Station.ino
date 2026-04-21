@@ -104,7 +104,7 @@
 #define DISPENSE_LED_DURATION 5000   // LED leuchtet 5 Sekunden bei Ausgabe
 #define DISPENSE_POLL_INTERVAL 15000  // Nur bei USE_SUPABASE_REALTIME=0: Intervall für Ausgabe-Check (Sekunden)
 #define REALTIME_FALLBACK_POLL_INTERVAL 5000  // Auch bei Realtime regelmäßig pollen (falls WS Event verpasst wird)
-#define DISPENSE_CONFIRM_TIMEOUT_MS 5000      // Abbruch, wenn Entnahme nicht innerhalb von 5s erkannt
+#define DISPENSE_CONFIRM_TIMEOUT_MS 8000      // Abbruch, wenn Entnahme nicht innerhalb von 8s erkannt
 #define DISPENSE_CHECK_INTERVAL_MS 250        // Sensor-Prüfung während Ausgabe
 
 // Relais & Button Konfiguration
@@ -774,39 +774,58 @@ void dispensePowerbank() {
     delay(100);
   }
 
-  // Ohne Batteriesensor kann keine sichere Entnahme-Prüfung erfolgen
-  if (!slots[bestSlot].batteryInitialized) {
-    Serial.println("⚠️ Slot " + String(bestSlot + 1) + " Batterie-Sensor nicht verfügbar: keine Entnahme-Verifikation möglich.");
-    moveDispenseServo(bestSlot, true);  // öffnen
-    delay(SERVO_MOVE_DELAY_MS);
-    moveDispenseServo(bestSlot, false);  // schließen
-    delay(300);
+  // Erwartete EEPROM-ID vor dem Auswurf merken (für Fallback-Entnahme-Erkennung)
+  String expectedPbId = readPowerbankID(slots[bestSlot].eepromChannel);
+  if (expectedPbId.length() == 0) {
+    // Sollte dank chooseBestSlot()-Filter nicht passieren, aber als Sicherheitsnetz
+    Serial.println("❌ EEPROM des gewählten Slots nicht lesbar – Ausleihe abgebrochen.");
+    if (rollbackFailedDispense()) {
+      Serial.println("↩️ Ausleihe erfolgreich zurückgerollt (EEPROM fehlt).");
+    }
     return;
   }
 
   bool pickupDetected = false;
+  bool pickupViaEeprom = false;
 
-  // Servo öffnen und bis zu 5s auf Entnahme warten
+  // Servo öffnen und auf Entnahme warten (Spannungs- oder EEPROM-basiert)
   moveDispenseServo(bestSlot, true);  // öffnen
   delay(50);  // PWM-Signal stabilisieren bevor I2C-Operationen starten
   unsigned long waitStart = millis();
 
   while (millis() - waitStart < DISPENSE_CONFIRM_TIMEOUT_MS) {
     delay(DISPENSE_CHECK_INTERVAL_MS);
-    #if !BATTERY_TEST_MODE
-      readSlotBatteryData(bestSlot);  // aktualisiert batteryPresent via evaluateSlotBatteryPresence()
-    #endif
 
-    if (!slots[bestSlot].batteryPresent) {
+    // Pfad 1: Spannungsabfall (Fuel Gauge BQ27441)
+    if (slots[bestSlot].batteryInitialized) {
+      #if !BATTERY_TEST_MODE
+        readSlotBatteryData(bestSlot);
+      #endif
+      if (!slots[bestSlot].batteryPresent) {
+        pickupDetected = true;
+        break;
+      }
+    }
+
+    // Pfad 2: EEPROM-Verschwinden (funktioniert auch ohne Fuel Gauge)
+    // Wenn Magic-Byte nicht mehr lesbar ist ODER ID nicht mehr gelesen werden kann,
+    // ist die Powerbank physisch entfernt.
+    if (!isPowerbankIDSet(slots[bestSlot].eepromChannel)
+        || readPowerbankID(slots[bestSlot].eepromChannel).length() == 0) {
       pickupDetected = true;
+      pickupViaEeprom = true;
       break;
     }
   }
 
   if (pickupDetected) {
-    Serial.println("✅ Entnahme erkannt: Powerbank aus Slot " + String(bestSlot + 1) + " wurde genommen.");
+    Serial.println("✅ Entnahme erkannt: Powerbank aus Slot " + String(bestSlot + 1)
+      + " wurde genommen" + (pickupViaEeprom ? " (EEPROM-Fallback)." : " (Spannung)."));
+    // Slot-Status zurücksetzen, damit updateAllSlotsBatteryData() sofort "leer" meldet
+    slots[bestSlot].batteryPresent = false;
   } else {
-    Serial.println("❌ Keine Entnahme innerhalb 5s erkannt -> Ausleihe wird abgebrochen.");
+    Serial.println("❌ Keine Entnahme innerhalb " + String(DISPENSE_CONFIRM_TIMEOUT_MS / 1000)
+      + "s erkannt -> Ausleihe wird abgebrochen.");
   }
 
   // Servo schließen (Powerbank zurückziehen)
@@ -827,26 +846,49 @@ void dispensePowerbank() {
   Serial.println("=== Ausgabe-Vorgang beendet ===");
 }
 
+// Prüft, ob ein Slot ausleihbar ist: Akku vorhanden UND EEPROM lesbar
+bool isSlotEligibleForDispense(int slotIndex) {
+  if (slotIndex < 0 || slotIndex >= TOTAL_SLOTS) return false;
+  if (!slots[slotIndex].batteryPresent) return false;
+  if (!isPowerbankIDSet(slots[slotIndex].eepromChannel)) return false;
+  return readPowerbankID(slots[slotIndex].eepromChannel).length() > 0;
+}
+
+// Zählt, wie viele Slots ausleihbar sind (Akku + EEPROM)
+int countEligibleSlots() {
+  int count = 0;
+  for (int i = 0; i < TOTAL_SLOTS; i++) {
+    if (isSlotEligibleForDispense(i)) count++;
+  }
+  return count;
+}
+
 // Wählt den Slot mit dem höchsten Akkustand (gibt -1 zurück wenn kein Slot verfügbar)
+// Nur Slots mit lesbarem EEPROM sind ausleihbar.
 int chooseBestSlot() {
   int bestSlot = -1;
   int bestPercentage = -1;
-  
+
   for (int i = 0; i < TOTAL_SLOTS; i++) {
-    if (slots[i].batteryPresent && slots[i].batteryPercentage > bestPercentage) {
+    if (!isSlotEligibleForDispense(i)) continue;
+    if (slots[i].batteryPercentage > bestPercentage) {
       bestPercentage = slots[i].batteryPercentage;
       bestSlot = i;
     }
   }
-  
-  // Debug: Zeige alle Slots
+
+  // Debug: Zeige alle Slots mit Akku- und EEPROM-Status
   for (int i = 0; i < TOTAL_SLOTS; i++) {
-    String status = slots[i].batteryPresent 
+    String batStatus = slots[i].batteryPresent
       ? (String(slots[i].batteryPercentage) + "%, " + String(slots[i].batteryVoltage, 2) + "V")
       : "leer";
-    Serial.println("  Slot " + String(i + 1) + ": " + status + (i == bestSlot ? " ← GEWÄHLT" : ""));
+    bool eepromOk = isPowerbankIDSet(slots[i].eepromChannel)
+      && readPowerbankID(slots[i].eepromChannel).length() > 0;
+    String eepromStatus = eepromOk ? "EEPROM OK" : "EEPROM FEHLT";
+    Serial.println("  Slot " + String(i + 1) + ": " + batStatus + " | " + eepromStatus
+      + (i == bestSlot ? " ← GEWÄHLT" : ""));
   }
-  
+
   return bestSlot;
 }
 
@@ -1441,13 +1483,22 @@ void updateAllSlotsBatteryData() {
       doc["slot_2_battery_percentage"] = nullptr;
     }
     
-    // Abwärtskompatibilität: Setze die alten Felder auf den besten Slot
-    int bestSlot = chooseBestSlot();
-    if (bestSlot >= 0) {
-      String bestPbId = readPowerbankID(slots[bestSlot].eepromChannel);
-      doc["powerbank_id"] = bestPbId.length() > 0 ? bestPbId : (const char*)nullptr;
-      doc["battery_voltage"] = (int)(slots[bestSlot].batteryVoltage * 100) / 100.0;
-      doc["battery_percentage"] = slots[bestSlot].batteryPercentage;
+    // Abwärtskompatibilität: Legacy-Felder nur befüllen, wenn GENAU EIN Slot belegt ist.
+    // Bei 0 oder 2 belegten Slots → null, sonst würde ein Client, der noch Legacy liest,
+    // nach einer Entnahme aus Slot 1 fälschlich den Inhalt von Slot 2 sehen.
+    int populatedSingleSlot = -1;
+    int populatedCount = 0;
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+      if (slots[i].batteryPresent && slots[i].batteryInitialized) {
+        populatedCount++;
+        populatedSingleSlot = i;
+      }
+    }
+    if (populatedCount == 1) {
+      String legacyPbId = readPowerbankID(slots[populatedSingleSlot].eepromChannel);
+      doc["powerbank_id"] = legacyPbId.length() > 0 ? legacyPbId : (const char*)nullptr;
+      doc["battery_voltage"] = (int)(slots[populatedSingleSlot].batteryVoltage * 100) / 100.0;
+      doc["battery_percentage"] = slots[populatedSingleSlot].batteryPercentage;
     } else {
       doc["powerbank_id"] = nullptr;
       doc["battery_voltage"] = nullptr;

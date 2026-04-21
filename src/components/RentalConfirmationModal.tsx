@@ -3,7 +3,8 @@
 import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { computeRealAvailability, isStationOnline } from "@/components/StationManager";
+import type { StationSlotShape } from "@/components/StationManager";
+import { computeRealAvailability, countPhysicallyPresentSlots, isStationOnline } from "@/components/StationManager";
 
 const euroFormatter = new Intl.NumberFormat("de-DE", {
   style: "currency",
@@ -91,19 +92,27 @@ export default function RentalConfirmationModal({
 
     const fetchAvailableUnits = async () => {
       try {
-        let { data, error: fetchError } = await supabase
+        const confirmColumns =
+          "powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at, " +
+          "slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, " +
+          "slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage";
+
+        const initial = await supabase
           .from("stations")
-          .select("powerbank_id, battery_voltage, battery_percentage, last_seen, updated_at, slot_1_battery_percentage, slot_2_battery_percentage")
+          .select(confirmColumns)
           .eq("id", station.id)
           .maybeSingle();
+        let data: (StationSlotShape & { battery_percentage?: number | null }) | null =
+          (initial.data as unknown as StationSlotShape & { battery_percentage?: number | null }) ?? null;
+        let fetchError = initial.error;
 
-        const missingPowerbankColumn =
+        const missingColumn =
           !!fetchError &&
-          `${fetchError.code ?? ""} ${fetchError.message ?? ""} ${fetchError.details ?? ""}`
-            .toLowerCase()
-            .includes("powerbank_id");
+          /(powerbank_id|slot_1_|slot_2_)/i.test(
+            `${fetchError.code ?? ""} ${fetchError.message ?? ""} ${fetchError.details ?? ""}`,
+          );
 
-        if (missingPowerbankColumn) {
+        if (missingColumn) {
           const legacy = await supabase
             .from("stations")
             .select("battery_voltage, battery_percentage, last_seen, updated_at")
@@ -112,9 +121,18 @@ export default function RentalConfirmationModal({
 
           data = legacy.data
             ? {
-                ...legacy.data,
+                ...(legacy.data as unknown as {
+                  battery_voltage: number | null;
+                  battery_percentage: number | null;
+                  last_seen: string | null;
+                  updated_at: string | null;
+                }),
                 powerbank_id: null,
+                slot_1_powerbank_id: null,
+                slot_1_battery_voltage: null,
                 slot_1_battery_percentage: null,
+                slot_2_powerbank_id: null,
+                slot_2_battery_voltage: null,
                 slot_2_battery_percentage: null,
               }
             : null;
@@ -176,48 +194,79 @@ export default function RentalConfirmationModal({
   useEffect(() => {
     if (phase !== "pickup") return;
 
-    const poll = setInterval(async () => {
+    const perSlotColumns =
+      "powerbank_id, battery_voltage, battery_percentage, " +
+      "slot_1_powerbank_id, slot_1_battery_voltage, slot_1_battery_percentage, " +
+      "slot_2_powerbank_id, slot_2_battery_voltage, slot_2_battery_percentage";
+
+    let initialPresentCount: number | null = null;
+    let cancelled = false;
+
+    const runPoll = async () => {
       try {
-        let { data, error: pollError } = await supabase
+        const { data: rawData, error: pollError } = await supabase
           .from("stations")
-          .select("powerbank_id, battery_voltage, battery_percentage")
+          .select(perSlotColumns)
           .eq("id", station.id)
           .maybeSingle();
 
-        const missingPowerbankColumn =
-          !!pollError &&
-          `${pollError.code ?? ""} ${pollError.message ?? ""} ${pollError.details ?? ""}`
-            .toLowerCase()
-            .includes("powerbank_id");
+        let data: StationSlotShape | null = (rawData as unknown as StationSlotShape) ?? null;
 
-        if (missingPowerbankColumn) {
+        const missingColumn =
+          !!pollError &&
+          /(powerbank_id|slot_1_|slot_2_)/i.test(
+            `${pollError.code ?? ""} ${pollError.message ?? ""} ${pollError.details ?? ""}`,
+          );
+
+        if (missingColumn) {
           const legacy = await supabase
             .from("stations")
             .select("battery_voltage, battery_percentage")
             .eq("id", station.id)
             .maybeSingle();
 
-          data = legacy.data ? ({ ...legacy.data, powerbank_id: null } as typeof data) : null;
+          data = legacy.data
+            ? ({
+                ...(legacy.data as { battery_voltage: number | null; battery_percentage: number | null }),
+                powerbank_id: null,
+                slot_1_powerbank_id: null,
+                slot_1_battery_voltage: null,
+                slot_1_battery_percentage: null,
+                slot_2_powerbank_id: null,
+                slot_2_battery_voltage: null,
+                slot_2_battery_percentage: null,
+              })
+            : null;
         }
 
-        if (data) {
-          const hasPowerbank =
-            (typeof data.powerbank_id === "string" && data.powerbank_id.trim().length > 0) ||
-            (data.battery_voltage != null && data.battery_percentage != null);
+        if (!data || cancelled) return;
 
-          if (!hasPowerbank) {
-            clearInterval(poll);
-            stableOnPickupComplete();
-          }
+        const currentPresent = countPhysicallyPresentSlots(data);
+
+        if (initialPresentCount === null) {
+          initialPresentCount = currentPresent;
+          return;
+        }
+
+        // Pickup erkannt, sobald der Bestand unter den Startwert fällt
+        // ODER alle Slots leer sind (Einzel-Slot-Stationen).
+        if (currentPresent < initialPresentCount || currentPresent === 0) {
+          cancelled = true;
+          stableOnPickupComplete();
         }
       } catch {
         // Bei Netzwerkfehler weiter pollen.
       }
-    }, 2000);
+    };
+
+    // Sofort einen Snapshot holen, dann alle 2s prüfen
+    void runPoll();
+    const poll = setInterval(runPoll, 2000);
 
     const timeout = setTimeout(() => setPickupTimeout(true), 60000);
 
     return () => {
+      cancelled = true;
       clearInterval(poll);
       clearTimeout(timeout);
     };
