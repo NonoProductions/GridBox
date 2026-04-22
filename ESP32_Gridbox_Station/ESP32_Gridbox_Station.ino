@@ -1483,27 +1483,25 @@ void updateAllSlotsBatteryData() {
       doc["slot_2_battery_percentage"] = nullptr;
     }
     
-    // Abwärtskompatibilität: Legacy-Felder nur befüllen, wenn GENAU EIN Slot belegt ist.
-    // Bei 0 oder 2 belegten Slots → null, sonst würde ein Client, der noch Legacy liest,
-    // nach einer Entnahme aus Slot 1 fälschlich den Inhalt von Slot 2 sehen.
-    int populatedSingleSlot = -1;
-    int populatedCount = 0;
-    for (int i = 0; i < TOTAL_SLOTS; i++) {
-      if (slots[i].batteryPresent && slots[i].batteryInitialized) {
-        populatedCount++;
-        populatedSingleSlot = i;
-      }
-    }
-    if (populatedCount == 1) {
-      String legacyPbId = readPowerbankID(slots[populatedSingleSlot].eepromChannel);
+    // Legacy-Felder nur fuer echte Single-Slot-Stationen senden.
+    // Bei Dual-Slot kann ein Wechsel von NULL -> ID (z. B. 2 -> 1 belegte Slots)
+    // alte Rueckgabe-Trigger faelschlich ausloesen.
+#if TOTAL_SLOTS == 1
+    if (slots[0].batteryPresent && slots[0].batteryInitialized) {
+      String legacyPbId = readPowerbankID(slots[0].eepromChannel);
       doc["powerbank_id"] = legacyPbId.length() > 0 ? legacyPbId : (const char*)nullptr;
-      doc["battery_voltage"] = (int)(slots[populatedSingleSlot].batteryVoltage * 100) / 100.0;
-      doc["battery_percentage"] = slots[populatedSingleSlot].batteryPercentage;
+      doc["battery_voltage"] = (int)(slots[0].batteryVoltage * 100) / 100.0;
+      doc["battery_percentage"] = slots[0].batteryPercentage;
     } else {
       doc["powerbank_id"] = nullptr;
       doc["battery_voltage"] = nullptr;
       doc["battery_percentage"] = nullptr;
     }
+#else
+    doc["powerbank_id"] = nullptr;
+    doc["battery_voltage"] = nullptr;
+    doc["battery_percentage"] = nullptr;
+#endif
 
     String jsonBody;
     serializeJson(doc, jsonBody);
