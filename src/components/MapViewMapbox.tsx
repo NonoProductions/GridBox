@@ -382,6 +382,7 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
   const lastLocationRef = useRef<{lat: number, lng: number} | null>(null);
   const isLocationFixedRef = useRef(false);
   const isRoutingAfterScanRef = useRef(false);
+  const hasFlownToInitialLocationRef = useRef(false);
   // Station Manager Hook - verwende die Stationen direkt vom StationManager
   const stationManager = StationManager({ 
     onStationsUpdate: () => {}, // Leere Funktion, wir verwenden stationManager.stations direkt
@@ -1785,13 +1786,17 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
       
       // Set view with offset so station appears in upper portion when panel is expanded
       const targetCenter = [station.lng, station.lat + latOffset];
-      logger.dev('✅ Jumping instantly to coordinates:', targetCenter);
-      
-      // Jump SOFORT zur Station ohne Animation
-      map.jumpTo({
+      logger.dev('✅ Smoothly flying to coordinates:', targetCenter);
+
+      // Smoothe Animation zur Station
+      map.flyTo({
         center: targetCenter as [number, number],
         zoom: 16,
-        bearing: 0 // Reset rotation to ensure proper positioning
+        bearing: 0,
+        pitch: 0,
+        duration: 900,
+        essential: true,
+        curve: 1.4
       });
       
       // Set selected station
@@ -2180,15 +2185,24 @@ function MapViewContent({ initialTheme }: { initialTheme: string | null }) {
 
   // Fly to user location once it becomes available after map init
   useEffect(() => {
-    if (mapRef.current && userLocation) {
-      mapRef.current.flyTo({
-        center: [userLocation.lng, userLocation.lat],
-        zoom: 17,
-        duration: 1200,
-        essential: true
-      });
+    if (!mapRef.current || !userLocation) return;
+    if (hasFlownToInitialLocationRef.current) {
       updateUserMarker(userLocation, userHeading, false);
+      return;
     }
+    if (selectedStationRef.current || isNavigatingRef.current || isFollowingLocationRef.current) {
+      hasFlownToInitialLocationRef.current = true;
+      updateUserMarker(userLocation, userHeading, false);
+      return;
+    }
+    hasFlownToInitialLocationRef.current = true;
+    mapRef.current.flyTo({
+      center: [userLocation.lng, userLocation.lat],
+      zoom: 17,
+      duration: 1200,
+      essential: true
+    });
+    updateUserMarker(userLocation, userHeading, false);
   }, [userLocation]);
 
   // Cleanup beim Component Unmount
